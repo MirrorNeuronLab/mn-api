@@ -1,0 +1,16 @@
+[project]
+name = "mn-api"
+version = "0.1.0"
+description = "MirrorNeuron REST API"
+dependencies = [
+    "mn-python-sdk",
+    "fastapi>=0.100.0",
+    "uvicorn>=0.23.0"
+]
+
+[project.scripts]
+mn-api = "mn_api.main:start"
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
