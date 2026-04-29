@@ -1,7 +1,9 @@
 import unittest
 import io
 import json
+import tempfile
 import zipfile
+from pathlib import Path
 from fastapi.testclient import TestClient
 from types import SimpleNamespace
 from mn_api import main
@@ -196,6 +198,99 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(body["edges"][0]["target"], "worker")
         self.assertEqual(body["edges"][0]["message_type"], "task")
         self.assertEqual(body["edges"][0]["count"], 2)
+
+    @patch('mn_api.main.client')
+    def test_get_job_agent_graph_includes_manifest_edges(self, mock_client):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            manifest_path = Path(tmpdir) / "manifest.json"
+            manifest_path.write_text(json.dumps({
+                "graph_id": "graph-1",
+                "nodes": [
+                    {"node_id": "ingress", "agent_type": "router", "type": "generic"},
+                    {"node_id": "source", "agent_type": "executor", "type": "stream"},
+                    {"node_id": "sink", "agent_type": "executor", "type": "stream"},
+                ],
+                "edges": [
+                    {
+                        "edge_id": "ingress_to_source",
+                        "from_node": "ingress",
+                        "to_node": "source",
+                        "message_type": "stream_start",
+                    },
+                    {
+                        "edge_id": "source_to_sink",
+                        "from_node": "source",
+                        "to_node": "sink",
+                        "message_type": "telemetry_event",
+                    },
+                ],
+            }))
+            mock_client.get_job.return_value = json.dumps({
+                "job": {
+                    "job_id": "job-1",
+                    "graph_id": "graph-1",
+                    "status": "running",
+                    "manifest_ref": {"manifest_path": str(manifest_path)},
+                },
+                "agents": [
+                    {"agent_id": "ingress", "agent_type": "router", "status": "ready"},
+                    {"agent_id": "source", "agent_type": "executor", "status": "running"},
+                    {"agent_id": "sink", "agent_type": "executor", "status": "running"},
+                ],
+            })
+            mock_client.stream_events.return_value = []
+
+            response = self.client.get("/api/v1/jobs/job-1/agent-graph")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["stats"]["agent_count"], 3)
+        self.assertEqual(body["stats"]["edge_count"], 2)
+        self.assertEqual(body["stats"]["message_count"], 0)
+        self.assertEqual(
+            {(edge["source"], edge["target"], edge["message_type"], edge["source_event"]) for edge in body["edges"]},
+            {
+                ("ingress", "source", "stream_start", "manifest"),
+                ("source", "sink", "telemetry_event", "manifest"),
+            },
+        )
+
+    @patch('mn_api.main.client')
+    def test_get_job_agent_graph_includes_persisted_topology_edges(self, mock_client):
+        mock_client.get_job.return_value = json.dumps({
+            "job": {
+                "job_id": "job-1",
+                "graph_id": "graph-1",
+                "status": "running",
+                "topology": {
+                    "nodes": [
+                        {"node_id": "source", "agent_type": "executor", "type": "stream"},
+                        {"node_id": "sink", "agent_type": "executor", "type": "stream"},
+                    ],
+                    "edges": [
+                        {
+                            "edge_id": "source_to_sink",
+                            "from_node": "source",
+                            "to_node": "sink",
+                            "message_type": "telemetry_event",
+                        },
+                    ],
+                },
+            },
+            "agents": [],
+        })
+        mock_client.stream_events.return_value = []
+
+        response = self.client.get("/api/v1/jobs/job-1/agent-graph")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["stats"]["agent_count"], 2)
+        self.assertEqual(body["stats"]["edge_count"], 1)
+        self.assertEqual(body["edges"][0]["source"], "source")
+        self.assertEqual(body["edges"][0]["target"], "sink")
+        self.assertEqual(body["edges"][0]["message_type"], "telemetry_event")
+        self.assertEqual(body["edges"][0]["count"], 0)
 
     @patch('mn_api.main.client')
     def test_get_job_dead_letters_success(self, mock_client):

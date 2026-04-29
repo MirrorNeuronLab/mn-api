@@ -329,6 +329,7 @@ def _counts(values):
 def _build_agent_graph(job_id: str, details: Dict[str, Any], events: list[Dict[str, Any]]):
     agents = details.get("agents", []) or []
     job = details.get("job", {}) or {}
+    manifest = job.get("topology") or _load_manifest_for_job(job)
     agent_by_id: Dict[str, Dict[str, Any]] = {}
 
     for agent in agents:
@@ -336,7 +337,46 @@ def _build_agent_graph(job_id: str, details: Dict[str, Any], events: list[Dict[s
         if agent_id:
             agent_by_id[agent_id] = agent
 
+    for node in manifest.get("nodes", []) if isinstance(manifest, dict) else []:
+        node_id = node.get("node_id") or node.get("agent_id")
+        if node_id:
+            agent_by_id.setdefault(
+                node_id,
+                {
+                    "agent_id": node_id,
+                    "agent_type": node.get("agent_type") or "unknown",
+                    "type": node.get("type") or "unknown",
+                    "status": "declared",
+                    "assigned_node": "unassigned",
+                    "processed_messages": 0,
+                    "mailbox_depth": 0,
+                },
+            )
+
     edge_counts: Dict[tuple[str, str, str], Dict[str, Any]] = {}
+
+    for edge in manifest.get("edges", []) if isinstance(manifest, dict) else []:
+        source = edge.get("from_node")
+        target = edge.get("to_node")
+        message_type = edge.get("message_type") or "*"
+        if not source or not target:
+            continue
+
+        _ensure_graph_agent(agent_by_id, source)
+        _ensure_graph_agent(agent_by_id, target)
+        key = (source, target, message_type)
+        edge_counts.setdefault(
+            key,
+            {
+                "id": edge.get("edge_id") or f"{source}->{target}:{message_type}",
+                "source": source,
+                "target": target,
+                "message_type": message_type,
+                "count": 0,
+                "last_seen_at": None,
+                "source_event": "manifest",
+            },
+        )
 
     for event in events:
         message = _event_message_summary(event)
@@ -367,6 +407,8 @@ def _build_agent_graph(job_id: str, details: Dict[str, Any], events: list[Dict[s
         )
         existing["count"] += 1
         existing["last_seen_at"] = event.get("timestamp") or existing["last_seen_at"]
+        if existing.get("source_event") == "manifest":
+            existing["source_event"] = "manifest+events"
 
     for agent in agents:
         source = agent.get("agent_id") or agent.get("node_id")
@@ -419,6 +461,25 @@ def _build_agent_graph(job_id: str, details: Dict[str, Any], events: list[Dict[s
             "event_count": len(events),
         },
     }
+
+
+def _load_manifest_for_job(job: Dict[str, Any]) -> Dict[str, Any]:
+    manifest_ref = job.get("manifest_ref") or {}
+    manifest_path = manifest_ref.get("manifest_path")
+    if not manifest_path:
+        return {}
+
+    path = Path(manifest_path)
+    if not path.is_file():
+        return {}
+
+    try:
+        manifest = json.loads(path.read_text())
+    except Exception:
+        logger.exception("Failed to load manifest for graph from %s", manifest_path)
+        return {}
+
+    return manifest if isinstance(manifest, dict) else {}
 
 
 def _event_message_summary(event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
