@@ -5,6 +5,7 @@ description = "MirrorNeuron REST API"
 dependencies = [
     "mn-python-sdk",
     "fastapi>=0.100.0",
+    "python-multipart>=0.0.9",
     "uvicorn>=0.23.0"
 ]
 

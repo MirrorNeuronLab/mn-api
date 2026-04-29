@@ -1,4 +1,7 @@
 import unittest
+import io
+import json
+import zipfile
 from fastapi.testclient import TestClient
 from types import SimpleNamespace
 from mn_api import main
@@ -70,6 +73,48 @@ class TestAPI(unittest.TestCase):
         mock_client.submit_job.assert_called_once_with('{"graph_id": "g"}', {"a.txt": b"hello"})
 
     @patch('mn_api.main.client')
+    def test_upload_bundle_and_submit_by_bundle_path(self, mock_client):
+        mock_client.submit_job.return_value = "job-zip"
+        archive = io.BytesIO()
+        manifest = {"graph_id": "zip_graph", "nodes": [], "edges": []}
+
+        with zipfile.ZipFile(archive, "w") as zip_file:
+            zip_file.writestr("manifest.json", json.dumps(manifest))
+            zip_file.writestr("payloads/a.txt", "hello")
+        archive.seek(0)
+
+        upload_response = self.client.post(
+            "/api/v1/bundles/upload",
+            files={"bundle": ("bundle.zip", archive, "application/zip")},
+        )
+        self.assertEqual(upload_response.status_code, 200)
+        bundle_path = upload_response.json()["bundle_path"]
+        self.assertEqual(upload_response.json()["manifest"]["graph_id"], "zip_graph")
+
+        submit_response = self.client.post(
+            "/api/v1/jobs",
+            json={"_bundle_path": bundle_path},
+        )
+        self.assertEqual(submit_response.status_code, 200)
+        self.assertEqual(submit_response.json(), {"id": "job-zip", "status": "pending"})
+        mock_client.submit_job.assert_called_once_with(
+            json.dumps(manifest),
+            {"a.txt": b"hello"},
+        )
+
+    def test_upload_bundle_rejects_unsafe_paths(self):
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as zip_file:
+            zip_file.writestr("../manifest.json", "{}")
+        archive.seek(0)
+
+        response = self.client.post(
+            "/api/v1/bundles/upload",
+            files={"bundle": ("bundle.zip", archive, "application/zip")},
+        )
+        self.assertEqual(response.status_code, 400)
+
+    @patch('mn_api.main.client')
     def test_cancel_job_success(self, mock_client):
         mock_client.cancel_job.return_value = "cancelled"
         response = self.client.post("/api/v1/jobs/test_job_123/cancel")
@@ -117,6 +162,40 @@ class TestAPI(unittest.TestCase):
         response = self.client.get("/api/v1/jobs/test_job_123/events")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"data": [{"id": "e1"}, {"id": "e2"}]})
+
+    @patch('mn_api.main.client')
+    def test_get_job_agent_graph_success(self, mock_client):
+        mock_client.get_job.return_value = json.dumps({
+            "job": {"job_id": "job-1", "graph_id": "graph-1", "status": "running"},
+            "agents": [
+                {"agent_id": "planner", "agent_type": "router", "status": "ready"},
+                {"agent_id": "worker", "agent_type": "executor", "status": "running"},
+            ],
+        })
+        mock_client.stream_events.return_value = [
+            json.dumps({
+                "type": "agent_message_received",
+                "timestamp": "2026-04-29T12:00:00Z",
+                "payload": {"from": "planner", "to": "worker", "type": "task"},
+            }),
+            json.dumps({
+                "type": "agent_message_received",
+                "timestamp": "2026-04-29T12:00:01Z",
+                "payload": {"from": "planner", "to": "worker", "type": "task"},
+            }),
+        ]
+
+        response = self.client.get("/api/v1/jobs/job-1/agent-graph")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["job_id"], "job-1")
+        self.assertEqual(body["stats"]["agent_count"], 2)
+        self.assertEqual(body["stats"]["message_count"], 2)
+        self.assertEqual(body["edges"][0]["source"], "planner")
+        self.assertEqual(body["edges"][0]["target"], "worker")
+        self.assertEqual(body["edges"][0]["message_type"], "task")
+        self.assertEqual(body["edges"][0]["count"], 2)
 
     @patch('mn_api.main.client')
     def test_get_job_dead_letters_success(self, mock_client):

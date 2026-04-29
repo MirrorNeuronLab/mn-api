@@ -1,10 +1,13 @@
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Dict, Any, Optional
 import json
+import tempfile
 import uvicorn
+import zipfile
+from pathlib import Path
 from mn_sdk import Client
 import grpc
 from mn_api.config import ApiConfig, auth_enabled
@@ -14,6 +17,7 @@ config = ApiConfig.from_env()
 logger = configure_logging()
 app = FastAPI(title="MirrorNeuron API", version="1.0")
 client = Client(target=config.grpc_target, timeout=config.grpc_timeout_seconds)
+BUNDLE_UPLOAD_ROOT = Path(tempfile.gettempdir()) / "mirror_neuron_api_bundles"
 
 if config.cors_allow_origins:
     app.add_middleware(
@@ -57,8 +61,9 @@ def require_auth(authorization: str = Header(default="")):
     return None
 
 class SubmitJobRequest(BaseModel):
-    manifest_json: str
+    manifest_json: Optional[str] = None
     payloads: Optional[Dict[str, str]] = {}
+    bundle_path: Optional[str] = Field(default=None, alias="_bundle_path")
 
 def handle_grpc_error(e: Exception):
     logger.exception("Request failed")
@@ -87,15 +92,117 @@ def get_system_summary(_auth=Depends(require_auth)):
 @app.post("/api/v1/jobs")
 def submit_job(req: SubmitJobRequest, _auth=Depends(require_auth)):
     try:
-        payloads_bytes = (
-            {k: v.encode("utf-8") for k, v in req.payloads.items()}
-            if req.payloads
-            else {}
-        )
-        job_id = client.submit_job(req.manifest_json, payloads_bytes)
+        if req.bundle_path:
+            manifest_json, payloads_bytes = _load_uploaded_bundle(req.bundle_path)
+        elif req.manifest_json is not None:
+            manifest_json = req.manifest_json
+            payloads_bytes = (
+                {k: v.encode("utf-8") for k, v in req.payloads.items()}
+                if req.payloads
+                else {}
+            )
+        else:
+            raise HTTPException(
+                status_code=422,
+                detail="manifest_json or _bundle_path is required",
+            )
+
+        job_id = client.submit_job(manifest_json, payloads_bytes)
         return {"id": job_id, "status": "pending"}
+    except HTTPException:
+        raise
     except Exception as e:
         return handle_grpc_error(e)
+
+
+@app.post("/api/v1/bundles/upload")
+async def upload_bundle(bundle: UploadFile = File(...), _auth=Depends(require_auth)):
+    try:
+        if not bundle.filename or not bundle.filename.lower().endswith(".zip"):
+            raise HTTPException(status_code=400, detail="bundle must be a .zip file")
+
+        BUNDLE_UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+        target_dir = Path(tempfile.mkdtemp(prefix="bundle_", dir=BUNDLE_UPLOAD_ROOT))
+        archive_path = target_dir / "bundle.zip"
+        archive_path.write_bytes(await bundle.read())
+
+        with zipfile.ZipFile(archive_path) as archive:
+            for member in archive.infolist():
+                if member.is_dir():
+                    continue
+                destination = _safe_extract_path(target_dir, member.filename)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                with archive.open(member) as source:
+                    destination.write_bytes(source.read())
+
+        archive_path.unlink(missing_ok=True)
+        bundle_root = _find_bundle_root(target_dir)
+        manifest_path = bundle_root / "manifest.json"
+        payloads_path = bundle_root / "payloads"
+
+        if not manifest_path.is_file() or not payloads_path.is_dir():
+            raise HTTPException(
+                status_code=400,
+                detail="bundle zip must contain manifest.json and payloads/",
+            )
+
+        return {
+            "bundle_path": str(bundle_root),
+            "manifest": json.loads(manifest_path.read_text()),
+        }
+    except HTTPException:
+        raise
+    except zipfile.BadZipFile as exc:
+        raise HTTPException(status_code=400, detail="invalid zip bundle") from exc
+
+
+def _load_uploaded_bundle(bundle_path: str) -> tuple[str, Dict[str, bytes]]:
+    bundle_root = Path(bundle_path).resolve()
+    upload_root = BUNDLE_UPLOAD_ROOT.resolve()
+    if not _inside_path(bundle_root, upload_root) or not bundle_root.is_dir():
+        raise HTTPException(status_code=400, detail="unknown uploaded bundle")
+
+    manifest_path = bundle_root / "manifest.json"
+    payloads_path = bundle_root / "payloads"
+    if not manifest_path.is_file() or not payloads_path.is_dir():
+        raise HTTPException(status_code=400, detail="invalid uploaded bundle")
+
+    payloads = {}
+    for path in payloads_path.rglob("*"):
+        if path.is_file():
+            payloads[path.relative_to(payloads_path).as_posix()] = path.read_bytes()
+
+    return manifest_path.read_text(), payloads
+
+
+def _safe_extract_path(root: Path, member_name: str) -> Path:
+    member_path = Path(member_name)
+    if member_path.is_absolute() or ".." in member_path.parts:
+        raise HTTPException(status_code=400, detail="bundle contains unsafe paths")
+
+    destination = (root / member_path).resolve()
+    if not _inside_path(destination, root.resolve()):
+        raise HTTPException(status_code=400, detail="bundle contains unsafe paths")
+    return destination
+
+
+def _find_bundle_root(extracted_root: Path) -> Path:
+    if (extracted_root / "manifest.json").is_file():
+        return extracted_root
+
+    children = [path for path in extracted_root.iterdir() if path.is_dir()]
+    if len(children) == 1 and (children[0] / "manifest.json").is_file():
+        return children[0]
+
+    return extracted_root
+
+
+def _inside_path(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
 
 @app.get("/api/v1/jobs")
 def list_jobs(limit: int = 20, include_terminal: bool = True, _auth=Depends(require_auth)):
@@ -110,6 +217,16 @@ def get_job(job_id: str, _auth=Depends(require_auth)):
     try:
         job_json = client.get_job(job_id)
         return json.loads(job_json)
+    except Exception as e:
+        return handle_grpc_error(e)
+
+
+@app.get("/api/v1/jobs/{job_id}/agent-graph")
+def get_job_agent_graph(job_id: str, _auth=Depends(require_auth)):
+    try:
+        details = json.loads(client.get_job(job_id))
+        events = [json.loads(event_json) for event_json in client.stream_events(job_id)]
+        return _build_agent_graph(job_id, details, events)
     except Exception as e:
         return handle_grpc_error(e)
 
@@ -207,6 +324,134 @@ def _counts(values):
     for value in values:
         counts[value] = counts.get(value, 0) + 1
     return counts
+
+
+def _build_agent_graph(job_id: str, details: Dict[str, Any], events: list[Dict[str, Any]]):
+    agents = details.get("agents", []) or []
+    job = details.get("job", {}) or {}
+    agent_by_id: Dict[str, Dict[str, Any]] = {}
+
+    for agent in agents:
+        agent_id = agent.get("agent_id") or agent.get("node_id")
+        if agent_id:
+            agent_by_id[agent_id] = agent
+
+    edge_counts: Dict[tuple[str, str, str], Dict[str, Any]] = {}
+
+    for event in events:
+        message = _event_message_summary(event)
+        if not message:
+            continue
+
+        source = message.get("from")
+        target = message.get("to") or event.get("agent_id")
+        message_type = message.get("type") or event.get("type") or "message"
+
+        if not source or not target:
+            continue
+
+        _ensure_graph_agent(agent_by_id, source)
+        _ensure_graph_agent(agent_by_id, target)
+        key = (source, target, message_type)
+        existing = edge_counts.setdefault(
+            key,
+            {
+                "id": f"{source}->{target}:{message_type}",
+                "source": source,
+                "target": target,
+                "message_type": message_type,
+                "count": 0,
+                "last_seen_at": None,
+                "source_event": "agent_message_received",
+            },
+        )
+        existing["count"] += 1
+        existing["last_seen_at"] = event.get("timestamp") or existing["last_seen_at"]
+
+    for agent in agents:
+        source = agent.get("agent_id") or agent.get("node_id")
+        outbound_edges = (agent.get("metadata") or {}).get("outbound_edges") or []
+        for target in outbound_edges:
+            if not source or not target:
+                continue
+            _ensure_graph_agent(agent_by_id, source)
+            _ensure_graph_agent(agent_by_id, target)
+            key = (source, target, "*")
+            edge_counts.setdefault(
+                key,
+                {
+                    "id": f"{source}->{target}:*",
+                    "source": source,
+                    "target": target,
+                    "message_type": "*",
+                    "count": 0,
+                    "last_seen_at": None,
+                    "source_event": "outbound_edges",
+                },
+            )
+
+    nodes = [
+        {
+            "id": agent_id,
+            "label": agent_id,
+            "agent_type": agent.get("agent_type") or "unknown",
+            "type": agent.get("type") or "unknown",
+            "status": agent.get("status") or "unknown",
+            "assigned_node": agent.get("assigned_node") or "unassigned",
+            "processed_messages": agent.get("processed_messages", 0),
+            "mailbox_depth": agent.get("mailbox_depth", 0),
+        }
+        for agent_id, agent in sorted(agent_by_id.items())
+    ]
+
+    edges = sorted(edge_counts.values(), key=lambda edge: (edge["source"], edge["target"], edge["message_type"]))
+
+    return {
+        "job_id": job_id,
+        "graph_id": job.get("graph_id") or (details.get("summary") or {}).get("graph_id"),
+        "status": job.get("status") or "unknown",
+        "nodes": nodes,
+        "edges": edges,
+        "stats": {
+            "agent_count": len(nodes),
+            "edge_count": len(edges),
+            "message_count": sum(edge.get("count", 0) for edge in edges),
+            "event_count": len(events),
+        },
+    }
+
+
+def _event_message_summary(event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    payload = event.get("payload")
+    if event.get("type") == "agent_message_received" and isinstance(payload, dict):
+        return payload
+
+    if event.get("type") in {"backpressure_signal", "delivery_failed", "backpressure_rejected"} and isinstance(payload, dict):
+        return payload
+
+    message = event.get("message")
+    if isinstance(message, dict):
+        envelope = message.get("envelope")
+        if isinstance(envelope, dict):
+            return envelope
+        return message
+
+    return None
+
+
+def _ensure_graph_agent(agent_by_id: Dict[str, Dict[str, Any]], agent_id: str):
+    agent_by_id.setdefault(
+        agent_id,
+        {
+            "agent_id": agent_id,
+            "agent_type": "external",
+            "type": "message",
+            "status": "observed",
+            "assigned_node": "unknown",
+            "processed_messages": 0,
+            "mailbox_depth": 0,
+        },
+    )
 
 
 def start():
