@@ -8,8 +8,10 @@ import uvicorn
 from mn_sdk import Client
 import grpc
 from mn_api.config import ApiConfig, auth_enabled
+from mn_api.logging_config import configure_logging
 
 config = ApiConfig.from_env()
+logger = configure_logging()
 app = FastAPI(title="MirrorNeuron API", version="1.0")
 client = Client(target=config.grpc_target, timeout=config.grpc_timeout_seconds)
 
@@ -59,6 +61,7 @@ class SubmitJobRequest(BaseModel):
     payloads: Optional[Dict[str, str]] = {}
 
 def handle_grpc_error(e: Exception):
+    logger.exception("Request failed")
     if isinstance(e, grpc.RpcError) and e.code() == grpc.StatusCode.RESOURCE_EXHAUSTED:
         return JSONResponse(
             status_code=503,
@@ -207,6 +210,7 @@ def _counts(values):
 
 
 def start():
+    logger.info("Starting API server on %s:%s", config.host, config.port)
     uvicorn.run("mn_api.main:app", host=config.host, port=config.port, reload=False)
 
 if __name__ == "__main__":
