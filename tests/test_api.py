@@ -57,6 +57,14 @@ class TestAPI(unittest.TestCase):
         mock_client.list_jobs.assert_called_once_with(5, False)
 
     @patch('mn_api.main.client')
+    def test_cleanup_jobs_success(self, mock_client):
+        mock_client.clear_jobs.return_value = 3
+        response = self.client.post("/api/v1/jobs/cleanup")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"cleared_count": 3})
+        mock_client.clear_jobs.assert_called_once()
+
+    @patch('mn_api.main.client')
     def test_get_system_summary_success(self, mock_client):
         mock_client.get_system_summary.return_value = '{"nodes": [], "jobs": []}'
         response = self.client.get("/api/v1/system/summary")
