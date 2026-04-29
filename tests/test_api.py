@@ -59,7 +59,7 @@ class TestAPI(unittest.TestCase):
     @patch('mn_api.main.client')
     def test_cleanup_jobs_success(self, mock_client):
         mock_client.clear_jobs.return_value = 3
-        response = self.client.post("/api/v1/jobs/cleanup")
+        response = self.client.post("/api/v1/jobs:cleanup")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"cleared_count": 3})
         mock_client.clear_jobs.assert_called_once()

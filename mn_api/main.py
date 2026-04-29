@@ -212,6 +212,7 @@ def list_jobs(limit: int = 20, include_terminal: bool = True, _auth=Depends(requ
     except Exception as e:
         return handle_grpc_error(e)
 
+@app.post("/api/v1/jobs:cleanup")
 @app.post("/api/v1/jobs/cleanup")
 def cleanup_jobs(_auth=Depends(require_auth)):
     try:
