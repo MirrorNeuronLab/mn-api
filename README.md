@@ -19,13 +19,29 @@ mn-api
 ```
 This runs the Uvicorn server on port `4001` locally.
 
+## Configuration
+
+All overrides use `MIRROR_NEURON_` env vars:
+
+- `MIRROR_NEURON_ENV=prod` requires `MIRROR_NEURON_API_TOKEN`.
+- `MIRROR_NEURON_API_HOST`, `MIRROR_NEURON_API_PORT` control binding.
+- `MIRROR_NEURON_GRPC_TARGET` points at the core runtime.
+- `MIRROR_NEURON_GRPC_TIMEOUT_SECONDS` controls SDK calls.
+- `MIRROR_NEURON_API_REQUEST_SIZE_LIMIT_BYTES` bounds request bodies.
+- `MIRROR_NEURON_API_CORS_ALLOW_ORIGINS` is a comma-separated allowlist.
+
+Protected endpoints accept `Authorization: Bearer <MIRROR_NEURON_API_TOKEN>`.
+
 ## Endpoints
 
 | Method | Route | Description |
 |---|---|---|
 | `GET` | `/api/v1/health` | Service health check |
 | `GET` | `/api/v1/system/summary` | Cluster hardware and pool state |
+| `GET` | `/api/v1/metrics` | Runtime metrics summary |
 | `POST`| `/api/v1/jobs` | Submit a new workflow via JSON |
 | `GET` | `/api/v1/jobs` | List recent workflows |
 | `GET` | `/api/v1/jobs/{job_id}` | Fetch workflow status |
+| `GET` | `/api/v1/jobs/{job_id}/events` | Fetch job events |
+| `GET` | `/api/v1/jobs/{job_id}/dead-letters` | Inspect dead-letter events |
 | `POST`| `/api/v1/jobs/{job_id}/cancel`| Cancel a running job |
