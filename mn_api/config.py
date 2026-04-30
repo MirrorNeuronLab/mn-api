@@ -23,13 +23,14 @@ class ApiConfig:
     def from_env(cls) -> "ApiConfig":
         env = os.getenv("MIRROR_NEURON_ENV", "dev")
         timeout = _optional_float("MIRROR_NEURON_GRPC_TIMEOUT_SECONDS", "10")
+        core_host = os.getenv("MIRROR_NEURON_CORE_HOST", "localhost")
         config = cls(
             env=env,
-            host=os.getenv("MIRROR_NEURON_API_HOST", "0.0.0.0"),
+            host=os.getenv("MIRROR_NEURON_API_HOST", "localhost"),
             port=_int("MIRROR_NEURON_API_PORT", "4001"),
             grpc_target=os.getenv(
                 "MIRROR_NEURON_GRPC_TARGET",
-                os.getenv("MIRROR_NEURON_CORE_GRPC_TARGET", "localhost:50051"),
+                os.getenv("MIRROR_NEURON_CORE_GRPC_TARGET", f"{core_host}:50051"),
             ),
             grpc_timeout_seconds=timeout,
             api_token=os.getenv("MIRROR_NEURON_API_TOKEN", ""),

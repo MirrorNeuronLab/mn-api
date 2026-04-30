@@ -24,8 +24,9 @@ This runs the Uvicorn server on port `4001` locally.
 All overrides use `MIRROR_NEURON_` env vars:
 
 - `MIRROR_NEURON_ENV=prod` requires `MIRROR_NEURON_API_TOKEN`.
-- `MIRROR_NEURON_API_HOST`, `MIRROR_NEURON_API_PORT` control binding.
-- `MIRROR_NEURON_GRPC_TARGET` points at the core runtime.
+- `MIRROR_NEURON_API_HOST`, `MIRROR_NEURON_API_PORT` control binding; default `localhost:4001`.
+- `MIRROR_NEURON_CORE_HOST` controls the default core gRPC host; default `localhost`.
+- `MIRROR_NEURON_GRPC_TARGET` or `MIRROR_NEURON_CORE_GRPC_TARGET` can override the full core gRPC target.
 - `MIRROR_NEURON_GRPC_TIMEOUT_SECONDS` controls SDK calls.
 - `MIRROR_NEURON_API_REQUEST_SIZE_LIMIT_BYTES` bounds request bodies.
 - `MIRROR_NEURON_API_CORS_ALLOW_ORIGINS` is a comma-separated allowlist.
