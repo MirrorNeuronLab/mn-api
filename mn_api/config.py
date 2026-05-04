@@ -21,25 +21,25 @@ class ApiConfig:
 
     @classmethod
     def from_env(cls) -> "ApiConfig":
-        env = os.getenv("MIRROR_NEURON_ENV", "dev")
-        timeout = _optional_float("MIRROR_NEURON_GRPC_TIMEOUT_SECONDS", "10")
-        core_host = os.getenv("MIRROR_NEURON_CORE_HOST", "localhost")
+        env = os.getenv("MN_ENV", "dev")
+        timeout = _optional_float("MN_GRPC_TIMEOUT_SECONDS", "10")
+        core_host = os.getenv("MN_CORE_HOST", "localhost")
         config = cls(
             env=env,
-            host=os.getenv("MIRROR_NEURON_API_HOST", "localhost"),
-            port=_int("MIRROR_NEURON_API_PORT", "4001"),
+            host=os.getenv("MN_API_HOST", "localhost"),
+            port=_int("MN_API_PORT", "4001"),
             grpc_target=os.getenv(
-                "MIRROR_NEURON_GRPC_TARGET",
-                os.getenv("MIRROR_NEURON_CORE_GRPC_TARGET", f"{core_host}:50051"),
+                "MN_GRPC_TARGET",
+                os.getenv("MN_CORE_GRPC_TARGET", f"{core_host}:50051"),
             ),
             grpc_timeout_seconds=timeout,
-            api_token=os.getenv("MIRROR_NEURON_API_TOKEN", ""),
+            api_token=os.getenv("MN_API_TOKEN", ""),
             request_size_limit_bytes=_int(
-                "MIRROR_NEURON_API_REQUEST_SIZE_LIMIT_BYTES",
+                "MN_API_REQUEST_SIZE_LIMIT_BYTES",
                 str(5 * 1024 * 1024),
             ),
             cors_allow_origins=_csv(
-                os.getenv("MIRROR_NEURON_API_CORS_ALLOW_ORIGINS", "")
+                os.getenv("MN_API_CORS_ALLOW_ORIGINS", "")
             ),
         )
         config.validate()
@@ -51,13 +51,13 @@ class ApiConfig:
 
     def validate(self) -> None:
         if self.env not in {"dev", "test", "prod"}:
-            raise ValueError("MIRROR_NEURON_ENV must be one of dev, test, or prod")
+            raise ValueError("MN_ENV must be one of dev, test, or prod")
         if not 1 <= self.port <= 65535:
-            raise ValueError("MIRROR_NEURON_API_PORT must be between 1 and 65535")
+            raise ValueError("MN_API_PORT must be between 1 and 65535")
         if self.request_size_limit_bytes <= 0:
-            raise ValueError("MIRROR_NEURON_API_REQUEST_SIZE_LIMIT_BYTES must be > 0")
+            raise ValueError("MN_API_REQUEST_SIZE_LIMIT_BYTES must be > 0")
         if self.prod and not self.api_token:
-            raise ValueError("MIRROR_NEURON_API_TOKEN is required when MIRROR_NEURON_ENV=prod")
+            raise ValueError("MN_API_TOKEN is required when MN_ENV=prod")
 
 
 def _int(name: str, default: str) -> int:
