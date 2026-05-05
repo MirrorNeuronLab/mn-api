@@ -48,6 +48,15 @@ class TestAPI(unittest.TestCase):
         finally:
             main.config = original
 
+    def test_invalid_content_length_is_rejected(self):
+        response = self.client.post(
+            "/api/v1/jobs",
+            headers={"content-length": "not-a-number"},
+            content=b"{}",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json(), {"error": "invalid_content_length"})
+
     @patch('mn_api.main.client')
     def test_list_jobs_success(self, mock_client):
         mock_client.list_jobs.return_value = '{"data": [{"job_id": "job-1"}]}'
@@ -112,6 +121,25 @@ class TestAPI(unittest.TestCase):
             {"a.txt": b"hello"},
         )
 
+    def test_upload_bundle_accepts_single_nested_bundle_root(self):
+        archive = io.BytesIO()
+        manifest = {"graph_id": "nested_zip_graph", "nodes": [], "edges": []}
+
+        with zipfile.ZipFile(archive, "w") as zip_file:
+            zip_file.writestr("bundle-root/manifest.json", json.dumps(manifest))
+            zip_file.writestr("bundle-root/payloads/a.txt", "hello")
+        archive.seek(0)
+
+        response = self.client.post(
+            "/api/v1/bundles/upload",
+            files={"bundle": ("bundle.zip", archive, "application/zip")},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["manifest"]["graph_id"], "nested_zip_graph")
+        self.assertTrue(body["bundle_path"].endswith("bundle-root"))
+
     def test_upload_bundle_rejects_unsafe_paths(self):
         archive = io.BytesIO()
         with zipfile.ZipFile(archive, "w") as zip_file:
@@ -123,6 +151,17 @@ class TestAPI(unittest.TestCase):
             files={"bundle": ("bundle.zip", archive, "application/zip")},
         )
         self.assertEqual(response.status_code, 400)
+
+    @patch('mn_api.main.client')
+    def test_submit_by_unknown_bundle_path_is_rejected_before_sdk_call(self, mock_client):
+        response = self.client.post(
+            "/api/v1/jobs",
+            json={"_bundle_path": str(Path(tempfile.gettempdir()) / "outside-bundle")},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["detail"], "unknown uploaded bundle")
+        mock_client.submit_job.assert_not_called()
 
     @patch('mn_api.main.client')
     def test_cancel_job_success(self, mock_client):
@@ -299,6 +338,62 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(body["edges"][0]["target"], "sink")
         self.assertEqual(body["edges"][0]["message_type"], "telemetry_event")
         self.assertEqual(body["edges"][0]["count"], 0)
+
+    @patch('mn_api.main.client')
+    def test_get_job_agent_graph_derives_edges_from_message_envelopes(self, mock_client):
+        mock_client.get_job.return_value = json.dumps({
+            "job": {"job_id": "job-1", "graph_id": "graph-1", "status": "running"},
+            "agents": [{"agent_id": "sink", "agent_type": "executor", "status": "running"}],
+        })
+        mock_client.stream_events.return_value = [
+            json.dumps({
+                "type": "agent_message_received",
+                "timestamp": "2026-04-29T12:00:00Z",
+                "agent_id": "sink",
+                "message": {
+                    "envelope": {
+                        "from": "external-source",
+                        "to": "sink",
+                        "type": "replayed_task",
+                    }
+                },
+            })
+        ]
+
+        response = self.client.get("/api/v1/jobs/job-1/agent-graph")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["stats"]["agent_count"], 2)
+        self.assertEqual(body["stats"]["message_count"], 1)
+        self.assertEqual(body["edges"][0]["source"], "external-source")
+        self.assertEqual(body["edges"][0]["target"], "sink")
+        self.assertEqual(body["edges"][0]["message_type"], "replayed_task")
+
+    @patch('mn_api.main.client')
+    def test_get_job_agent_graph_includes_outbound_edge_metadata(self, mock_client):
+        mock_client.get_job.return_value = json.dumps({
+            "job": {"job_id": "job-1", "graph_id": "graph-1", "status": "running"},
+            "agents": [
+                {
+                    "agent_id": "planner",
+                    "agent_type": "router",
+                    "status": "running",
+                    "metadata": {"outbound_edges": ["worker"]},
+                }
+            ],
+        })
+        mock_client.stream_events.return_value = []
+
+        response = self.client.get("/api/v1/jobs/job-1/agent-graph")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["stats"]["agent_count"], 2)
+        self.assertEqual(body["stats"]["edge_count"], 1)
+        self.assertEqual(body["edges"][0]["source_event"], "outbound_edges")
+        self.assertEqual(body["edges"][0]["source"], "planner")
+        self.assertEqual(body["edges"][0]["target"], "worker")
 
     @patch('mn_api.main.client')
     def test_get_job_dead_letters_success(self, mock_client):
