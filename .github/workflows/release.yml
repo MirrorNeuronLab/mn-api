@@ -128,7 +128,7 @@ jobs:
           if [[ "$GITHUB_REPOSITORY" == "MirrorNeuronLab/mn-system-tests" ]]; then
             python -m pip install pytest pytest-cov requests
             python -m pip install "mirrorneuron-python-sdk @ git+https://github.com/MirrorNeuronLab/mn-python-sdk.git"
-            python -m pip install "mn-cli @ git+https://github.com/MirrorNeuronLab/mn-cli.git"
+            python -m pip install "mirrorneuron-cli @ git+https://github.com/MirrorNeuronLab/mn-cli.git"
           elif [[ -f requirements.txt && "${{ steps.detect.outputs.has_python_package }}" != "true" ]]; then
             python -m pip install -r requirements.txt
           fi
@@ -344,7 +344,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+          if gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Release $TAG_NAME already exists; refusing to overwrite it." >&2
             exit 1
           fi
@@ -355,7 +355,7 @@ jobs:
             exit 1
           fi
 
-          release_args=(release create "$TAG_NAME")
+          release_args=(release create "$TAG_NAME" --repo "$GITHUB_REPOSITORY")
           release_args+=("${assets[@]}")
           release_args+=(--title "$TAG_NAME" --verify-tag --generate-notes)
 
