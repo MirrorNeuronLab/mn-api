@@ -1,0 +1,389 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to publish, such as v1.0.1 or v1.0.1-rc.1"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Validate, test, and build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      tag_name: ${{ steps.version.outputs.tag_name }}
+      version: ${{ steps.version.outputs.version }}
+      is_prerelease: ${{ steps.version.outputs.is_prerelease }}
+      has_python_package: ${{ steps.detect.outputs.has_python_package }}
+
+    steps:
+      - name: Check out tag
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: Validate release tag
+        id: version
+        shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            tag="$INPUT_TAG"
+          fi
+          scripts/validate-version-tag.sh "$tag"
+
+      - name: Detect project type
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          has_python_package="false"
+          has_python_tests="false"
+          has_npm="false"
+          has_elixir="false"
+          has_shell_scripts="false"
+
+          if find . -maxdepth 2 -name pyproject.toml -print -quit | grep -q .; then
+            has_python_package="true"
+          fi
+
+          if [[ -f pytest.ini || -f requirements.txt ]] || find . -path './.git' -prune -o -name 'test_*.py' -print -quit | grep -q .; then
+            has_python_tests="true"
+          fi
+
+          if [[ -f package.json ]]; then
+            has_npm="true"
+          fi
+
+          if [[ -f mix.exs ]]; then
+            has_elixir="true"
+          fi
+
+          if find . -path './.git' -prune -o -name '*.sh' -print -quit | grep -q .; then
+            has_shell_scripts="true"
+          fi
+
+          {
+            echo "has_python_package=$has_python_package"
+            echo "has_python_tests=$has_python_tests"
+            echo "has_npm=$has_npm"
+            echo "has_elixir=$has_elixir"
+            echo "has_shell_scripts=$has_shell_scripts"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python
+        if: steps.detect.outputs.has_python_package == 'true' || steps.detect.outputs.has_python_tests == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Set up Node.js
+        if: steps.detect.outputs.has_npm == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Set up Elixir
+        if: steps.detect.outputs.has_elixir == 'true'
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.16"
+          otp-version: "26"
+
+      - name: Install Python dependencies
+        if: steps.detect.outputs.has_python_package == 'true' || steps.detect.outputs.has_python_tests == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python -m pip install --upgrade pip
+          python -m pip install build twine pytest packaging
+
+          if [[ "$GITHUB_REPOSITORY" == "MirrorNeuronLab/mn-api" || "$GITHUB_REPOSITORY" == "MirrorNeuronLab/mn-cli" ]]; then
+            python -m pip install "mn-python-sdk @ git+https://github.com/MirrorNeuronLab/mn-python-sdk.git"
+          fi
+
+          if [[ "$GITHUB_REPOSITORY" == "MirrorNeuronLab/mn-blueprints" ]]; then
+            python -m pip install "mn-python-sdk @ git+https://github.com/MirrorNeuronLab/mn-python-sdk.git"
+            python -m pip install "blueprint-support-skill @ git+https://github.com/MirrorNeuronLab/mn-skills.git#subdirectory=blueprint_support_skill"
+          fi
+
+          if [[ "$GITHUB_REPOSITORY" == "MirrorNeuronLab/mn-system-tests" ]]; then
+            python -m pip install pytest pytest-cov requests
+            python -m pip install "mn-python-sdk @ git+https://github.com/MirrorNeuronLab/mn-python-sdk.git"
+            python -m pip install "mn-cli @ git+https://github.com/MirrorNeuronLab/mn-cli.git"
+          elif [[ -f requirements.txt && "${{ steps.detect.outputs.has_python_package }}" != "true" ]]; then
+            python -m pip install -r requirements.txt
+          fi
+
+          mapfile -t pyprojects < <(find . -maxdepth 2 -name pyproject.toml | sort)
+          for pyproject in "${pyprojects[@]}"; do
+            package_dir="$(dirname "$pyproject")"
+            python -m pip install -e "$package_dir"
+            python -m pip install -e "$package_dir[test]"
+          done
+
+      - name: Run configured Python checks
+        if: steps.detect.outputs.has_python_package == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if grep -R --include pyproject.toml -q '^\[tool\.ruff\]' .; then
+            python -m pip install ruff
+            python -m ruff check .
+          fi
+
+          if grep -R --include pyproject.toml -q '^\[tool\.mypy\]' .; then
+            python -m pip install mypy
+            python -m mypy .
+          fi
+
+      - name: Run Python tests
+        if: steps.detect.outputs.has_python_tests == 'true'
+        run: python -m pytest
+
+      - name: Build Python distributions
+        if: steps.detect.outputs.has_python_package == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -rf dist
+          mkdir -p dist
+          mapfile -t pyprojects < <(find . -maxdepth 2 -name pyproject.toml | sort)
+          for pyproject in "${pyprojects[@]}"; do
+            package_dir="$(dirname "$pyproject")"
+            python -m build "$package_dir" --outdir dist
+          done
+
+          python -m twine check dist/*
+
+      - name: Verify Python distribution versions
+        if: steps.detect.outputs.has_python_package == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python - "$VERSION" <<'PY'
+          import email.parser
+          import glob
+          import pathlib
+          import sys
+          import tarfile
+          import zipfile
+
+          from packaging.version import Version
+
+          expected = str(Version(sys.argv[1]))
+          versions = {}
+
+          for wheel in glob.glob("dist/*.whl"):
+              with zipfile.ZipFile(wheel) as archive:
+                  metadata_name = next(name for name in archive.namelist() if name.endswith(".dist-info/METADATA"))
+                  metadata = email.parser.Parser().parsestr(archive.read(metadata_name).decode("utf-8"))
+                  versions[pathlib.Path(wheel).name] = metadata["Version"]
+
+          for sdist in glob.glob("dist/*.tar.gz"):
+              with tarfile.open(sdist) as archive:
+                  metadata_member = next(member for member in archive.getmembers() if member.name.endswith("/PKG-INFO"))
+                  metadata_file = archive.extractfile(metadata_member)
+                  if metadata_file is None:
+                      raise SystemExit(f"Could not read PKG-INFO from {sdist}")
+                  metadata = email.parser.Parser().parsestr(metadata_file.read().decode("utf-8"))
+                  versions[pathlib.Path(sdist).name] = metadata["Version"]
+
+          if not versions:
+              raise SystemExit("No Python distributions were found in dist/.")
+
+          mismatches = {
+              name: version
+              for name, version in versions.items()
+              if str(Version(version)) != expected
+          }
+
+          if mismatches:
+              for name, version in mismatches.items():
+                  print(f"{name}: expected {expected}, found {version}", file=sys.stderr)
+              raise SystemExit(1)
+
+          print(f"Python distribution versions match {expected}.")
+          PY
+
+      - name: Install npm dependencies
+        if: steps.detect.outputs.has_npm == 'true'
+        run: npm ci
+
+      - name: Apply tag version to npm metadata
+        if: steps.detect.outputs.has_npm == 'true'
+        run: npm version "$VERSION" --no-git-tag-version --allow-same-version
+
+      - name: Run npm lint
+        if: steps.detect.outputs.has_npm == 'true'
+        run: npm run lint --if-present
+
+      - name: Run npm tests
+        if: steps.detect.outputs.has_npm == 'true'
+        run: npm test --if-present
+
+      - name: Build npm project
+        if: steps.detect.outputs.has_npm == 'true'
+        run: npm run build --if-present
+
+      - name: Install Elixir dependencies
+        if: steps.detect.outputs.has_elixir == 'true'
+        run: mix deps.get
+
+      - name: Check Elixir formatting
+        if: steps.detect.outputs.has_elixir == 'true'
+        run: mix format --check-formatted
+
+      - name: Run Elixir tests
+        if: steps.detect.outputs.has_elixir == 'true'
+        run: mix test
+
+      - name: Build Elixir project
+        if: steps.detect.outputs.has_elixir == 'true'
+        env:
+          MIX_PROJECT_VERSION: ${{ steps.version.outputs.version }}
+        run: mix compile --warnings-as-errors
+
+      - name: Check shell scripts
+        if: steps.detect.outputs.has_shell_scripts == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' script; do
+            bash -n "$script"
+          done < <(find . -path './.git' -prune -o -name '*.sh' -print0)
+
+      - name: Create release ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/release-assets
+          scripts/make-release-zip.sh "$TAG_NAME" dist/release-assets
+
+      - name: Create SHA256 checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t artifacts < <(find dist dist/release-assets -maxdepth 1 -type f \( -name '*.zip' -o -name '*.whl' -o -name '*.tar.gz' \) | LC_ALL=C sort)
+          if [[ "${#artifacts[@]}" -eq 0 ]]; then
+            echo "No release artifacts found for checksums." >&2
+            exit 1
+          fi
+          sha256sum "${artifacts[@]}" > dist/SHA256SUMS.txt
+
+      - name: Validate release artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t artifacts < <(find dist dist/release-assets -maxdepth 1 -type f \( -name '*.zip' -o -name '*.whl' -o -name '*.tar.gz' -o -name 'SHA256SUMS.txt' \) | LC_ALL=C sort)
+          scripts/check-release-artifacts.sh "${artifacts[@]}"
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: |
+            dist/release-assets/*.zip
+            dist/SHA256SUMS.txt
+            dist/*.whl
+            dist/*.tar.gz
+          if-no-files-found: error
+
+      - name: Upload Python distributions
+        if: steps.detect.outputs.has_python_package == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-dist
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+          if-no-files-found: error
+
+  github-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: release-assets
+
+      - name: Create GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG_NAME: ${{ needs.build.outputs.tag_name }}
+          IS_PRERELEASE: ${{ needs.build.outputs.is_prerelease }}
+        run: |
+          set -euo pipefail
+
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            echo "Release $TAG_NAME already exists; refusing to overwrite it." >&2
+            exit 1
+          fi
+
+          mapfile -t assets < <(find release-assets -type f | LC_ALL=C sort)
+          if [[ "${#assets[@]}" -eq 0 ]]; then
+            echo "No release assets were downloaded." >&2
+            exit 1
+          fi
+
+          release_args=(release create "$TAG_NAME")
+          release_args+=("${assets[@]}")
+          release_args+=(--title "$TAG_NAME" --verify-tag --generate-notes)
+
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            release_args+=(--prerelease)
+          fi
+
+          gh "${release_args[@]}"
+
+  publish-pypi:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    needs:
+      - build
+      - github-release
+    if: needs.build.outputs.has_python_package == 'true' && (needs.build.outputs.is_prerelease == 'false' || vars.PUBLISH_PRERELEASES_TO_PYPI == 'true')
+    permissions:
+      contents: read
+      id-token: write
+    environment:
+      name: pypi
+
+    steps:
+      - name: Download Python distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: python-dist
+          path: dist
+
+      - name: Publish Python distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

@@ -1,0 +1,192 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: Test and build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect project type
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          has_python_package="false"
+          has_python_tests="false"
+          has_npm="false"
+          has_elixir="false"
+          has_shell_scripts="false"
+
+          if find . -maxdepth 2 -name pyproject.toml -print -quit | grep -q .; then
+            has_python_package="true"
+          fi
+
+          if [[ -f pytest.ini || -f requirements.txt ]] || find . -path './.git' -prune -o -name 'test_*.py' -print -quit | grep -q .; then
+            has_python_tests="true"
+          fi
+
+          if [[ -f package.json ]]; then
+            has_npm="true"
+          fi
+
+          if [[ -f mix.exs ]]; then
+            has_elixir="true"
+          fi
+
+          if find . -path './.git' -prune -o -name '*.sh' -print -quit | grep -q .; then
+            has_shell_scripts="true"
+          fi
+
+          {
+            echo "has_python_package=$has_python_package"
+            echo "has_python_tests=$has_python_tests"
+            echo "has_npm=$has_npm"
+            echo "has_elixir=$has_elixir"
+            echo "has_shell_scripts=$has_shell_scripts"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python
+        if: steps.detect.outputs.has_python_package == 'true' || steps.detect.outputs.has_python_tests == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Set up Node.js
+        if: steps.detect.outputs.has_npm == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Set up Elixir
+        if: steps.detect.outputs.has_elixir == 'true'
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.16"
+          otp-version: "26"
+
+      - name: Install Python dependencies
+        if: steps.detect.outputs.has_python_package == 'true' || steps.detect.outputs.has_python_tests == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python -m pip install --upgrade pip
+          python -m pip install build twine pytest
+
+          if [[ "$GITHUB_REPOSITORY" == "MirrorNeuronLab/mn-api" || "$GITHUB_REPOSITORY" == "MirrorNeuronLab/mn-cli" ]]; then
+            python -m pip install "mn-python-sdk @ git+https://github.com/MirrorNeuronLab/mn-python-sdk.git"
+          fi
+
+          if [[ "$GITHUB_REPOSITORY" == "MirrorNeuronLab/mn-blueprints" ]]; then
+            python -m pip install "mn-python-sdk @ git+https://github.com/MirrorNeuronLab/mn-python-sdk.git"
+            python -m pip install "blueprint-support-skill @ git+https://github.com/MirrorNeuronLab/mn-skills.git#subdirectory=blueprint_support_skill"
+          fi
+
+          if [[ "$GITHUB_REPOSITORY" == "MirrorNeuronLab/mn-system-tests" ]]; then
+            python -m pip install pytest pytest-cov requests
+            python -m pip install "mn-python-sdk @ git+https://github.com/MirrorNeuronLab/mn-python-sdk.git"
+            python -m pip install "mn-cli @ git+https://github.com/MirrorNeuronLab/mn-cli.git"
+          elif [[ -f requirements.txt && "${{ steps.detect.outputs.has_python_package }}" != "true" ]]; then
+            python -m pip install -r requirements.txt
+          fi
+
+          mapfile -t pyprojects < <(find . -maxdepth 2 -name pyproject.toml | sort)
+          for pyproject in "${pyprojects[@]}"; do
+            package_dir="$(dirname "$pyproject")"
+            python -m pip install -e "$package_dir"
+            python -m pip install -e "$package_dir[test]"
+          done
+
+      - name: Run configured Python checks
+        if: steps.detect.outputs.has_python_package == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if grep -R --include pyproject.toml -q '^\[tool\.ruff\]' .; then
+            python -m pip install ruff
+            python -m ruff check .
+          fi
+
+          if grep -R --include pyproject.toml -q '^\[tool\.mypy\]' .; then
+            python -m pip install mypy
+            python -m mypy .
+          fi
+
+      - name: Run Python tests
+        if: steps.detect.outputs.has_python_tests == 'true'
+        run: python -m pytest
+
+      - name: Build Python distributions
+        if: steps.detect.outputs.has_python_package == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -rf dist
+          mkdir -p dist
+          mapfile -t pyprojects < <(find . -maxdepth 2 -name pyproject.toml | sort)
+          for pyproject in "${pyprojects[@]}"; do
+            package_dir="$(dirname "$pyproject")"
+            python -m build "$package_dir" --outdir dist
+          done
+
+          python -m twine check dist/*
+
+      - name: Install npm dependencies
+        if: steps.detect.outputs.has_npm == 'true'
+        run: npm ci
+
+      - name: Run npm lint
+        if: steps.detect.outputs.has_npm == 'true'
+        run: npm run lint --if-present
+
+      - name: Run npm tests
+        if: steps.detect.outputs.has_npm == 'true'
+        run: npm test --if-present
+
+      - name: Build npm project
+        if: steps.detect.outputs.has_npm == 'true'
+        run: npm run build --if-present
+
+      - name: Install Elixir dependencies
+        if: steps.detect.outputs.has_elixir == 'true'
+        run: mix deps.get
+
+      - name: Check Elixir formatting
+        if: steps.detect.outputs.has_elixir == 'true'
+        run: mix format --check-formatted
+
+      - name: Run Elixir tests
+        if: steps.detect.outputs.has_elixir == 'true'
+        run: mix test
+
+      - name: Build Elixir project
+        if: steps.detect.outputs.has_elixir == 'true'
+        run: mix compile --warnings-as-errors
+
+      - name: Check shell scripts
+        if: steps.detect.outputs.has_shell_scripts == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' script; do
+            bash -n "$script"
+          done < <(find . -path './.git' -prune -o -name '*.sh' -print0)
