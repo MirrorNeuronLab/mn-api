@@ -57,7 +57,7 @@ To enable PyPI publishing for stable tags:
 
 1. In PyPI, configure a trusted publisher for the `mn-api` project. If the project does not exist yet, create a pending publisher for that exact project name.
 2. Set the PyPI environment name to `pypi`.
-3. Set the workflow file to `.github/workflows/release.yml`.
+3. Set the workflow filename to `release.yml` (the file lives at `.github/workflows/release.yml`).
 4. Leave token-based secrets unset unless there is a deliberate reason to use them.
 
 Stable tags publish to PyPI only after the build and tests succeed. Prerelease tags do not publish to PyPI unless the repository variable `PUBLISH_PRERELEASES_TO_PYPI` is set to `true`.
