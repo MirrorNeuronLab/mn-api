@@ -55,7 +55,7 @@ Python publishing uses PyPI Trusted Publishing with GitHub OIDC. No `PYPI_TOKEN`
 
 To enable PyPI publishing for stable tags:
 
-1. In PyPI, configure a trusted publisher for the `mn-api` project. If the project does not exist yet, create a pending publisher for that exact project name.
+1. In PyPI, configure a trusted publisher for the `mirrorneuron-api` project. If the project does not exist yet, create a pending publisher for that exact project name.
 2. Set the PyPI environment name to `pypi`.
 3. Set the workflow filename to `release.yml` (the file lives at `.github/workflows/release.yml`).
 4. Leave token-based secrets unset unless there is a deliberate reason to use them.

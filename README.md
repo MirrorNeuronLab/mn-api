@@ -9,7 +9,7 @@ Built with FastAPI and Uvicorn, this component acts as an HTTP abstraction over 
 *Note: This API is installed automatically and symlinked globally as `mn-api` by the MirrorNeuron `install.sh` script.*
 
 ```bash
-pip install mn-api
+pip install mirrorneuron-api
 ```
 
 ## Running the Server

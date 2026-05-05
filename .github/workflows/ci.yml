@@ -91,17 +91,17 @@ jobs:
           python -m pip install build twine pytest
 
           if [[ "$GITHUB_REPOSITORY" == "MirrorNeuronLab/mn-api" || "$GITHUB_REPOSITORY" == "MirrorNeuronLab/mn-cli" ]]; then
-            python -m pip install "mn-python-sdk @ git+https://github.com/MirrorNeuronLab/mn-python-sdk.git"
+            python -m pip install "mirrorneuron-python-sdk @ git+https://github.com/MirrorNeuronLab/mn-python-sdk.git"
           fi
 
           if [[ "$GITHUB_REPOSITORY" == "MirrorNeuronLab/mn-blueprints" ]]; then
-            python -m pip install "mn-python-sdk @ git+https://github.com/MirrorNeuronLab/mn-python-sdk.git"
-            python -m pip install "blueprint-support-skill @ git+https://github.com/MirrorNeuronLab/mn-skills.git#subdirectory=blueprint_support_skill"
+            python -m pip install "mirrorneuron-python-sdk @ git+https://github.com/MirrorNeuronLab/mn-python-sdk.git"
+            python -m pip install "mirrorneuron-blueprint-support-skill @ git+https://github.com/MirrorNeuronLab/mn-skills.git#subdirectory=blueprint_support_skill"
           fi
 
           if [[ "$GITHUB_REPOSITORY" == "MirrorNeuronLab/mn-system-tests" ]]; then
             python -m pip install pytest pytest-cov requests
-            python -m pip install "mn-python-sdk @ git+https://github.com/MirrorNeuronLab/mn-python-sdk.git"
+            python -m pip install "mirrorneuron-python-sdk @ git+https://github.com/MirrorNeuronLab/mn-python-sdk.git"
             python -m pip install "mn-cli @ git+https://github.com/MirrorNeuronLab/mn-cli.git"
           elif [[ -f requirements.txt && "${{ steps.detect.outputs.has_python_package }}" != "true" ]]; then
             python -m pip install -r requirements.txt
