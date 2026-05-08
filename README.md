@@ -17,7 +17,7 @@ The API is a FastAPI/Uvicorn service that exposes runtime operations over REST a
 
 | Area | Tooling |
 | --- | --- |
-| Runtime | Python 3.9+ |
+| Runtime | Python 3.10+ |
 | Web framework | FastAPI |
 | Server | Uvicorn |
 | Core client | `mirrorneuron-python-sdk` |
@@ -25,7 +25,7 @@ The API is a FastAPI/Uvicorn service that exposes runtime operations over REST a
 
 ## Prerequisites
 
-- Python 3.9 or newer.
+- Python 3.10 or newer.
 - A running MirrorNeuron core reachable over gRPC.
 - Redis and any runtime dependencies required by the core deployment.
 

@@ -3,7 +3,7 @@ name = "mirrorneuron-api"
 dynamic = ["version"]
 description = "MirrorNeuron REST API"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = "MIT"
 classifiers = [
     "Programming Language :: Python :: 3",
