@@ -7,6 +7,7 @@ The API is a FastAPI/Uvicorn service that exposes runtime operations over REST a
 ## Features
 
 - Health and runtime summary endpoints.
+- Blueprint catalog list/detail/install/run endpoints for desktop Worker Hub clients.
 - Job submission from JSON manifests or uploaded bundle ZIP files.
 - Job listing, status, event, graph, metrics, and dead-letter endpoints.
 - Job lifecycle controls for cancel, pause, resume, and cleanup.
@@ -63,6 +64,7 @@ All runtime configuration uses environment variables.
 | `MN_GRPC_TIMEOUT_SECONDS` | `10` | SDK call timeout. Use `0` or `none` to disable. |
 | `MN_API_REQUEST_SIZE_LIMIT_BYTES` | `5242880` | Maximum request body size. |
 | `MN_API_CORS_ALLOW_ORIGINS` | unset | Comma-separated CORS allowlist. |
+| `MN_BLUEPRINT_REPO` | `~/Projects/otterdesk-blueprints` | Blueprint catalog repository used by `/blueprints` endpoints. |
 | `MN_API_LOG_PATH` | `~/.mn/logs/api.log` | API log file path. |
 | `MN_LOG_LEVEL` | package default | Log level used by shared logging setup. |
 | `MN_LOG_MAX_BYTES` | package default | Rotating log size limit. |
@@ -100,6 +102,10 @@ Base path: `/api/v1`
 | `GET` | `/health` | Service health check. |
 | `GET` | `/system/summary` | Runtime hardware and pool summary. |
 | `GET` | `/metrics` | Runtime metrics summary. |
+| `GET` | `/blueprints` | List normalized blueprint catalog entries from `MN_BLUEPRINT_REPO`. |
+| `GET` | `/blueprints/{blueprint_id}` | Fetch one normalized blueprint. |
+| `POST` | `/blueprints/{blueprint_id}/install` | Validate/cache a blueprint bundle for local use. |
+| `POST` | `/blueprints/{blueprint_id}/runs` | Prepare and submit a blueprint bundle, returning `job_id` and `run_id`. |
 | `POST` | `/jobs` | Submit a workflow from a JSON manifest. |
 | `POST` | `/bundles/upload` | Upload and submit a bundle ZIP. |
 | `GET` | `/jobs` | List jobs. |

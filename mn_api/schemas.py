@@ -1,0 +1,15 @@
+from __future__ import annotations
+
+from typing import Dict, Optional
+
+from pydantic import BaseModel, Field
+
+
+class SubmitJobRequest(BaseModel):
+    manifest_json: Optional[str] = None
+    payloads: Optional[Dict[str, str]] = Field(default_factory=dict)
+    bundle_path: Optional[str] = Field(default=None, alias="_bundle_path")
+
+
+class BlueprintRunRequest(BaseModel):
+    run_id: Optional[str] = None

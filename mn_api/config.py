@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
@@ -17,6 +18,7 @@ class ApiConfig:
     api_token: str
     request_size_limit_bytes: int
     cors_allow_origins: list[str]
+    blueprint_repo: str
 
     @classmethod
     def from_env(cls) -> "ApiConfig":
@@ -40,6 +42,10 @@ class ApiConfig:
             cors_allow_origins=_csv(
                 os.getenv("MN_API_CORS_ALLOW_ORIGINS", "")
             ),
+            blueprint_repo=os.getenv(
+                "MN_BLUEPRINT_REPO",
+                str(Path.home() / "Projects" / "otterdesk-blueprints"),
+            ),
         )
         config.validate()
         return config
@@ -57,6 +63,8 @@ class ApiConfig:
             raise ValueError("MN_API_REQUEST_SIZE_LIMIT_BYTES must be > 0")
         if self.prod and not self.api_token:
             raise ValueError("MN_API_TOKEN is required when MN_ENV=prod")
+        if not self.blueprint_repo:
+            raise ValueError("MN_BLUEPRINT_REPO must be a non-empty path")
 
 
 def _int(name: str, default: str) -> int:

@@ -6,7 +6,7 @@ import zipfile
 from pathlib import Path
 from fastapi.testclient import TestClient
 from types import SimpleNamespace
-from mn_api import main
+from mn_api import state
 from mn_api.main import app
 from unittest.mock import patch
 import grpc
@@ -15,14 +15,53 @@ class TestAPI(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app)
 
+    def _write_blueprint_repo(self, repo: Path):
+        blueprint_dir = repo / "worker_one"
+        payloads_dir = blueprint_dir / "payloads"
+        payloads_dir.mkdir(parents=True)
+        (payloads_dir / "payload.txt").write_text("hello")
+        (blueprint_dir / "manifest.json").write_text(json.dumps({
+            "graph_id": "worker_one_graph",
+            "nodes": [],
+            "edges": [],
+            "metadata": {},
+        }))
+        (repo / "index.json").write_text(json.dumps([
+            {
+                "id": "worker_one",
+                "name": "Worker One",
+                "path": "worker_one",
+                "description": "A test worker.",
+                "product": {
+                    "one_line": "A normalized test worker.",
+                    "agent_role": "Test operator.",
+                    "target_users": "Testers",
+                    "output": "Test output",
+                    "runtime_features": ["testing"],
+                },
+            }
+        ]))
+
+    def _set_blueprint_config(self, repo: Path, token: str = ""):
+        original = state.config
+        state.config = SimpleNamespace(
+            api_token=token,
+            request_size_limit_bytes=1024 * 1024,
+            blueprint_repo=str(repo),
+        )
+        return original
+
+    def _restore_config(self, original):
+        state.config = original
+
     def test_health(self):
         response = self.client.get("/api/v1/health")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"status": "ok", "auth": "disabled"})
 
     def test_auth_required_when_token_configured(self):
-        original = main.config
-        main.config = SimpleNamespace(api_token="secret", request_size_limit_bytes=1024 * 1024)
+        original = state.config
+        state.config = SimpleNamespace(api_token="secret", request_size_limit_bytes=1024 * 1024)
         try:
             response = self.client.get("/api/v1/system/summary")
             self.assertEqual(response.status_code, 401)
@@ -32,11 +71,11 @@ class TestAPI(unittest.TestCase):
             )
             self.assertIn(response.status_code, (200, 500))
         finally:
-            main.config = original
+            state.config = original
 
     def test_request_size_limit(self):
-        original = main.config
-        main.config = SimpleNamespace(api_token="", request_size_limit_bytes=10)
+        original = state.config
+        state.config = SimpleNamespace(api_token="", request_size_limit_bytes=10)
         try:
             response = self.client.post(
                 "/api/v1/jobs",
@@ -46,7 +85,7 @@ class TestAPI(unittest.TestCase):
             self.assertEqual(response.status_code, 413)
             self.assertEqual(response.json()["error"], "request_too_large")
         finally:
-            main.config = original
+            state.config = original
 
     def test_invalid_content_length_is_rejected(self):
         response = self.client.post(
@@ -57,7 +96,7 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json(), {"error": "invalid_content_length"})
 
-    @patch('mn_api.main.client')
+    @patch('mn_api.state.client')
     def test_list_jobs_success(self, mock_client):
         mock_client.list_jobs.return_value = '{"data": [{"job_id": "job-1"}]}'
         response = self.client.get("/api/v1/jobs?limit=5&include_terminal=false")
@@ -65,7 +104,7 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.json(), {"data": [{"job_id": "job-1"}]})
         mock_client.list_jobs.assert_called_once_with(5, False)
 
-    @patch('mn_api.main.client')
+    @patch('mn_api.state.client')
     def test_cleanup_jobs_success(self, mock_client):
         mock_client.clear_jobs.return_value = 3
         response = self.client.post("/api/v1/jobs:cleanup")
@@ -73,14 +112,14 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.json(), {"cleared_count": 3})
         mock_client.clear_jobs.assert_called_once()
 
-    @patch('mn_api.main.client')
+    @patch('mn_api.state.client')
     def test_get_system_summary_success(self, mock_client):
         mock_client.get_system_summary.return_value = '{"nodes": [], "jobs": []}'
         response = self.client.get("/api/v1/system/summary")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"nodes": [], "jobs": []})
 
-    @patch('mn_api.main.client')
+    @patch('mn_api.state.client')
     def test_submit_job_success(self, mock_client):
         mock_client.submit_job.return_value = "job-123"
         response = self.client.post(
@@ -91,7 +130,7 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.json(), {"id": "job-123", "status": "pending"})
         mock_client.submit_job.assert_called_once_with('{"graph_id": "g"}', {"a.txt": b"hello"})
 
-    @patch('mn_api.main.client')
+    @patch('mn_api.state.client')
     def test_upload_bundle_and_submit_by_bundle_path(self, mock_client):
         mock_client.submit_job.return_value = "job-zip"
         archive = io.BytesIO()
@@ -152,7 +191,7 @@ class TestAPI(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 400)
 
-    @patch('mn_api.main.client')
+    @patch('mn_api.state.client')
     def test_submit_by_unknown_bundle_path_is_rejected_before_sdk_call(self, mock_client):
         response = self.client.post(
             "/api/v1/jobs",
@@ -163,14 +202,14 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.json()["detail"], "unknown uploaded bundle")
         mock_client.submit_job.assert_not_called()
 
-    @patch('mn_api.main.client')
+    @patch('mn_api.state.client')
     def test_cancel_job_success(self, mock_client):
         mock_client.cancel_job.return_value = "cancelled"
         response = self.client.post("/api/v1/jobs/test_job_123/cancel")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"status": "cancelled", "job_id": "test_job_123"})
 
-    @patch('mn_api.main.client')
+    @patch('mn_api.state.client')
     def test_cancel_job_grpc_error(self, mock_client):
         class MockRpcError(Exception):
             def details(self):
@@ -181,14 +220,14 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.json(), {"error": "job test_job_123 was not found"})
 
-    @patch('mn_api.main.client')
+    @patch('mn_api.state.client')
     def test_cancel_job_generic_error(self, mock_client):
         mock_client.cancel_job.side_effect = Exception("Some generic error")
         response = self.client.post("/api/v1/jobs/test_job_123/cancel")
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.json(), {"error": "Some generic error"})
 
-    @patch('mn_api.main.client')
+    @patch('mn_api.state.client')
     def test_submit_job_resource_overloaded(self, mock_client):
         class ResourceError(grpc.RpcError):
             def code(self):
@@ -205,14 +244,14 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json()["error"], "resource_overloaded")
 
-    @patch('mn_api.main.client')
+    @patch('mn_api.state.client')
     def test_get_job_events_success(self, mock_client):
         mock_client.stream_events.return_value = ['{"id": "e1"}', '{"id": "e2"}']
         response = self.client.get("/api/v1/jobs/test_job_123/events")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"data": [{"id": "e1"}, {"id": "e2"}]})
 
-    @patch('mn_api.main.client')
+    @patch('mn_api.state.client')
     def test_get_job_agent_graph_success(self, mock_client):
         mock_client.get_job.return_value = json.dumps({
             "job": {"job_id": "job-1", "graph_id": "graph-1", "status": "running"},
@@ -246,7 +285,7 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(body["edges"][0]["message_type"], "task")
         self.assertEqual(body["edges"][0]["count"], 2)
 
-    @patch('mn_api.main.client')
+    @patch('mn_api.state.client')
     def test_get_job_agent_graph_includes_manifest_edges(self, mock_client):
         with tempfile.TemporaryDirectory() as tmpdir:
             manifest_path = Path(tmpdir) / "manifest.json"
@@ -302,7 +341,7 @@ class TestAPI(unittest.TestCase):
             },
         )
 
-    @patch('mn_api.main.client')
+    @patch('mn_api.state.client')
     def test_get_job_agent_graph_includes_persisted_topology_edges(self, mock_client):
         mock_client.get_job.return_value = json.dumps({
             "job": {
@@ -339,7 +378,7 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(body["edges"][0]["message_type"], "telemetry_event")
         self.assertEqual(body["edges"][0]["count"], 0)
 
-    @patch('mn_api.main.client')
+    @patch('mn_api.state.client')
     def test_get_job_agent_graph_derives_edges_from_message_envelopes(self, mock_client):
         mock_client.get_job.return_value = json.dumps({
             "job": {"job_id": "job-1", "graph_id": "graph-1", "status": "running"},
@@ -370,7 +409,7 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(body["edges"][0]["target"], "sink")
         self.assertEqual(body["edges"][0]["message_type"], "replayed_task")
 
-    @patch('mn_api.main.client')
+    @patch('mn_api.state.client')
     def test_get_job_agent_graph_includes_outbound_edge_metadata(self, mock_client):
         mock_client.get_job.return_value = json.dumps({
             "job": {"job_id": "job-1", "graph_id": "graph-1", "status": "running"},
@@ -395,7 +434,7 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(body["edges"][0]["source"], "planner")
         self.assertEqual(body["edges"][0]["target"], "worker")
 
-    @patch('mn_api.main.client')
+    @patch('mn_api.state.client')
     def test_get_job_dead_letters_success(self, mock_client):
         mock_client.stream_events.return_value = [
             '{"type": "agent_started"}',
@@ -405,14 +444,14 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["data"][0]["reason"], "queue full")
 
-    @patch('mn_api.main.client')
+    @patch('mn_api.state.client')
     def test_metrics_success(self, mock_client):
         mock_client.get_system_summary.return_value = '{"nodes": ["n1"], "jobs": [{"status": "running"}, {"status": "failed"}]}'
         response = self.client.get("/api/v1/metrics")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["jobs"]["by_status"], {"running": 1, "failed": 1})
 
-    @patch('mn_api.main.client')
+    @patch('mn_api.state.client')
     def test_pause_and_resume_job_success(self, mock_client):
         mock_client.pause_job.return_value = "paused"
         pause_response = self.client.post("/api/v1/jobs/test_job_123/pause")
@@ -423,6 +462,108 @@ class TestAPI(unittest.TestCase):
         resume_response = self.client.post("/api/v1/jobs/test_job_123/resume")
         self.assertEqual(resume_response.status_code, 200)
         self.assertEqual(resume_response.json(), {"status": "running", "job_id": "test_job_123"})
+
+    def test_blueprint_list_detail_and_install_success(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            self._write_blueprint_repo(repo)
+            original = self._set_blueprint_config(repo)
+            try:
+                list_response = self.client.get("/api/v1/blueprints")
+                detail_response = self.client.get("/api/v1/blueprints/worker_one")
+                install_response = self.client.post("/api/v1/blueprints/worker_one/install")
+            finally:
+                self._restore_config(original)
+
+        self.assertEqual(list_response.status_code, 200)
+        body = list_response.json()
+        self.assertEqual(body["blueprints"][0]["id"], "worker_one")
+        self.assertEqual(body["blueprints"][0]["agent_role"], "Test operator.")
+        self.assertEqual(body["blueprints"][0]["pricing"]["model"], "free")
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertEqual(detail_response.json()["blueprint"]["name"], "Worker One")
+        self.assertEqual(install_response.status_code, 200)
+        self.assertTrue(install_response.json()["installed"])
+
+    @patch('mn_api.state.client')
+    def test_blueprint_run_returns_job_and_run_ids(self, mock_client):
+        mock_client.submit_job.return_value = "job-blueprint-1"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            self._write_blueprint_repo(repo)
+            original = self._set_blueprint_config(repo)
+            try:
+                response = self.client.post(
+                    "/api/v1/blueprints/worker_one/runs",
+                    json={"run_id": "run-123"},
+                )
+            finally:
+                self._restore_config(original)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["job_id"], "job-blueprint-1")
+        self.assertEqual(response.json()["run_id"], "run-123")
+        self.assertEqual(response.json()["status"], "pending")
+        manifest_json, payloads = mock_client.submit_job.call_args.args
+        manifest = json.loads(manifest_json)
+        self.assertEqual(manifest["run_id"], "run-123")
+        self.assertEqual(manifest["metadata"]["blueprint_id"], "worker_one")
+        self.assertEqual(manifest["metadata"]["blueprint_run_id"], "run-123")
+        self.assertEqual(payloads, {"payload.txt": b"hello"})
+
+    def test_invalid_blueprint_id_and_missing_blueprint(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            self._write_blueprint_repo(repo)
+            original = self._set_blueprint_config(repo)
+            try:
+                invalid_response = self.client.get("/api/v1/blueprints/bad$id")
+                missing_response = self.client.get("/api/v1/blueprints/missing_worker")
+            finally:
+                self._restore_config(original)
+
+        self.assertEqual(invalid_response.status_code, 400)
+        self.assertEqual(missing_response.status_code, 404)
+
+    def test_missing_and_malformed_blueprint_repo(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            missing_repo = Path(tmpdir) / "missing"
+            original = self._set_blueprint_config(missing_repo)
+            try:
+                missing_response = self.client.get("/api/v1/blueprints")
+            finally:
+                self._restore_config(original)
+
+            malformed_repo = Path(tmpdir) / "malformed"
+            malformed_repo.mkdir()
+            (malformed_repo / "index.json").write_text("{not json")
+            original = self._set_blueprint_config(malformed_repo)
+            try:
+                malformed_response = self.client.get("/api/v1/blueprints")
+            finally:
+                self._restore_config(original)
+
+        self.assertEqual(missing_response.status_code, 500)
+        self.assertEqual(malformed_response.status_code, 500)
+
+    def test_auth_applies_to_blueprint_endpoints(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            self._write_blueprint_repo(repo)
+            original = self._set_blueprint_config(repo, token="secret")
+            try:
+                unauthenticated = self.client.get("/api/v1/blueprints")
+                authenticated = self.client.get(
+                    "/api/v1/blueprints",
+                    headers={"Authorization": "Bearer secret"},
+                )
+                install_unauthenticated = self.client.post("/api/v1/blueprints/worker_one/install")
+            finally:
+                self._restore_config(original)
+
+        self.assertEqual(unauthenticated.status_code, 401)
+        self.assertEqual(authenticated.status_code, 200)
+        self.assertEqual(install_unauthenticated.status_code, 401)
 
 if __name__ == '__main__':
     unittest.main()
