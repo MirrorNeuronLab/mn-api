@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from mn_api import state
 from mn_api.blueprints import (
     create_blueprint_run_id,
+    filter_blueprints_by_category,
     find_blueprint,
+    load_blueprint_categories,
     load_blueprint_bundle,
     load_blueprint_catalog,
     validate_blueprint_bundle,
@@ -20,9 +22,17 @@ router = APIRouter(prefix="/api/v1")
 
 
 @router.get("/blueprints")
-def list_blueprints(_auth=Depends(require_auth)):
+def list_blueprints(
+    category: str | None = Query(
+        default=None,
+        description="Optional blueprint category name or slug. Comma-separated values are allowed.",
+    ),
+    _auth=Depends(require_auth),
+):
     repo_root, blueprints = load_blueprint_catalog(state.config)
-    return {"repo_dir": str(repo_root), "blueprints": blueprints}
+    categories = load_blueprint_categories(repo_root, blueprints)
+    filtered_blueprints = filter_blueprints_by_category(blueprints, category)
+    return {"repo_dir": str(repo_root), "blueprints": filtered_blueprints, "categories": categories}
 
 
 @router.get("/blueprints/{blueprint_id}")

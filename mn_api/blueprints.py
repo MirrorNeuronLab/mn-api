@@ -14,6 +14,8 @@ from mn_api.path_utils import inside_path
 
 BLUEPRINT_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,160}$")
 RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,220}$")
+CATEGORY_SLUG_PATTERN = re.compile(r"[^a-z0-9]+")
+DEFAULT_CATEGORY = "General"
 
 
 def as_dict(value: Any) -> Dict[str, Any]:
@@ -22,6 +24,19 @@ def as_dict(value: Any) -> Dict[str, Any]:
 
 def as_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
+
+
+def normalize_category_name(value: Any) -> str:
+    if not isinstance(value, str):
+        return DEFAULT_CATEGORY
+    category = value.strip()
+    return category or DEFAULT_CATEGORY
+
+
+def category_slug(value: Any) -> str:
+    category = normalize_category_name(value)
+    slug = CATEGORY_SLUG_PATTERN.sub("-", category.lower()).strip("-")
+    return slug or CATEGORY_SLUG_PATTERN.sub("-", DEFAULT_CATEGORY.lower()).strip("-")
 
 
 def validate_blueprint_id(blueprint_id: str) -> None:
@@ -97,6 +112,7 @@ def normalize_blueprint(entry: Any) -> Optional[Dict[str, Any]]:
         or []
     )
     capabilities = record.get("capabilities") or product.get("capabilities") or []
+    category = normalize_category_name(record.get("category") or product.get("category"))
     rate_label = (
         record.get("rate_label")
         or record.get("rateLabel")
@@ -132,7 +148,8 @@ def normalize_blueprint(entry: Any) -> Optional[Dict[str, Any]]:
             or product.get("simulation_type")
             or ""
         ),
-        "category": record.get("category") or product.get("category") or "General",
+        "category": category,
+        "category_slug": category_slug(category),
         "publisher": record.get("publisher") or product.get("publisher") or "MirrorNeuron",
         "rating": record.get("rating") or product.get("rating") or 0,
         "installs": record.get("installs") or product.get("installs") or 0,
@@ -150,6 +167,85 @@ def normalize_blueprint(entry: Any) -> Optional[Dict[str, Any]]:
         "revision": record.get("revision") or record.get("blueprint_revision") or "",
         "path": record.get("path") or record.get("directory") or blueprint_id,
     }
+
+
+def load_blueprint_categories(repo_root: Path, blueprints: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
+    category_records: list[Dict[str, str]] = []
+    category_path = repo_root / "category.json"
+    if category_path.is_file():
+        try:
+            category_data = json.loads(category_path.read_text())
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=500, detail="blueprint repo category.json is malformed") from exc
+
+        categories = as_dict(category_data).get("categories")
+        if not isinstance(categories, list):
+            raise HTTPException(status_code=500, detail="blueprint repo category.json must contain a categories list")
+        for position, entry in enumerate(categories):
+            record = as_dict(entry)
+            raw_name = record.get("name")
+            if not isinstance(raw_name, str) or not raw_name.strip():
+                raise HTTPException(status_code=500, detail=f"blueprint category entry {position} is malformed")
+            name = raw_name.strip()
+            slug = record.get("slug")
+            if not isinstance(slug, str) or not slug.strip():
+                slug = category_slug(name)
+            else:
+                slug = category_slug(slug)
+            category_records.append({"name": name, "slug": slug})
+
+    counts: dict[str, int] = {}
+    names_by_slug: dict[str, str] = {}
+    for blueprint in blueprints:
+        name = normalize_category_name(blueprint.get("category"))
+        slug = category_slug(blueprint.get("category_slug") or name)
+        counts[slug] = counts.get(slug, 0) + 1
+        names_by_slug.setdefault(slug, name)
+
+    categories_by_slug: dict[str, Dict[str, Any]] = {}
+    ordered_slugs: list[str] = []
+    for record in category_records:
+        slug = record["slug"]
+        if slug not in categories_by_slug:
+            ordered_slugs.append(slug)
+        categories_by_slug[slug] = {
+            "name": record["name"],
+            "slug": slug,
+            "count": counts.get(slug, 0),
+        }
+
+    for slug in sorted(counts):
+        if slug in categories_by_slug:
+            continue
+        ordered_slugs.append(slug)
+        categories_by_slug[slug] = {
+            "name": names_by_slug.get(slug, slug.replace("-", " ").title()),
+            "slug": slug,
+            "count": counts[slug],
+        }
+
+    return [categories_by_slug[slug] for slug in ordered_slugs]
+
+
+def filter_blueprints_by_category(
+    blueprints: list[Dict[str, Any]],
+    category: str | None,
+) -> list[Dict[str, Any]]:
+    if category is None or not category.strip():
+        return blueprints
+
+    requested = {
+        category_slug(part)
+        for part in category.split(",")
+        if part.strip()
+    }
+    if not requested:
+        return blueprints
+    return [
+        blueprint
+        for blueprint in blueprints
+        if category_slug(blueprint.get("category_slug") or blueprint.get("category")) in requested
+    ]
 
 
 def find_blueprint(config: ApiConfig, blueprint_id: str) -> tuple[Path, Dict[str, Any]]:

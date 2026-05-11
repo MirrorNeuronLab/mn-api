@@ -7,7 +7,7 @@ The API is a FastAPI/Uvicorn service that exposes runtime operations over REST a
 ## Features
 
 - Health and runtime summary endpoints.
-- Blueprint catalog list/detail/install/run endpoints for desktop Worker Hub clients.
+- Blueprint catalog list/detail/install/run endpoints, including category facets and category filtering for desktop Worker Hub clients.
 - Job submission from JSON manifests or uploaded bundle ZIP files.
 - Job listing, status, event, graph, metrics, and dead-letter endpoints.
 - Job lifecycle controls for cancel, pause, resume, and cleanup.
@@ -102,7 +102,7 @@ Base path: `/api/v1`
 | `GET` | `/health` | Service health check. |
 | `GET` | `/system/summary` | Runtime hardware and pool summary. |
 | `GET` | `/metrics` | Runtime metrics summary. |
-| `GET` | `/blueprints` | List normalized blueprint catalog entries from `MN_BLUEPRINT_REPO`. |
+| `GET` | `/blueprints` | List normalized blueprint catalog entries and category facets from `MN_BLUEPRINT_REPO`. Supports `?category=<name-or-slug>`. |
 | `GET` | `/blueprints/{blueprint_id}` | Fetch one normalized blueprint. |
 | `POST` | `/blueprints/{blueprint_id}/install` | Validate/cache a blueprint bundle for local use. |
 | `POST` | `/blueprints/{blueprint_id}/runs` | Prepare and submit a blueprint bundle, returning `job_id` and `run_id`. |
@@ -132,6 +132,14 @@ curl \
   -H "Authorization: Bearer $MN_API_TOKEN" \
   http://localhost:4001/api/v1/system/summary
 ```
+
+Example blueprint category filter:
+
+```bash
+curl "http://localhost:4001/api/v1/blueprints?category=finance"
+```
+
+The response includes normalized blueprint entries with `category` and `category_slug`, plus a `categories` list with `{name, slug, count}` facet metadata.
 
 ## Testing
 

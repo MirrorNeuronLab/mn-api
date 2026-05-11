@@ -31,6 +31,7 @@ class TestAPI(unittest.TestCase):
                 "id": "worker_one",
                 "name": "Worker One",
                 "path": "worker_one",
+                "category": "Business",
                 "description": "A test worker.",
                 "product": {
                     "one_line": "A normalized test worker.",
@@ -41,6 +42,12 @@ class TestAPI(unittest.TestCase):
                 },
             }
         ]))
+        (repo / "category.json").write_text(json.dumps({
+            "categories": [
+                {"name": "Business", "slug": "business"},
+                {"name": "Finance", "slug": "finance"},
+            ]
+        }))
 
     def _set_blueprint_config(self, repo: Path, token: str = ""):
         original = state.config
@@ -478,12 +485,47 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(list_response.status_code, 200)
         body = list_response.json()
         self.assertEqual(body["blueprints"][0]["id"], "worker_one")
+        self.assertEqual(body["blueprints"][0]["category"], "Business")
+        self.assertEqual(body["blueprints"][0]["category_slug"], "business")
+        self.assertEqual(body["categories"][0], {"name": "Business", "slug": "business", "count": 1})
         self.assertEqual(body["blueprints"][0]["agent_role"], "Test operator.")
         self.assertEqual(body["blueprints"][0]["pricing"]["model"], "free")
         self.assertEqual(detail_response.status_code, 200)
         self.assertEqual(detail_response.json()["blueprint"]["name"], "Worker One")
         self.assertEqual(install_response.status_code, 200)
         self.assertTrue(install_response.json()["installed"])
+
+    def test_blueprint_list_filters_by_category(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            self._write_blueprint_repo(repo)
+            index = json.loads((repo / "index.json").read_text())
+            index.append({
+                "id": "worker_two",
+                "name": "Worker Two",
+                "path": "worker_two",
+                "category": "Finance",
+                "description": "A finance worker.",
+            })
+            (repo / "index.json").write_text(json.dumps(index))
+            original = self._set_blueprint_config(repo)
+            try:
+                finance_response = self.client.get("/api/v1/blueprints?category=finance")
+                business_response = self.client.get("/api/v1/blueprints?category=Business")
+            finally:
+                self._restore_config(original)
+
+        self.assertEqual(finance_response.status_code, 200)
+        self.assertEqual([bp["id"] for bp in finance_response.json()["blueprints"]], ["worker_two"])
+        self.assertEqual(
+            finance_response.json()["categories"],
+            [
+                {"name": "Business", "slug": "business", "count": 1},
+                {"name": "Finance", "slug": "finance", "count": 1},
+            ],
+        )
+        self.assertEqual(business_response.status_code, 200)
+        self.assertEqual([bp["id"] for bp in business_response.json()["blueprints"]], ["worker_one"])
 
     @patch('mn_api.state.client')
     def test_blueprint_run_returns_job_and_run_ids(self, mock_client):

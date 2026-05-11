@@ -8,6 +8,8 @@ from fastapi import HTTPException
 
 from mn_api.blueprints import (
     blueprint_bundle_root,
+    filter_blueprints_by_category,
+    load_blueprint_categories,
     load_blueprint_bundle,
     load_blueprint_catalog,
     validate_run_id,
@@ -27,6 +29,7 @@ class TestBlueprintServices(unittest.TestCase):
                                 "product": {
                                     "name": "Worker Two",
                                     "one_line": "Does useful work.",
+                                    "category": "Engineering",
                                     "runtimeFeatures": ["streams"],
                                 },
                                 "pricing": {
@@ -48,10 +51,54 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertEqual(len(blueprints), 1)
         self.assertEqual(blueprints[0]["id"], "worker.two")
         self.assertEqual(blueprints[0]["name"], "Worker Two")
+        self.assertEqual(blueprints[0]["category"], "Engineering")
+        self.assertEqual(blueprints[0]["category_slug"], "engineering")
         self.assertEqual(blueprints[0]["pricing"], {"model": "metered", "rate": 12.5, "unit": "run"})
         self.assertEqual(blueprints[0]["rate_label"], "$12.5/run")
         self.assertEqual(blueprints[0]["runtime_features"], ["streams"])
         self.assertEqual(blueprints[0]["capabilities"], [])
+
+    def test_catalog_loads_category_facets_and_filters_by_slug_or_name(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            (repo / "category.json").write_text(
+                json.dumps(
+                    {
+                        "categories": [
+                            {"name": "Business", "slug": "business"},
+                            {"name": "Finance", "slug": "finance"},
+                        ]
+                    }
+                )
+            )
+            (repo / "index.json").write_text(
+                json.dumps(
+                    [
+                        {"id": "business_worker", "name": "Business Worker", "category": "Business"},
+                        {"id": "finance_worker", "name": "Finance Worker", "category": "Finance"},
+                        {"id": "another_finance_worker", "name": "Another Finance Worker", "category": "finance"},
+                    ]
+                )
+            )
+
+            repo_root, blueprints = load_blueprint_catalog(SimpleNamespace(blueprint_repo=str(repo)))
+            categories = load_blueprint_categories(repo_root, blueprints)
+
+        self.assertEqual(
+            categories,
+            [
+                {"name": "Business", "slug": "business", "count": 1},
+                {"name": "Finance", "slug": "finance", "count": 2},
+            ],
+        )
+        self.assertEqual(
+            [blueprint["id"] for blueprint in filter_blueprints_by_category(blueprints, "finance")],
+            ["finance_worker", "another_finance_worker"],
+        )
+        self.assertEqual(
+            [blueprint["id"] for blueprint in filter_blueprints_by_category(blueprints, "Business,finance")],
+            ["business_worker", "finance_worker", "another_finance_worker"],
+        )
 
     def test_catalog_rejects_non_list_index(self):
         with tempfile.TemporaryDirectory() as tmpdir:
