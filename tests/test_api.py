@@ -511,6 +511,84 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(manifest["metadata"]["blueprint_run_id"], "run-123")
         self.assertEqual(payloads, {"payload.txt": b"hello"})
 
+    @patch('mn_api.state.client')
+    def test_blueprint_run_generates_run_id_when_missing(self, mock_client):
+        mock_client.submit_job.return_value = "job-blueprint-generated"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            self._write_blueprint_repo(repo)
+            original = self._set_blueprint_config(repo)
+            try:
+                response = self.client.post("/api/v1/blueprints/worker_one/runs", json={})
+            finally:
+                self._restore_config(original)
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["job_id"], "job-blueprint-generated")
+        self.assertTrue(body["run_id"].startswith("worker_one-"))
+        manifest_json, _payloads = mock_client.submit_job.call_args.args
+        manifest = json.loads(manifest_json)
+        self.assertEqual(manifest["metadata"]["run_id"], body["run_id"])
+        self.assertEqual(manifest["metadata"]["blueprint_run_id"], body["run_id"])
+
+    @patch('mn_api.state.client')
+    def test_blueprint_run_rejects_invalid_run_id_before_submit(self, mock_client):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            self._write_blueprint_repo(repo)
+            original = self._set_blueprint_config(repo)
+            try:
+                response = self.client.post(
+                    "/api/v1/blueprints/worker_one/runs",
+                    json={"run_id": "../bad"},
+                )
+            finally:
+                self._restore_config(original)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["detail"], "invalid run id")
+        mock_client.submit_job.assert_not_called()
+
+    @patch('mn_api.state.client')
+    def test_blueprint_run_rejects_malformed_manifest_before_submit(self, mock_client):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            self._write_blueprint_repo(repo)
+            (repo / "worker_one" / "manifest.json").write_text("{not json")
+            original = self._set_blueprint_config(repo)
+            try:
+                response = self.client.post(
+                    "/api/v1/blueprints/worker_one/runs",
+                    json={"run_id": "run-123"},
+                )
+            finally:
+                self._restore_config(original)
+
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.json()["detail"], "blueprint manifest.json is malformed")
+        mock_client.submit_job.assert_not_called()
+
+    def test_blueprint_path_escape_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            self._write_blueprint_repo(repo)
+            (repo / "index.json").write_text(json.dumps([
+                {
+                    "id": "worker_one",
+                    "name": "Worker One",
+                    "path": "../outside",
+                }
+            ]))
+            original = self._set_blueprint_config(repo)
+            try:
+                response = self.client.post("/api/v1/blueprints/worker_one/install")
+            finally:
+                self._restore_config(original)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["detail"], "blueprint path escapes repository")
+
     def test_invalid_blueprint_id_and_missing_blueprint(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
@@ -558,12 +636,14 @@ class TestAPI(unittest.TestCase):
                     headers={"Authorization": "Bearer secret"},
                 )
                 install_unauthenticated = self.client.post("/api/v1/blueprints/worker_one/install")
+                run_unauthenticated = self.client.post("/api/v1/blueprints/worker_one/runs", json={})
             finally:
                 self._restore_config(original)
 
         self.assertEqual(unauthenticated.status_code, 401)
         self.assertEqual(authenticated.status_code, 200)
         self.assertEqual(install_unauthenticated.status_code, 401)
+        self.assertEqual(run_unauthenticated.status_code, 401)
 
 if __name__ == '__main__':
     unittest.main()
