@@ -84,7 +84,7 @@ def load_blueprint_catalog(config: ApiConfig) -> tuple[Path, list[Dict[str, Any]
     for entry in entries:
         normalized = normalize_blueprint(entry)
         if normalized:
-            blueprints.append(normalized)
+            blueprints.append(enrich_blueprint_from_manifest(repo_root, normalized))
     return repo_root, blueprints
 
 
@@ -278,7 +278,13 @@ def validate_blueprint_bundle(repo_root: Path, blueprint: Dict[str, Any]) -> Pat
     return bundle_root
 
 
-def load_blueprint_bundle(repo_root: Path, blueprint: Dict[str, Any], run_id: str) -> tuple[str, Dict[str, bytes]]:
+def load_blueprint_bundle(
+    repo_root: Path,
+    blueprint: Dict[str, Any],
+    run_id: str,
+    *,
+    config_overrides: Dict[str, Any] | None = None,
+) -> tuple[str, Dict[str, bytes]]:
     bundle_root = validate_blueprint_bundle(repo_root, blueprint)
     manifest_path = bundle_root / "manifest.json"
     payloads_path = bundle_root / "payloads"
@@ -301,6 +307,16 @@ def load_blueprint_bundle(repo_root: Path, blueprint: Dict[str, Any], run_id: st
     if blueprint.get("revision"):
         metadata["blueprint_revision"] = blueprint["revision"]
     manifest["run_id"] = run_id
+    config = load_blueprint_config(bundle_root, config_overrides=config_overrides)
+    if config is not None:
+        apply_manifest_config_bindings(manifest, config)
+    runtime_env = blueprint_runtime_environment(
+        bundle_root,
+        config=config,
+        config_overrides=config_overrides,
+    )
+    if runtime_env:
+        inject_node_environment(manifest, runtime_env)
 
     payloads: Dict[str, bytes] = {}
     if payloads_path.is_dir():
@@ -309,3 +325,254 @@ def load_blueprint_bundle(repo_root: Path, blueprint: Dict[str, Any], run_id: st
                 payloads[payload_path.relative_to(payloads_path).as_posix()] = payload_path.read_bytes()
 
     return json.dumps(manifest), payloads
+
+
+def enrich_blueprint_from_manifest(repo_root: Path, blueprint: Dict[str, Any]) -> Dict[str, Any]:
+    enriched = dict(blueprint)
+    manifest = load_optional_manifest(repo_root, enriched)
+    if not manifest:
+        return enriched
+    init_config_review = manifest_init_config_review(manifest)
+    if init_config_review is not None:
+        enriched["init_config_review"] = init_config_review
+    return enriched
+
+
+def load_optional_manifest(repo_root: Path, blueprint: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        bundle_root = blueprint_bundle_root(repo_root, blueprint)
+    except HTTPException:
+        return {}
+    manifest_path = bundle_root / "manifest.json"
+    if not manifest_path.is_file():
+        return {}
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except json.JSONDecodeError:
+        return {}
+    return manifest if isinstance(manifest, dict) else {}
+
+
+def manifest_init_config_review(manifest: Dict[str, Any]) -> Any:
+    if "init_config_review" in manifest:
+        return manifest.get("init_config_review")
+    metadata = manifest.get("metadata")
+    if isinstance(metadata, dict):
+        return metadata.get("init_config_review")
+    return None
+
+
+def blueprint_runtime_environment(
+    bundle_root: Path,
+    *,
+    config: Dict[str, Any] | None = None,
+    config_overrides: Dict[str, Any] | None = None,
+) -> Dict[str, str]:
+    env: Dict[str, str] = {}
+    if config is None:
+        config = load_blueprint_config(bundle_root, config_overrides=config_overrides)
+    if config is not None:
+        env["MN_BLUEPRINT_CONFIG_JSON"] = json.dumps(config, sort_keys=True)
+        projected_config = load_blueprint_config_overwrites(bundle_root, config_overrides=config_overrides)
+        if projected_config is not None:
+            env.update(config_to_environment(projected_config))
+
+    scenario_path = bundle_root / "scenario.json"
+    if scenario_path.is_file():
+        env["MN_BLUEPRINT_SCENARIO_JSON"] = scenario_path.read_text()
+    return env
+
+
+def apply_manifest_config_bindings(manifest: Dict[str, Any], config: Dict[str, Any]) -> None:
+    bindings = config.get("manifest_config_bindings") or []
+    if not isinstance(bindings, list):
+        return
+    for binding in bindings:
+        if not isinstance(binding, dict):
+            continue
+        config_path = binding.get("config_path") or binding.get("from")
+        manifest_path = binding.get("manifest_path") or binding.get("to")
+        if not isinstance(config_path, str) or not isinstance(manifest_path, str):
+            continue
+        value = config_path_get(config, config_path)
+        if value is None and not binding.get("allow_null", False):
+            continue
+        if binding.get("stringify") is True:
+            value = str(value).lower() if isinstance(value, bool) else str(value)
+        set_manifest_path(manifest, manifest_path, value)
+
+
+def config_to_environment(config: Dict[str, Any]) -> Dict[str, str]:
+    env: Dict[str, str] = {}
+    for path, names in (
+        ("video_source.uri", ("VIDEO_SOURCE_URI",)),
+        ("video_source.transport", ("VIDEO_SOURCE_TRANSPORT",)),
+        ("video_source.codec", ("VIDEO_SOURCE_CODEC",)),
+        ("video_source.camera_id", ("VIDEO_SOURCE_CAMERA_ID",)),
+        ("video_source.frame_sample_seconds", ("FRAME_SAMPLE_SECONDS",)),
+        ("video_source.frame_jpeg_max_width", ("FRAME_JPEG_MAX_WIDTH",)),
+        ("vl_model.base_url", ("VL_MODEL_BASE_URL", "OLLAMA_BASE_URL")),
+        ("vl_model.model", ("VL_MODEL_NAME", "OLLAMA_MODEL")),
+        ("vl_model.timeout_seconds", ("VL_MODEL_TIMEOUT_SECONDS", "OLLAMA_TIMEOUT_SECONDS")),
+        ("vl_model.temperature", ("VL_MODEL_TEMPERATURE", "OLLAMA_TEMPERATURE")),
+        ("llm.api_base", ("MN_LLM_API_BASE", "LITELLM_API_BASE")),
+        ("llm.model", ("MN_LLM_MODEL", "LITELLM_MODEL")),
+        ("llm.timeout_seconds", ("MN_LLM_TIMEOUT_SECONDS", "LITELLM_TIMEOUT_SECONDS")),
+        ("llm.max_tokens", ("MN_LLM_MAX_TOKENS", "LITELLM_MAX_TOKENS")),
+        ("llm.num_retries", ("MN_LLM_NUM_RETRIES", "LITELLM_NUM_RETRIES")),
+    ):
+        value = config_path_get(config, path)
+        if value is None:
+            continue
+        for name in names:
+            env[name] = str(value)
+    return env
+
+
+def set_manifest_path(target: Any, dotted_path: str, value: Any) -> None:
+    parts = [part for part in dotted_path.split(".") if part]
+    _set_path(target, parts, value)
+
+
+def _set_path(cursor: Any, parts: list[str], value: Any) -> None:
+    if not parts:
+        return
+    part = parts[0]
+    rest = parts[1:]
+
+    if isinstance(cursor, list):
+        for item in _list_targets(cursor, part):
+            _set_path(item, rest, value)
+        return
+
+    if not isinstance(cursor, dict):
+        return
+
+    if len(parts) == 1:
+        cursor[part] = value
+        return
+
+    next_value = cursor.get(part)
+    if isinstance(next_value, list):
+        _set_path(next_value, rest, value)
+        return
+    if not isinstance(next_value, dict):
+        next_value = {}
+        cursor[part] = next_value
+    _set_path(next_value, rest, value)
+
+
+def _list_targets(items: list[Any], selector: str) -> list[Any]:
+    if selector == "*":
+        return [item for item in items if isinstance(item, dict)]
+    if selector.isdigit():
+        index = int(selector)
+        if 0 <= index < len(items):
+            return [items[index]]
+        return []
+    if selector.endswith("*"):
+        prefix = selector[:-1]
+        return [
+            item
+            for item in items
+            if isinstance(item, dict) and str(item.get("node_id") or "").startswith(prefix)
+        ]
+    return [
+        item
+        for item in items
+        if isinstance(item, dict) and (item.get("node_id") == selector or item.get("edge_id") == selector)
+    ]
+
+
+def config_path_get(config: Dict[str, Any], dotted_path: str) -> Any:
+    cursor: Any = config
+    for part in dotted_path.split("."):
+        if not isinstance(cursor, dict) or part not in cursor:
+            return None
+        cursor = cursor[part]
+    return cursor
+
+
+def load_blueprint_config(
+    bundle_root: Path,
+    *,
+    config_overrides: Dict[str, Any] | None = None,
+) -> Dict[str, Any] | None:
+    config: Dict[str, Any] = {}
+    loaded = False
+    for path in (
+        bundle_root / "config" / "default.json",
+        bundle_root / "config" / "overwrite.json",
+    ):
+        if path.is_file():
+            config = deep_merge(config, read_json_object(path))
+            loaded = True
+    if config_overrides:
+        config = deep_merge(config, config_overrides)
+        loaded = True
+    return config if loaded else None
+
+
+def load_blueprint_config_overwrites(
+    bundle_root: Path,
+    *,
+    config_overrides: Dict[str, Any] | None = None,
+) -> Dict[str, Any] | None:
+    config: Dict[str, Any] = {}
+    loaded = False
+    overwrite_path = bundle_root / "config" / "overwrite.json"
+    if overwrite_path.is_file():
+        config = deep_merge(config, read_json_object(overwrite_path))
+        loaded = True
+    if config_overrides:
+        config = deep_merge(config, config_overrides)
+        loaded = True
+    return config if loaded else None
+
+
+def inject_node_environment(manifest: Dict[str, Any], env: Dict[str, str]) -> None:
+    for node in manifest.get("nodes") or []:
+        if not isinstance(node, dict):
+            continue
+        node_config = node.setdefault("config", {})
+        if not isinstance(node_config, dict):
+            continue
+        environment = node_config.setdefault("environment", {})
+        if not isinstance(environment, dict):
+            continue
+        environment.update(env)
+        add_mn_llm_aliases(environment)
+
+
+def add_mn_llm_aliases(environment: Dict[str, Any]) -> None:
+    for legacy, primary in (
+        ("LITELLM_MODEL", "MN_LLM_MODEL"),
+        ("LITELLM_API_BASE", "MN_LLM_API_BASE"),
+        ("LITELLM_API_KEY", "MN_LLM_API_KEY"),
+        ("LITELLM_TIMEOUT_SECONDS", "MN_LLM_TIMEOUT_SECONDS"),
+        ("LITELLM_MAX_TOKENS", "MN_LLM_MAX_TOKENS"),
+        ("LITELLM_NUM_RETRIES", "MN_LLM_NUM_RETRIES"),
+        ("LITELLM_RETRY_BACKOFF_SECONDS", "MN_LLM_RETRY_BACKOFF_SECONDS"),
+    ):
+        if primary not in environment and legacy in environment:
+            environment[primary] = environment[legacy]
+
+
+def read_json_object(path: Path) -> Dict[str, Any]:
+    try:
+        decoded = json.loads(path.read_text())
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=500, detail=f"{path.name} is malformed") from exc
+    if not isinstance(decoded, dict):
+        raise HTTPException(status_code=500, detail=f"{path.name} must contain a JSON object")
+    return decoded
+
+
+def deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    result = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = deep_merge(result[key], value)
+        else:
+            result[key] = value
+    return result

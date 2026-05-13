@@ -57,7 +57,15 @@ def run_blueprint(
     repo_root, blueprint = find_blueprint(state.config, blueprint_id)
     run_id = req.run_id if req and req.run_id else create_blueprint_run_id(blueprint_id)
     validate_run_id(run_id)
-    manifest_json, payloads = load_blueprint_bundle(repo_root, blueprint, run_id)
+    config_overrides = None
+    if req:
+        config_overrides = req.config_overwrite or req.config_overrides
+    manifest_json, payloads = load_blueprint_bundle(
+        repo_root,
+        blueprint,
+        run_id,
+        config_overrides=config_overrides,
+    )
 
     try:
         job_id = state.client.submit_job(manifest_json, payloads)

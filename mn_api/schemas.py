@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, Field
 
@@ -13,3 +13,5 @@ class SubmitJobRequest(BaseModel):
 
 class BlueprintRunRequest(BaseModel):
     run_id: Optional[str] = None
+    config_overwrite: Optional[Dict[str, Any]] = None
+    config_overrides: Optional[Dict[str, Any]] = None

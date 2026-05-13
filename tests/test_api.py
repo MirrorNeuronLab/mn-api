@@ -593,6 +593,16 @@ class TestAPI(unittest.TestCase):
         mock_client.submit_job.assert_not_called()
 
     @patch('mn_api.state.client')
+    def test_blueprint_run_rejects_invalid_config_override_format(self, mock_client):
+        response = self.client.post(
+            "/api/v1/blueprints/worker_one/runs",
+            json={"config_overwrite": ["not", "an", "object"]},
+        )
+
+        self.assertEqual(response.status_code, 422)
+        mock_client.submit_job.assert_not_called()
+
+    @patch('mn_api.state.client')
     def test_blueprint_run_rejects_malformed_manifest_before_submit(self, mock_client):
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
