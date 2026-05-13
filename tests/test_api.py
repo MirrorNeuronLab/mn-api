@@ -1,6 +1,7 @@
 import unittest
 import io
 import json
+import os
 import tempfile
 import zipfile
 from pathlib import Path
@@ -196,6 +197,44 @@ class TestAPI(unittest.TestCase):
             "/api/v1/bundles/upload",
             files={"bundle": ("bundle.zip", archive, "application/zip")},
         )
+        self.assertEqual(response.status_code, 400)
+
+    def test_get_run_ui_reads_saved_run_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs_root = Path(tmp)
+            run_dir = runs_root / "blueprint-run-1"
+            run_dir.mkdir()
+            (run_dir / "ui.json").write_text(json.dumps({
+                "adapter": "gradio",
+                "title": "Blueprint Run",
+                "refresh_seconds": 1.5,
+                "components": [{"type": "events"}],
+            }))
+            (run_dir / "web_ui.json").write_text(json.dumps({
+                "adapter": "gradio",
+                "url": "http://localhost:7860/runs/blueprint-run-1/ui",
+            }))
+            (run_dir / "job.json").write_text(json.dumps({"job_id": "job-1"}))
+            (run_dir / "events.jsonl").write_text(
+                "\n".join([
+                    json.dumps({"type": "first"}),
+                    "not-json",
+                    json.dumps({"type": "last", "payload": {"ok": True}}),
+                ])
+            )
+
+            with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
+                response = self.client.get("/api/v1/runs/blueprint-run-1/ui?limit=2")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["ui"]["adapter"], "gradio")
+        self.assertEqual(body["web_ui"]["url"], "http://localhost:7860/runs/blueprint-run-1/ui")
+        self.assertEqual(body["job"]["job_id"], "job-1")
+        self.assertEqual([event["type"] for event in body["events"]], ["unparseable_event", "last"])
+
+    def test_get_run_ui_rejects_invalid_run_id(self):
+        response = self.client.get("/api/v1/runs/bad$id/ui")
         self.assertEqual(response.status_code, 400)
 
     @patch('mn_api.state.client')
