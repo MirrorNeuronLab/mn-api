@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import re
 from typing import Any, Dict, Optional
@@ -16,6 +17,7 @@ BLUEPRINT_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,160}$")
 RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,220}$")
 CATEGORY_SLUG_PATTERN = re.compile(r"[^a-z0-9]+")
 DEFAULT_CATEGORY = "General"
+DEFAULT_RUNS_ROOT = "~/.mn/runs"
 
 
 def as_dict(value: Any) -> Dict[str, Any]:
@@ -307,7 +309,12 @@ def load_blueprint_bundle(
     if blueprint.get("revision"):
         metadata["blueprint_revision"] = blueprint["revision"]
     manifest["run_id"] = run_id
-    config = load_blueprint_config(bundle_root, config_overrides=config_overrides)
+    runs_root = shared_runs_root()
+    config = with_shared_run_store_config(
+        load_blueprint_config(bundle_root, config_overrides=config_overrides),
+        run_id,
+        runs_root,
+    )
     if config is not None:
         apply_manifest_config_bindings(manifest, config)
     runtime_env = blueprint_runtime_environment(
@@ -315,6 +322,8 @@ def load_blueprint_bundle(
         config=config,
         config_overrides=config_overrides,
     )
+    runtime_env.setdefault("MN_RUN_ID", run_id)
+    runtime_env["MN_RUNS_ROOT"] = runs_root
     if runtime_env:
         inject_node_environment(manifest, runtime_env)
 
@@ -325,6 +334,48 @@ def load_blueprint_bundle(
                 payloads[payload_path.relative_to(payloads_path).as_posix()] = payload_path.read_bytes()
 
     return json.dumps(manifest), payloads
+
+
+def shared_runs_root() -> str:
+    return str(os.getenv("MN_RUNS_ROOT") or DEFAULT_RUNS_ROOT)
+
+
+def with_shared_run_store_config(
+    config: Optional[Dict[str, Any]],
+    run_id: str,
+    runs_root: str,
+) -> Dict[str, Any]:
+    resolved = json.loads(json.dumps(config or {}))
+    identity = resolved.setdefault("identity", {})
+    if isinstance(identity, dict):
+        identity["run_id"] = run_id
+    outputs = resolved.setdefault("outputs", {})
+    if isinstance(outputs, dict):
+        outputs["run_root"] = runs_root
+        outputs.setdefault("write_run_store", True)
+    return resolved
+
+
+def write_blueprint_job_mapping(
+    run_id: str,
+    job_id: str,
+    *,
+    blueprint_id: str | None = None,
+    blueprint_revision: str | None = None,
+) -> Path:
+    run_dir = Path(shared_runs_root()).expanduser() / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "run_id": run_id,
+        "job_id": job_id,
+        "blueprint_id": blueprint_id,
+        "blueprint_revision": blueprint_revision,
+        "submitted_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    tmp = run_dir / f".job.json.{os.getpid()}.tmp"
+    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    tmp.replace(run_dir / "job.json")
+    return run_dir / "job.json"
 
 
 def enrich_blueprint_from_manifest(repo_root: Path, blueprint: Dict[str, Any]) -> Dict[str, Any]:

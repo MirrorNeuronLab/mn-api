@@ -12,6 +12,7 @@ from mn_api.blueprints import (
     load_blueprint_catalog,
     validate_blueprint_bundle,
     validate_run_id,
+    write_blueprint_job_mapping,
 )
 from mn_api.dependencies import require_auth
 from mn_api.errors import handle_grpc_error
@@ -69,6 +70,12 @@ def run_blueprint(
 
     try:
         job_id = state.client.submit_job(manifest_json, payloads)
+        write_blueprint_job_mapping(
+            run_id,
+            job_id,
+            blueprint_id=blueprint["id"],
+            blueprint_revision=blueprint.get("revision") or None,
+        )
         return {
             "job_id": job_id,
             "run_id": run_id,

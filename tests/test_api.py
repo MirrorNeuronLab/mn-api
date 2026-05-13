@@ -532,13 +532,38 @@ class TestAPI(unittest.TestCase):
         mock_client.submit_job.return_value = "job-blueprint-1"
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
+            runs_root = repo / "runs"
             self._write_blueprint_repo(repo)
+            (repo / "worker_one" / "manifest.json").write_text(json.dumps({
+                "graph_id": "worker_one_graph",
+                "nodes": [{"node_id": "worker", "config": {"environment": {}}}],
+                "edges": [],
+                "metadata": {},
+            }))
+            config_dir = repo / "worker_one" / "config"
+            config_dir.mkdir()
+            (config_dir / "default.json").write_text(json.dumps({
+                "identity": {"run_id": "stale-run"},
+                "outputs": {"run_root": str(repo / "blueprints" / "worker_one" / "runs")},
+                "manifest_config_bindings": [
+                    {
+                        "config_path": "identity.run_id",
+                        "manifest_path": "nodes.*.config.environment.MN_RUN_ID",
+                    },
+                    {
+                        "config_path": "outputs.run_root",
+                        "manifest_path": "nodes.*.config.environment.MN_RUNS_ROOT",
+                    },
+                ],
+            }))
             original = self._set_blueprint_config(repo)
             try:
-                response = self.client.post(
-                    "/api/v1/blueprints/worker_one/runs",
-                    json={"run_id": "run-123"},
-                )
+                with patch.dict('os.environ', {"MN_RUNS_ROOT": str(runs_root)}):
+                    response = self.client.post(
+                        "/api/v1/blueprints/worker_one/runs",
+                        json={"run_id": "run-123"},
+                    )
+                    job_mapping = json.loads((runs_root / "run-123" / "job.json").read_text())
             finally:
                 self._restore_config(original)
 
@@ -551,6 +576,15 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(manifest["run_id"], "run-123")
         self.assertEqual(manifest["metadata"]["blueprint_id"], "worker_one")
         self.assertEqual(manifest["metadata"]["blueprint_run_id"], "run-123")
+        env = manifest["nodes"][0]["config"]["environment"]
+        self.assertEqual(env["MN_RUN_ID"], "run-123")
+        self.assertEqual(env["MN_RUNS_ROOT"], str(runs_root))
+        injected_config = json.loads(env["MN_BLUEPRINT_CONFIG_JSON"])
+        self.assertEqual(injected_config["identity"]["run_id"], "run-123")
+        self.assertEqual(injected_config["outputs"]["run_root"], str(runs_root))
+        self.assertEqual(job_mapping["job_id"], "job-blueprint-1")
+        self.assertEqual(job_mapping["blueprint_id"], "worker_one")
+        self.assertFalse((repo / "blueprints" / "worker_one" / "runs").exists())
         self.assertEqual(payloads, {"payload.txt": b"hello"})
 
     @patch('mn_api.state.client')
@@ -558,21 +592,25 @@ class TestAPI(unittest.TestCase):
         mock_client.submit_job.return_value = "job-blueprint-generated"
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
+            runs_root = repo / "runs"
             self._write_blueprint_repo(repo)
             original = self._set_blueprint_config(repo)
             try:
-                response = self.client.post("/api/v1/blueprints/worker_one/runs", json={})
+                with patch.dict('os.environ', {"MN_RUNS_ROOT": str(runs_root)}):
+                    response = self.client.post("/api/v1/blueprints/worker_one/runs", json={})
+                    body = response.json()
+                    mapping_exists = (runs_root / body["run_id"] / "job.json").exists()
             finally:
                 self._restore_config(original)
 
         self.assertEqual(response.status_code, 200)
-        body = response.json()
         self.assertEqual(body["job_id"], "job-blueprint-generated")
         self.assertTrue(body["run_id"].startswith("worker_one-"))
         manifest_json, _payloads = mock_client.submit_job.call_args.args
         manifest = json.loads(manifest_json)
         self.assertEqual(manifest["metadata"]["run_id"], body["run_id"])
         self.assertEqual(manifest["metadata"]["blueprint_run_id"], body["run_id"])
+        self.assertTrue(mapping_exists)
 
     @patch('mn_api.state.client')
     def test_blueprint_run_rejects_invalid_run_id_before_submit(self, mock_client):
