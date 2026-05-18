@@ -8,6 +8,7 @@ from mn_api import state
 from mn_api.config import auth_enabled
 from mn_api.dependencies import require_auth
 from mn_api.errors import handle_grpc_error
+from mn_api.schemas import ResourceSetRequest
 
 
 router = APIRouter(prefix="/api/v1")
@@ -43,6 +44,24 @@ def get_metrics(_auth=Depends(require_auth)):
             "nodes": {"total": len(summary.get("nodes", []))},
             "source": "system_summary",
         }
+    except Exception as exc:
+        return handle_grpc_error(exc)
+
+
+@router.get("/resource")
+def get_resource(_auth=Depends(require_auth)):
+    try:
+        return json.loads(state.client.get_resource())
+    except Exception as exc:
+        return handle_grpc_error(exc)
+
+
+@router.post("/resource")
+@router.put("/resource")
+def set_resource(req: ResourceSetRequest, _auth=Depends(require_auth)):
+    try:
+        payload = req.dict(exclude_none=True)
+        return json.loads(state.client.set_resource(payload))
     except Exception as exc:
         return handle_grpc_error(exc)
 

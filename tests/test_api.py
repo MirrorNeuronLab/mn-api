@@ -128,6 +128,25 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.json(), {"nodes": [], "jobs": []})
 
     @patch('mn_api.state.client')
+    def test_get_resource_success(self, mock_client):
+        mock_client.get_resource.return_value = '{"totals": {"cpu_cores": 8}, "limits": {"cpu": 100, "gpu": 100, "memory": 100}}'
+        response = self.client.get("/api/v1/resource")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["totals"]["cpu_cores"], 8)
+        mock_client.get_resource.assert_called_once()
+
+    @patch('mn_api.state.client')
+    def test_set_resource_success(self, mock_client):
+        mock_client.set_resource.return_value = '{"limits": {"cpu": 50, "gpu": 75, "memory": 100}}'
+        response = self.client.put(
+            "/api/v1/resource",
+            json={"cpu": 50, "gpu": 75, "memory": 100},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["limits"]["gpu"], 75)
+        mock_client.set_resource.assert_called_once_with({"cpu": 50, "gpu": 75, "memory": 100})
+
+    @patch('mn_api.state.client')
     def test_submit_job_success(self, mock_client):
         mock_client.submit_job.return_value = "job-123"
         response = self.client.post(

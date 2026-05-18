@@ -15,3 +15,9 @@ class BlueprintRunRequest(BaseModel):
     run_id: Optional[str] = None
     config_overwrite: Optional[Dict[str, Any]] = None
     config_overrides: Optional[Dict[str, Any]] = None
+
+
+class ResourceSetRequest(BaseModel):
+    cpu: Optional[int] = None
+    gpu: Optional[int] = None
+    memory: Optional[int] = None
