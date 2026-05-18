@@ -102,6 +102,8 @@ Base path: `/api/v1`
 | `GET` | `/health` | Service health check. |
 | `GET` | `/system/summary` | Runtime hardware and pool summary. |
 | `GET` | `/metrics` | Runtime metrics summary. |
+| `GET` | `/resource` | Core resource totals and configured CPU/GPU/memory limits. |
+| `POST`/`PUT` | `/resource` | Set CPU/GPU/memory limits to `25`, `50`, `75`, or `100` percent. |
 | `GET` | `/blueprints` | List normalized blueprint catalog entries and category facets from `MN_BLUEPRINT_REPO`. Supports `?category=<name-or-slug>`. |
 | `GET` | `/blueprints/{blueprint_id}` | Fetch one normalized blueprint. |
 | `POST` | `/blueprints/{blueprint_id}/install` | Validate/cache a blueprint bundle for local use. |

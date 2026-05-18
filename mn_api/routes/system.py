@@ -60,7 +60,10 @@ def get_resource(_auth=Depends(require_auth)):
 @router.put("/resource")
 def set_resource(req: ResourceSetRequest, _auth=Depends(require_auth)):
     try:
-        payload = req.dict(exclude_none=True)
+        if hasattr(req, "model_dump"):
+            payload = req.model_dump(exclude_none=True)
+        else:
+            payload = req.dict(exclude_none=True)
         return json.loads(state.client.set_resource(payload))
     except Exception as exc:
         return handle_grpc_error(exc)
