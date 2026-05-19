@@ -15,5 +15,6 @@ client = Client(
     target=config.grpc_target,
     timeout=config.grpc_timeout_seconds,
     auth_token=config.grpc_auth_token,
+    admin_token=config.grpc_admin_token,
 )
 BUNDLE_UPLOAD_ROOT = Path(tempfile.gettempdir()) / "mirror_neuron_api_bundles"

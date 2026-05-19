@@ -16,6 +16,7 @@ class ApiConfig:
     grpc_target: str
     grpc_timeout_seconds: float | None
     grpc_auth_token: str
+    grpc_admin_token: str
     api_token: str
     request_size_limit_bytes: int
     cors_allow_origins: list[str]
@@ -35,7 +36,14 @@ class ApiConfig:
                 os.getenv("MN_CORE_GRPC_TARGET", f"{core_host}:50051"),
             ),
             grpc_timeout_seconds=timeout,
-            grpc_auth_token=os.getenv("MN_GRPC_AUTH_TOKEN", ""),
+            grpc_auth_token=_token_from_env_or_file(
+                "MN_GRPC_AUTH_TOKEN",
+                Path.home() / ".mirror_neuron" / "grpc_auth.token",
+            ),
+            grpc_admin_token=_token_from_env_or_file(
+                "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN",
+                Path.home() / ".mirror_neuron" / "grpc_admin.token",
+            ),
             api_token=os.getenv("MN_API_TOKEN", ""),
             request_size_limit_bytes=_int(
                 "MN_API_REQUEST_SIZE_LIMIT_BYTES",
@@ -89,6 +97,17 @@ def _optional_float(name: str, default: str) -> float | None:
 
 def _csv(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _token_from_env_or_file(name: str, path: Path) -> str:
+    token = os.getenv(name)
+    if token:
+        return token
+
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
 
 
 def auth_enabled(config: ApiConfig) -> bool:

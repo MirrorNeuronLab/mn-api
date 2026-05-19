@@ -74,6 +74,33 @@ class TestAPI(unittest.TestCase):
 
         self.assertEqual(config.grpc_auth_token, "auth-secret")
 
+    def test_config_uses_grpc_admin_token(self):
+        with patch.dict(os.environ, {"MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN": "admin-secret"}, clear=False):
+            config = ApiConfig.from_env()
+
+        self.assertEqual(config.grpc_admin_token, "admin-secret")
+
+    def test_config_uses_local_grpc_token_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            token_dir = Path(tmp) / ".mirror_neuron"
+            token_dir.mkdir()
+            (token_dir / "grpc_auth.token").write_text("auth-from-file\n")
+            (token_dir / "grpc_admin.token").write_text("admin-from-file\n")
+
+            with patch.dict(
+                os.environ,
+                {
+                    "HOME": tmp,
+                    "MN_GRPC_AUTH_TOKEN": "",
+                    "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN": "",
+                },
+                clear=False,
+            ):
+                config = ApiConfig.from_env()
+
+        self.assertEqual(config.grpc_auth_token, "auth-from-file")
+        self.assertEqual(config.grpc_admin_token, "admin-from-file")
+
     def test_auth_required_when_token_configured(self):
         original = state.config
         state.config = SimpleNamespace(api_token="secret", request_size_limit_bytes=1024 * 1024)
