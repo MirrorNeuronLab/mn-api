@@ -7,6 +7,7 @@ import zipfile
 from pathlib import Path
 from fastapi.testclient import TestClient
 from types import SimpleNamespace
+from mn_api.config import ApiConfig
 from mn_api import state
 from mn_api.main import app
 from unittest.mock import patch
@@ -66,6 +67,12 @@ class TestAPI(unittest.TestCase):
         response = self.client.get("/api/v1/health")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"status": "ok", "auth": "disabled"})
+
+    def test_config_uses_grpc_auth_token(self):
+        with patch.dict(os.environ, {"MN_GRPC_AUTH_TOKEN": "auth-secret"}, clear=False):
+            config = ApiConfig.from_env()
+
+        self.assertEqual(config.grpc_auth_token, "auth-secret")
 
     def test_auth_required_when_token_configured(self):
         original = state.config

@@ -11,5 +11,9 @@ from mn_api.logging_config import configure_logging
 
 config = ApiConfig.from_env()
 logger = configure_logging()
-client = Client(target=config.grpc_target, timeout=config.grpc_timeout_seconds)
+client = Client(
+    target=config.grpc_target,
+    timeout=config.grpc_timeout_seconds,
+    auth_token=config.grpc_auth_token,
+)
 BUNDLE_UPLOAD_ROOT = Path(tempfile.gettempdir()) / "mirror_neuron_api_bundles"

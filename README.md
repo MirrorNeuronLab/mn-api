@@ -62,6 +62,7 @@ All runtime configuration uses environment variables.
 | `MN_GRPC_TARGET` | unset | Full core gRPC target. Takes precedence over `MN_CORE_GRPC_TARGET`. |
 | `MN_CORE_GRPC_TARGET` | unset | Fallback full core gRPC target. |
 | `MN_GRPC_TIMEOUT_SECONDS` | `10` | SDK call timeout. Use `0` or `none` to disable. |
+| `MN_GRPC_AUTH_TOKEN` | unset | Bearer token sent from `mn-api` to the core gRPC service. |
 | `MN_API_REQUEST_SIZE_LIMIT_BYTES` | `5242880` | Maximum request body size. |
 | `MN_API_CORS_ALLOW_ORIGINS` | unset | Comma-separated CORS allowlist. |
 | `MN_BLUEPRINT_REPO` | `~/Projects/otterdesk-blueprints` | Blueprint catalog repository used by `/blueprints` endpoints. |
