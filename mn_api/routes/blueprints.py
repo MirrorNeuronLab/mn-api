@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from mn_api import state
 from mn_api.blueprints import (
@@ -10,6 +10,7 @@ from mn_api.blueprints import (
     load_blueprint_categories,
     load_blueprint_bundle,
     load_blueprint_catalog,
+    validate_blueprint_inputs,
     validate_blueprint_bundle,
     validate_run_id,
     write_blueprint_job_mapping,
@@ -49,6 +50,24 @@ def install_blueprint(blueprint_id: str, _auth=Depends(require_auth)):
     return {"installed": True, "blueprint": blueprint}
 
 
+@router.post("/blueprints/{blueprint_id}/validate")
+def validate_blueprint(
+    blueprint_id: str,
+    req: BlueprintRunRequest | None = None,
+    _auth=Depends(require_auth),
+):
+    repo_root, blueprint = find_blueprint(state.config, blueprint_id)
+    config_overrides = None
+    if req:
+        config_overrides = req.config_overwrite or req.config_overrides
+    result = validate_blueprint_inputs(
+        repo_root,
+        blueprint,
+        config_overrides=config_overrides,
+    )
+    return {"blueprint": blueprint, "validation": result}
+
+
 @router.post("/blueprints/{blueprint_id}/runs")
 def run_blueprint(
     blueprint_id: str,
@@ -61,15 +80,36 @@ def run_blueprint(
     config_overrides = None
     if req:
         config_overrides = req.config_overwrite or req.config_overrides
+    force = bool(req.force) if req else False
+    if not force:
+        validation = validate_blueprint_inputs(
+            repo_root,
+            blueprint,
+            config_overrides=config_overrides,
+        )
+        if not validation.get("ok"):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "input_validation_failed",
+                    "run_id": run_id,
+                    "blueprint": blueprint,
+                    "validation": validation,
+                },
+            )
     manifest_json, payloads = load_blueprint_bundle(
         repo_root,
         blueprint,
         run_id,
         config_overrides=config_overrides,
+        force=force,
     )
 
     try:
-        job_id = state.client.submit_job(manifest_json, payloads)
+        if force:
+            job_id = state.client.submit_job(manifest_json, payloads, force=True)
+        else:
+            job_id = state.client.submit_job(manifest_json, payloads)
         write_blueprint_job_mapping(
             run_id,
             job_id,

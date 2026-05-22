@@ -8,6 +8,7 @@ import re
 from typing import Any, Dict, Optional
 
 from fastapi import HTTPException
+from mn_sdk import run_input_validation, validate_input_validation_spec, validate_requirements_spec
 
 from mn_api.config import ApiConfig
 from mn_api.path_utils import inside_path
@@ -286,6 +287,7 @@ def load_blueprint_bundle(
     run_id: str,
     *,
     config_overrides: Dict[str, Any] | None = None,
+    force: bool = False,
 ) -> tuple[str, Dict[str, bytes]]:
     bundle_root = validate_blueprint_bundle(repo_root, blueprint)
     manifest_path = bundle_root / "manifest.json"
@@ -306,6 +308,8 @@ def load_blueprint_bundle(
     metadata["blueprint_id"] = blueprint["id"]
     metadata["blueprint_run_id"] = run_id
     metadata["run_id"] = run_id
+    if force:
+        metadata["mn_validation"] = {"force": True}
     if blueprint.get("revision"):
         metadata["blueprint_revision"] = blueprint["revision"]
     manifest["run_id"] = run_id
@@ -334,6 +338,35 @@ def load_blueprint_bundle(
                 payloads[payload_path.relative_to(payloads_path).as_posix()] = payload_path.read_bytes()
 
     return json.dumps(manifest), payloads
+
+
+def validate_blueprint_inputs(
+    repo_root: Path,
+    blueprint: Dict[str, Any],
+    *,
+    config_overrides: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    bundle_root = validate_blueprint_bundle(repo_root, blueprint)
+    manifest_path = bundle_root / "manifest.json"
+
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=500, detail="blueprint manifest.json is malformed") from exc
+    if not isinstance(manifest, dict):
+        raise HTTPException(status_code=500, detail="blueprint manifest.json must be an object")
+
+    spec_errors = validate_requirements_spec(manifest) + validate_input_validation_spec(manifest)
+    if spec_errors:
+        return {"ok": False, "errors": spec_errors, "results": []}
+
+    config = load_blueprint_config(bundle_root, config_overrides=config_overrides)
+    env = blueprint_runtime_environment(
+        bundle_root,
+        config=config,
+        config_overrides=config_overrides,
+    )
+    return run_input_validation(bundle_root, manifest, config=config, env=env)
 
 
 def shared_runs_root() -> str:

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
+from mn_sdk import run_input_validation, validate_input_validation_spec, validate_requirements_spec
 
 from mn_api import state
 from mn_api.agent_graph import build_agent_graph
@@ -20,6 +22,7 @@ def submit_job(req: SubmitJobRequest, _auth=Depends(require_auth)):
     try:
         if req.bundle_path:
             manifest_json, payloads_bytes = load_uploaded_bundle(req.bundle_path, state.BUNDLE_UPLOAD_ROOT)
+            _validate_job_bundle(req.bundle_path, manifest_json, force=req.force)
         elif req.manifest_json is not None:
             manifest_json = req.manifest_json
             payloads_bytes = (
@@ -27,18 +30,62 @@ def submit_job(req: SubmitJobRequest, _auth=Depends(require_auth)):
                 if req.payloads
                 else {}
             )
+            _validate_job_manifest(manifest_json, force=req.force)
         else:
             raise HTTPException(
                 status_code=422,
                 detail="manifest_json or _bundle_path is required",
             )
 
-        job_id = state.client.submit_job(manifest_json, payloads_bytes)
+        if req.force:
+            job_id = state.client.submit_job(manifest_json, payloads_bytes, force=True)
+        else:
+            job_id = state.client.submit_job(manifest_json, payloads_bytes)
         return {"id": job_id, "status": "pending"}
     except HTTPException:
         raise
     except Exception as exc:
         return handle_grpc_error(exc)
+
+
+def _validate_job_bundle(bundle_path: str, manifest_json: str, *, force: bool) -> None:
+    if force:
+        return
+    manifest = _decode_manifest(manifest_json)
+    spec_errors = validate_requirements_spec(manifest) + validate_input_validation_spec(manifest)
+    if spec_errors:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "manifest_validation_failed", "validation": {"ok": False, "errors": spec_errors}},
+        )
+    result = run_input_validation(Path(bundle_path), manifest)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail={"error": "input_validation_failed", "validation": result})
+
+
+def _validate_job_manifest(manifest_json: str, *, force: bool) -> None:
+    if force:
+        return
+    manifest = _decode_manifest(manifest_json)
+    spec_errors = validate_requirements_spec(manifest) + validate_input_validation_spec(manifest)
+    if spec_errors:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "manifest_validation_failed", "validation": {"ok": False, "errors": spec_errors}},
+        )
+    validation = run_input_validation(Path.cwd(), manifest)
+    if not validation.get("ok"):
+        raise HTTPException(status_code=400, detail={"error": "input_validation_failed", "validation": validation})
+
+
+def _decode_manifest(manifest_json: str) -> dict:
+    try:
+        manifest = json.loads(manifest_json)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="manifest_json is malformed") from exc
+    if not isinstance(manifest, dict):
+        raise HTTPException(status_code=400, detail="manifest_json must be an object")
+    return manifest
 
 
 @router.get("/jobs")

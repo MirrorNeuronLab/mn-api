@@ -704,6 +704,91 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(manifest["metadata"]["blueprint_run_id"], body["run_id"])
         self.assertTrue(mapping_exists)
 
+    def test_blueprint_validate_runs_input_validation(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            self._write_blueprint_repo(repo)
+            (repo / "worker_one" / "manifest.json").write_text(json.dumps({
+                "graph_id": "worker_one_graph",
+                "nodes": [],
+                "edges": [],
+                "metadata": {},
+                "input_validation": {
+                    "rules": [
+                        {
+                            "name": "model_url",
+                            "type": "pattern",
+                            "path": "llm.api_base",
+                            "pattern": "^https?://",
+                        }
+                    ]
+                },
+            }))
+            config_dir = repo / "worker_one" / "config"
+            config_dir.mkdir()
+            (config_dir / "default.json").write_text(json.dumps({
+                "llm": {"api_base": "not-a-url"}
+            }))
+            original = self._set_blueprint_config(repo)
+            try:
+                response = self.client.post("/api/v1/blueprints/worker_one/validate")
+            finally:
+                self._restore_config(original)
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertFalse(body["validation"]["ok"])
+        self.assertIn("model_url", body["validation"]["errors"][0])
+
+    @patch('mn_api.state.client')
+    def test_blueprint_run_validation_failure_blocks_submit_unless_forced(self, mock_client):
+        mock_client.submit_job.return_value = "job-forced"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            self._write_blueprint_repo(repo)
+            (repo / "worker_one" / "manifest.json").write_text(json.dumps({
+                "graph_id": "worker_one_graph",
+                "nodes": [],
+                "edges": [],
+                "metadata": {},
+                "input_validation": {
+                    "rules": [
+                        {
+                            "name": "model_url",
+                            "type": "pattern",
+                            "path": "llm.api_base",
+                            "pattern": "^https?://",
+                        }
+                    ]
+                },
+            }))
+            config_dir = repo / "worker_one" / "config"
+            config_dir.mkdir()
+            (config_dir / "default.json").write_text(json.dumps({
+                "llm": {"api_base": "not-a-url"}
+            }))
+            original = self._set_blueprint_config(repo)
+            try:
+                with patch.dict('os.environ', {"MN_RUNS_ROOT": str(repo / "runs")}):
+                    failed = self.client.post(
+                        "/api/v1/blueprints/worker_one/runs",
+                        json={"run_id": "run-validate"},
+                    )
+                    forced = self.client.post(
+                        "/api/v1/blueprints/worker_one/runs",
+                        json={"run_id": "run-force", "force": True},
+                    )
+            finally:
+                self._restore_config(original)
+
+        self.assertEqual(failed.status_code, 400)
+        self.assertEqual(failed.json()["detail"]["error"], "input_validation_failed")
+        self.assertEqual(forced.status_code, 200)
+        self.assertEqual(forced.json()["job_id"], "job-forced")
+        manifest_json, _payloads = mock_client.submit_job.call_args.args
+        self.assertTrue(json.loads(manifest_json)["metadata"]["mn_validation"]["force"])
+        self.assertTrue(mock_client.submit_job.call_args.kwargs["force"])
+
     @patch('mn_api.state.client')
     def test_blueprint_run_rejects_invalid_run_id_before_submit(self, mock_client):
         with tempfile.TemporaryDirectory() as tmpdir:
