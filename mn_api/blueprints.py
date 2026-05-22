@@ -380,6 +380,7 @@ def load_blueprint_bundle(
     if blueprint.get("revision"):
         metadata["blueprint_revision"] = blueprint["revision"]
     manifest["run_id"] = run_id
+    render_agent_templates_for_submission(manifest)
     runs_root = shared_runs_root()
     config = with_shared_run_store_config(
         load_blueprint_config(bundle_root, config_overrides=config_overrides),
@@ -405,6 +406,19 @@ def load_blueprint_bundle(
                 payloads[payload_path.relative_to(payloads_path).as_posix()] = payload_path.read_bytes()
 
     return json.dumps(manifest), payloads
+
+
+def render_agent_templates_for_submission(manifest: Dict[str, Any]) -> None:
+    nodes = manifest.get("nodes")
+    if not isinstance(nodes, list) or not any(isinstance(node, dict) and "uses" in node for node in nodes):
+        return
+    try:
+        from mn_blueprint_support import render_manifest_agent_templates
+    except ImportError as exc:
+        raise HTTPException(status_code=500, detail="blueprint uses agent templates but mn_blueprint_support is not installed") from exc
+    rendered = render_manifest_agent_templates(manifest)
+    manifest.clear()
+    manifest.update(rendered)
 
 
 def start_blueprint_pre_launch_hook(
