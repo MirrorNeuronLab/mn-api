@@ -6,6 +6,7 @@ from pathlib import Path
 
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
+DEFAULT_BLUEPRINT_REPO = "https://github.com/MirrorNeuronLab/otterdesk-blueprints"
 
 
 @dataclass(frozen=True)
@@ -54,7 +55,7 @@ class ApiConfig:
             ),
             blueprint_repo=os.getenv(
                 "MN_BLUEPRINT_REPO",
-                str(Path.home() / "Projects" / "otterdesk-blueprints"),
+                DEFAULT_BLUEPRINT_REPO,
             ),
         )
         config.validate()

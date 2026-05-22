@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import subprocess
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
 from fastapi import HTTPException
 from mn_sdk import (
@@ -24,6 +27,7 @@ RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,220}$")
 CATEGORY_SLUG_PATTERN = re.compile(r"[^a-z0-9]+")
 DEFAULT_CATEGORY = "General"
 DEFAULT_RUNS_ROOT = "~/.mn/runs"
+DEFAULT_BLUEPRINT_REPO_CACHE = "~/.cache/mirror-neuron/blueprint-repos"
 
 
 def as_dict(value: Any) -> Dict[str, Any]:
@@ -62,10 +66,61 @@ def create_blueprint_run_id(blueprint_id: str) -> str:
     return f"{blueprint_id}-{stamp}"
 
 
+def is_git_repo_url(value: str) -> bool:
+    try:
+        parsed = urlparse(value)
+    except Exception:
+        return False
+    return parsed.scheme in {"http", "https", "ssh", "git"} and bool(parsed.netloc)
+
+
+def cached_git_repo_path(repo_url: str) -> Path:
+    parsed = urlparse(repo_url)
+    name = Path(parsed.path.rstrip("/")).stem or "blueprints"
+    digest = hashlib.sha256(repo_url.encode("utf-8")).hexdigest()[:12]
+    configured_cache = Path(os.getenv("MN_BLUEPRINT_REPO_CACHE", DEFAULT_BLUEPRINT_REPO_CACHE)).expanduser()
+    if not os.getenv("MN_BLUEPRINT_REPO_CACHE"):
+        return configured_cache
+    return configured_cache / f"{name}-{digest}"
+
+
+def ensure_git_blueprint_repo(repo_url: str) -> Path:
+    target = cached_git_repo_path(repo_url)
+    if (target / "index.json").is_file() and not (target / ".git").is_dir():
+        return target
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists() and not (target / ".git").is_dir():
+        raise HTTPException(status_code=500, detail="blueprint repo cache path exists but is not a git repository")
+    try:
+        if target.exists():
+            subprocess.run(
+                ["git", "-C", str(target), "pull", "--ff-only"],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        else:
+            subprocess.run(
+                ["git", "clone", "--depth", "1", repo_url, str(target)],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        detail = getattr(exc, "stderr", "") or str(exc)
+        raise HTTPException(status_code=500, detail=f"blueprint repo clone failed: {detail}") from exc
+    return target
+
+
 def blueprint_repo_root(config: ApiConfig) -> Path:
     repo_value = getattr(config, "blueprint_repo", "")
     if not repo_value:
         raise HTTPException(status_code=500, detail="MN_BLUEPRINT_REPO is not configured")
+
+    if is_git_repo_url(repo_value):
+        return ensure_git_blueprint_repo(repo_value)
 
     repo_root = Path(repo_value).expanduser().resolve()
     if not repo_root.is_dir():
