@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 
 from mn_api import state
 from mn_api.blueprints import (
@@ -16,7 +16,7 @@ from mn_api.blueprints import (
     write_blueprint_job_mapping,
 )
 from mn_api.dependencies import require_auth
-from mn_api.errors import handle_grpc_error
+from mn_api.errors import handle_grpc_error, validation_problem_response
 from mn_api.schemas import BlueprintRunRequest
 
 
@@ -88,14 +88,13 @@ def run_blueprint(
             config_overrides=config_overrides,
         )
         if not validation.get("ok"):
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "input_validation_failed",
-                    "run_id": run_id,
-                    "blueprint": blueprint,
-                    "validation": validation,
-                },
+            return validation_problem_response(
+                validation,
+                status_code=422,
+                error="input_validation_failed",
+                title="Blueprint input validation failed",
+                detail="Fix the highlighted blueprint input fields, or pass force=true to run anyway.",
+                extra={"run_id": run_id, "blueprint": blueprint},
             )
     manifest_json, payloads = load_blueprint_bundle(
         repo_root,

@@ -8,7 +8,12 @@ import re
 from typing import Any, Dict, Optional
 
 from fastapi import HTTPException
-from mn_sdk import run_input_validation, validate_input_validation_spec, validate_requirements_spec
+from mn_sdk import (
+    make_validation_report,
+    run_input_validation,
+    validate_input_validation_spec_issues,
+    validate_requirements_spec_issues,
+)
 
 from mn_api.config import ApiConfig
 from mn_api.path_utils import inside_path
@@ -309,7 +314,11 @@ def load_blueprint_bundle(
     metadata["blueprint_run_id"] = run_id
     metadata["run_id"] = run_id
     if force:
-        metadata["mn_validation"] = {"force": True}
+        metadata["mn_validation"] = {
+            "force": True,
+            "status": "skipped",
+            "skipped_checks": ["input_validation", "requirements"],
+        }
     if blueprint.get("revision"):
         metadata["blueprint_revision"] = blueprint["revision"]
     manifest["run_id"] = run_id
@@ -356,9 +365,9 @@ def validate_blueprint_inputs(
     if not isinstance(manifest, dict):
         raise HTTPException(status_code=500, detail="blueprint manifest.json must be an object")
 
-    spec_errors = validate_requirements_spec(manifest) + validate_input_validation_spec(manifest)
-    if spec_errors:
-        return {"ok": False, "errors": spec_errors, "results": []}
+    spec_issues = validate_requirements_spec_issues(manifest) + validate_input_validation_spec_issues(manifest)
+    if spec_issues:
+        return make_validation_report(spec_issues)
 
     config = load_blueprint_config(bundle_root, config_overrides=config_overrides)
     env = blueprint_runtime_environment(

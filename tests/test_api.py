@@ -290,6 +290,80 @@ class TestAPI(unittest.TestCase):
         response = self.client.get("/api/v1/runs/bad$id/ui")
         self.assertEqual(response.status_code, 400)
 
+    def test_run_observability_endpoints_read_shared_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs_root = Path(tmp)
+            run_dir = runs_root / "observe-run"
+            run_dir.mkdir()
+            (run_dir / "run.json").write_text(json.dumps({
+                "run_id": "observe-run",
+                "blueprint_id": "general_human_in_the_loop_workflow",
+                "status": "running",
+            }))
+            (run_dir / "events.jsonl").write_text(
+                json.dumps({
+                    "ts": "2026-05-22T12:00:00Z",
+                    "run_id": "observe-run",
+                    "blueprint_id": "general_human_in_the_loop_workflow",
+                    "type": "run_started",
+                    "payload": {},
+                })
+                + "\n"
+            )
+            (run_dir / "logs.jsonl").write_text(
+                json.dumps({
+                    "ts": "2026-05-22T12:00:01Z",
+                    "run_id": "observe-run",
+                    "blueprint_id": "general_human_in_the_loop_workflow",
+                    "level": "WARN",
+                    "component": "worker",
+                    "message": "needs attention",
+                })
+                + "\n"
+            )
+            (run_dir / "human.jsonl").write_text(
+                json.dumps({
+                    "ts": "2026-05-22T12:00:02Z",
+                    "run_id": "observe-run",
+                    "blueprint_id": "general_human_in_the_loop_workflow",
+                    "channel": "human",
+                    "type": "human_input_requested",
+                    "payload": {"request_id": "hitl-1", "prompt": "Approve?"},
+                })
+                + "\n"
+            )
+            (run_dir / "resources.jsonl").write_text(
+                json.dumps({
+                    "ts": "2026-05-22T12:00:03Z",
+                    "run_id": "observe-run",
+                    "blueprint_id": "general_human_in_the_loop_workflow",
+                    "component": "worker",
+                    "cpu_pct": 12.5,
+                    "memory_rss_mb": 256,
+                    "gpu": [],
+                    "llm": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15, "calls": 1, "estimated": False},
+                })
+                + "\n"
+            )
+
+            with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
+                logs = self.client.get("/api/v1/runs/observe-run/logs?level=INFO")
+                human = self.client.get("/api/v1/runs/observe-run/human?status=pending")
+                response = self.client.post(
+                    "/api/v1/runs/observe-run/human/hitl-1/response",
+                    json={"decision": "approve", "notes": "ok"},
+                )
+                resources = self.client.get("/api/v1/runs/observe-run/resources?window=24000h&bucket=1h")
+
+        self.assertEqual(logs.status_code, 200)
+        self.assertEqual(logs.json()["data"][0]["message"], "needs attention")
+        self.assertEqual(human.status_code, 200)
+        self.assertEqual(human.json()["data"][0]["payload"]["request_id"], "hitl-1")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["payload"]["approved"], True)
+        self.assertEqual(resources.status_code, 200)
+        self.assertEqual(resources.json()["sample_count"], 1)
+
     @patch('mn_api.state.client')
     def test_submit_by_unknown_bundle_path_is_rejected_before_sdk_call(self, mock_client):
         response = self.client.post(
@@ -342,6 +416,75 @@ class TestAPI(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json()["error"], "resource_overloaded")
+
+    @patch('mn_api.state.client')
+    def test_submit_job_input_validation_problem_details(self, mock_client):
+        response = self.client.post(
+            "/api/v1/jobs",
+            json={
+                "manifest_json": json.dumps({
+                    "graph_id": "g",
+                    "input_validation": {
+                        "rules": [
+                            {
+                                "name": "endpoint_url",
+                                "type": "pattern",
+                                "path": "endpoint",
+                                "pattern": "^https://",
+                            }
+                        ]
+                    },
+                }),
+                "payloads": {},
+            },
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.headers["content-type"], "application/problem+json")
+        self.assertEqual(response.json()["error"], "input_validation_failed")
+        self.assertEqual(response.json()["errors"][0]["location"]["path"], "endpoint")
+        mock_client.submit_job.assert_not_called()
+
+    @patch('mn_api.state.client')
+    def test_submit_job_requirements_error_problem_details(self, mock_client):
+        report = {
+            "version": "validation.report/v1",
+            "ok": False,
+            "status": "failed",
+            "error_count": 1,
+            "errors": ["memory requires at least 32 GB, found 16"],
+            "issues": [
+                {
+                    "code": "requirements.memory_insufficient",
+                    "message": "memory requires at least 32 GB, found 16",
+                    "help": "Run this blueprint on a larger machine.",
+                    "severity": "error",
+                    "location": {"source": "requirements", "path": "memory", "pointer": "/requirements/memory"},
+                    "expected": {"resource": "memory", "minimum": 32, "unit": "GB"},
+                    "actual": {"resource": "memory", "available": 16, "unit": "GB"},
+                }
+            ],
+            "results": [],
+        }
+
+        class RequirementsError(grpc.RpcError):
+            def code(self):
+                return grpc.StatusCode.FAILED_PRECONDITION
+
+            def details(self):
+                return "requirements_not_met: " + json.dumps(report)
+
+        mock_client.submit_job.side_effect = RequirementsError()
+        response = self.client.post(
+            "/api/v1/jobs",
+            json={"manifest_json": '{"graph_id": "g"}', "payloads": {}},
+        )
+
+        self.assertEqual(response.status_code, 412)
+        self.assertEqual(response.headers["content-type"], "application/problem+json")
+        self.assertEqual(response.json()["error"], "requirements_not_met")
+        self.assertEqual(response.json()["errors"][0]["code"], "requirements.memory_insufficient")
+        self.assertEqual(response.json()["errors"][0]["location"]["path"], "memory")
 
     @patch('mn_api.state.client')
     def test_get_job_events_success(self, mock_client):
@@ -739,6 +882,8 @@ class TestAPI(unittest.TestCase):
         body = response.json()
         self.assertFalse(body["validation"]["ok"])
         self.assertIn("model_url", body["validation"]["errors"][0])
+        self.assertEqual(body["validation"]["issues"][0]["location"]["path"], "llm.api_base")
+        self.assertEqual(body["validation"]["issues"][0]["rule"]["name"], "model_url")
 
     @patch('mn_api.state.client')
     def test_blueprint_run_validation_failure_blocks_submit_unless_forced(self, mock_client):
@@ -781,12 +926,15 @@ class TestAPI(unittest.TestCase):
             finally:
                 self._restore_config(original)
 
-        self.assertEqual(failed.status_code, 400)
-        self.assertEqual(failed.json()["detail"]["error"], "input_validation_failed")
+        self.assertEqual(failed.status_code, 422)
+        self.assertEqual(failed.headers["content-type"], "application/problem+json")
+        self.assertEqual(failed.json()["error"], "input_validation_failed")
+        self.assertEqual(failed.json()["errors"][0]["location"]["path"], "llm.api_base")
         self.assertEqual(forced.status_code, 200)
         self.assertEqual(forced.json()["job_id"], "job-forced")
         manifest_json, _payloads = mock_client.submit_job.call_args.args
         self.assertTrue(json.loads(manifest_json)["metadata"]["mn_validation"]["force"])
+        self.assertEqual(json.loads(manifest_json)["metadata"]["mn_validation"]["status"], "skipped")
         self.assertTrue(mock_client.submit_job.call_args.kwargs["force"])
 
     @patch('mn_api.state.client')

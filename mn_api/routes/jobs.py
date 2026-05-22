@@ -4,13 +4,18 @@ import json
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
-from mn_sdk import run_input_validation, validate_input_validation_spec, validate_requirements_spec
+from mn_sdk import (
+    make_validation_report,
+    run_input_validation,
+    validate_input_validation_spec_issues,
+    validate_requirements_spec_issues,
+)
 
 from mn_api import state
 from mn_api.agent_graph import build_agent_graph
 from mn_api.bundles import load_uploaded_bundle
 from mn_api.dependencies import require_auth
-from mn_api.errors import handle_grpc_error
+from mn_api.errors import handle_grpc_error, validation_problem_response
 from mn_api.schemas import SubmitJobRequest
 
 
@@ -22,7 +27,9 @@ def submit_job(req: SubmitJobRequest, _auth=Depends(require_auth)):
     try:
         if req.bundle_path:
             manifest_json, payloads_bytes = load_uploaded_bundle(req.bundle_path, state.BUNDLE_UPLOAD_ROOT)
-            _validate_job_bundle(req.bundle_path, manifest_json, force=req.force)
+            validation_response = _validate_job_bundle(req.bundle_path, manifest_json, force=req.force)
+            if validation_response is not None:
+                return validation_response
         elif req.manifest_json is not None:
             manifest_json = req.manifest_json
             payloads_bytes = (
@@ -30,7 +37,9 @@ def submit_job(req: SubmitJobRequest, _auth=Depends(require_auth)):
                 if req.payloads
                 else {}
             )
-            _validate_job_manifest(manifest_json, force=req.force)
+            validation_response = _validate_job_manifest(manifest_json, force=req.force)
+            if validation_response is not None:
+                return validation_response
         else:
             raise HTTPException(
                 status_code=422,
@@ -48,34 +57,54 @@ def submit_job(req: SubmitJobRequest, _auth=Depends(require_auth)):
         return handle_grpc_error(exc)
 
 
-def _validate_job_bundle(bundle_path: str, manifest_json: str, *, force: bool) -> None:
+def _validate_job_bundle(bundle_path: str, manifest_json: str, *, force: bool):
     if force:
-        return
+        return None
     manifest = _decode_manifest(manifest_json)
-    spec_errors = validate_requirements_spec(manifest) + validate_input_validation_spec(manifest)
-    if spec_errors:
-        raise HTTPException(
-            status_code=400,
-            detail={"error": "manifest_validation_failed", "validation": {"ok": False, "errors": spec_errors}},
+    spec_issues = validate_requirements_spec_issues(manifest) + validate_input_validation_spec_issues(manifest)
+    if spec_issues:
+        return validation_problem_response(
+            make_validation_report(spec_issues),
+            status_code=422,
+            error="manifest_validation_failed",
+            title="Manifest validation failed",
+            detail="Fix the highlighted manifest fields and submit again.",
         )
     result = run_input_validation(Path(bundle_path), manifest)
     if not result.get("ok"):
-        raise HTTPException(status_code=400, detail={"error": "input_validation_failed", "validation": result})
+        return validation_problem_response(
+            result,
+            status_code=422,
+            error="input_validation_failed",
+            title="Input validation failed",
+            detail="Fix the highlighted input fields and submit again.",
+        )
+    return None
 
 
-def _validate_job_manifest(manifest_json: str, *, force: bool) -> None:
+def _validate_job_manifest(manifest_json: str, *, force: bool):
     if force:
-        return
+        return None
     manifest = _decode_manifest(manifest_json)
-    spec_errors = validate_requirements_spec(manifest) + validate_input_validation_spec(manifest)
-    if spec_errors:
-        raise HTTPException(
-            status_code=400,
-            detail={"error": "manifest_validation_failed", "validation": {"ok": False, "errors": spec_errors}},
+    spec_issues = validate_requirements_spec_issues(manifest) + validate_input_validation_spec_issues(manifest)
+    if spec_issues:
+        return validation_problem_response(
+            make_validation_report(spec_issues),
+            status_code=422,
+            error="manifest_validation_failed",
+            title="Manifest validation failed",
+            detail="Fix the highlighted manifest fields and submit again.",
         )
     validation = run_input_validation(Path.cwd(), manifest)
     if not validation.get("ok"):
-        raise HTTPException(status_code=400, detail={"error": "input_validation_failed", "validation": validation})
+        return validation_problem_response(
+            validation,
+            status_code=422,
+            error="input_validation_failed",
+            title="Input validation failed",
+            detail="Fix the highlighted input fields and submit again.",
+        )
+    return None
 
 
 def _decode_manifest(manifest_json: str) -> dict:

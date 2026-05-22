@@ -124,6 +124,8 @@ Base path: `/api/v1`
 | `POST` | `/jobs/{job_id}/pause` | Pause a job. |
 | `POST` | `/jobs/{job_id}/resume` | Resume a job. |
 
+Validation endpoints return `validation.report/v1` payloads with legacy `errors` strings plus structured `issues` for UI rendering. Run and submit failures caused by invalid inputs return `422 application/problem+json`; unmet runtime requirements return `412 application/problem+json`.
+
 Example health check:
 
 ```bash
