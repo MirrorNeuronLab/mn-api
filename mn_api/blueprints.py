@@ -493,6 +493,10 @@ def start_blueprint_pre_launch_hook(
 
     try:
         wait_for_pre_launch_ready(run_dir, process, ready_file)
+        apply_pre_launch_ready_metadata(
+            ready_file,
+            config_overrides=config_overrides,
+        )
     except Exception as exc:
         terminate_pre_launch_process(process)
         cleanup_run_process(run_dir, "pre_launch_process.json")
@@ -514,6 +518,29 @@ def wait_for_pre_launch_ready(run_dir: Path, process: subprocess.Popen[Any], rea
             raise RuntimeError(f"Blueprint pre-launch hook exited before becoming ready. See {run_dir / 'pre_launch.log'}.")
         time.sleep(0.1)
     raise RuntimeError(f"Blueprint pre-launch hook timed out after {timeout:g}s. See {run_dir / 'pre_launch.log'}.")
+
+
+def apply_pre_launch_ready_metadata(
+    ready_file: Path,
+    *,
+    config_overrides: Dict[str, Any] | None,
+) -> None:
+    if config_overrides is None:
+        return
+    raw = ready_file.read_text().strip()
+    if not raw or raw == "ready":
+        return
+    try:
+        metadata = json.loads(raw)
+    except json.JSONDecodeError:
+        return
+    if not isinstance(metadata, dict):
+        return
+    config_patch = metadata.get("config") or metadata.get("config_overrides")
+    if isinstance(config_patch, dict):
+        merged = deep_merge(config_overrides, config_patch)
+        config_overrides.clear()
+        config_overrides.update(merged)
 
 
 def terminate_pre_launch_process(process: subprocess.Popen[Any] | None) -> None:

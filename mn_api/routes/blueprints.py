@@ -59,9 +59,9 @@ def validate_blueprint(
     _auth=Depends(require_auth),
 ):
     repo_root, blueprint = find_blueprint(state.config, blueprint_id)
-    config_overrides = None
+    config_overrides = {}
     if req:
-        config_overrides = req.config_overwrite or req.config_overrides
+        config_overrides = dict(req.config_overwrite or req.config_overrides or {})
     result = validate_blueprint_inputs(
         repo_root,
         blueprint,
@@ -79,9 +79,9 @@ def run_blueprint(
     repo_root, blueprint = find_blueprint(state.config, blueprint_id)
     run_id = req.run_id if req and req.run_id else create_blueprint_run_id(blueprint_id)
     validate_run_id(run_id)
-    config_overrides = None
+    config_overrides = {}
     if req:
-        config_overrides = req.config_overwrite or req.config_overrides
+        config_overrides = dict(req.config_overwrite or req.config_overrides or {})
     force = bool(req.force) if req else False
     pre_launch_process = start_blueprint_pre_launch_hook(
         repo_root,

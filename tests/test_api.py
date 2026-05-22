@@ -854,6 +854,17 @@ class TestAPI(unittest.TestCase):
             repo = Path(tmpdir)
             runs_root = (repo / "runs").resolve()
             self._write_blueprint_repo(repo)
+            (repo / "worker_one" / "manifest.json").write_text(json.dumps({
+                "graph_id": "worker_one_graph",
+                "nodes": [
+                    {
+                        "node_id": "worker",
+                        "config": {"environment": {}},
+                    }
+                ],
+                "edges": [],
+                "metadata": {},
+            }))
             script_path = repo / "worker_one" / "scripts" / "pre-launch.sh"
             script_path.parent.mkdir()
             script_path.write_text("#!/usr/bin/env bash\n")
@@ -868,7 +879,18 @@ class TestAPI(unittest.TestCase):
 
             def fake_popen(_command, **kwargs):
                 captured_env.update(kwargs["env"])
-                Path(kwargs["env"]["MN_PRE_LAUNCH_READY_FILE"]).write_text("ready\n")
+                Path(kwargs["env"]["MN_PRE_LAUNCH_READY_FILE"]).write_text(json.dumps({
+                    "status": "ready",
+                    "env": {
+                        "RTSP_PORT": "8562",
+                        "STREAM_URI": "rtsp://127.0.0.1:8562/video-watch",
+                        "VIDEO_SOURCE_URI": "rtsp://127.0.0.1:8562/video-watch",
+                    },
+                    "config": {
+                        "video_source": {"uri": "rtsp://127.0.0.1:8562/video-watch"},
+                        "web_ui": {"dashboard": {"default_video_source": "rtsp://127.0.0.1:8562/video-watch"}},
+                    },
+                }))
                 return process
 
             original = self._set_blueprint_config(repo)
@@ -889,6 +911,9 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(captured_env["MN_RUN_ID"], "run-pre-launch")
         self.assertEqual(captured_env["MN_BLUEPRINT_BUNDLE_DIR"], str((repo / "worker_one").resolve()))
         self.assertEqual(json.loads(captured_env["MN_BLUEPRINT_CONFIG_JSON"])["identity"]["run_id"], "run-pre-launch")
+        submitted_manifest = json.loads(mock_client.submit_job.call_args.args[0])
+        submitted_env = submitted_manifest["nodes"][0]["config"]["environment"]
+        self.assertEqual(submitted_env["VIDEO_SOURCE_URI"], "rtsp://127.0.0.1:8562/video-watch")
         self.assertEqual(process_info["pid"], 6262)
 
     def test_blueprint_validate_runs_input_validation(self):
