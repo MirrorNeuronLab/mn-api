@@ -13,6 +13,7 @@ from mn_sdk import (
 
 from mn_api import state
 from mn_api.agent_graph import build_agent_graph
+from mn_api.blueprints import cleanup_blueprint_processes_for_job
 from mn_api.bundles import load_uploaded_bundle
 from mn_api.dependencies import require_auth
 from mn_api.errors import handle_grpc_error, validation_problem_response
@@ -205,8 +206,10 @@ def replay_job_dead_letter(job_id: str, index: int, _auth=Depends(require_auth))
 def cancel_job(job_id: str, _auth=Depends(require_auth)):
     try:
         status = state.client.cancel_job(job_id)
+        cleanup_blueprint_processes_for_job(job_id)
         return {"status": status, "job_id": job_id}
     except Exception as exc:
+        cleanup_blueprint_processes_for_job(job_id)
         return handle_grpc_error(exc)
 
 

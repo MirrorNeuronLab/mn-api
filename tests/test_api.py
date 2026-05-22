@@ -767,7 +767,7 @@ class TestAPI(unittest.TestCase):
         mock_client.submit_job.return_value = "job-blueprint-1"
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
-            runs_root = repo / "runs"
+            runs_root = (repo / "runs").resolve()
             self._write_blueprint_repo(repo)
             (repo / "worker_one" / "manifest.json").write_text(json.dumps({
                 "graph_id": "worker_one_graph",
@@ -827,7 +827,7 @@ class TestAPI(unittest.TestCase):
         mock_client.submit_job.return_value = "job-blueprint-generated"
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
-            runs_root = repo / "runs"
+            runs_root = (repo / "runs").resolve()
             self._write_blueprint_repo(repo)
             original = self._set_blueprint_config(repo)
             try:
@@ -846,6 +846,50 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(manifest["metadata"]["run_id"], body["run_id"])
         self.assertEqual(manifest["metadata"]["blueprint_run_id"], body["run_id"])
         self.assertTrue(mapping_exists)
+
+    @patch('mn_api.state.client')
+    def test_blueprint_run_starts_pre_launch_before_submit(self, mock_client):
+        mock_client.submit_job.return_value = "job-pre-launch"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            runs_root = (repo / "runs").resolve()
+            self._write_blueprint_repo(repo)
+            script_path = repo / "worker_one" / "scripts" / "pre-launch.sh"
+            script_path.parent.mkdir()
+            script_path.write_text("#!/usr/bin/env bash\n")
+            config_dir = repo / "worker_one" / "config"
+            config_dir.mkdir()
+            (config_dir / "default.json").write_text(json.dumps({
+                "identity": {"blueprint_id": "worker_one"},
+                "video_source": {"uri": "rtsp://127.0.0.1:8554/video-watch"},
+            }))
+            process = SimpleNamespace(pid=6262, poll=lambda: None)
+            captured_env = {}
+
+            def fake_popen(_command, **kwargs):
+                captured_env.update(kwargs["env"])
+                Path(kwargs["env"]["MN_PRE_LAUNCH_READY_FILE"]).write_text("ready\n")
+                return process
+
+            original = self._set_blueprint_config(repo)
+            try:
+                with patch.dict('os.environ', {"MN_RUNS_ROOT": str(runs_root)}):
+                    with patch('mn_api.blueprints.subprocess.Popen', side_effect=fake_popen) as popen:
+                        response = self.client.post(
+                            "/api/v1/blueprints/worker_one/runs",
+                            json={"run_id": "run-pre-launch"},
+                        )
+                        process_info = json.loads((runs_root / "run-pre-launch" / "pre_launch_process.json").read_text())
+            finally:
+                self._restore_config(original)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["job_id"], "job-pre-launch")
+        self.assertEqual(popen.call_args.args[0], ["bash", str(script_path.resolve())])
+        self.assertEqual(captured_env["MN_RUN_ID"], "run-pre-launch")
+        self.assertEqual(captured_env["MN_BLUEPRINT_BUNDLE_DIR"], str((repo / "worker_one").resolve()))
+        self.assertEqual(json.loads(captured_env["MN_BLUEPRINT_CONFIG_JSON"])["identity"]["run_id"], "run-pre-launch")
+        self.assertEqual(process_info["pid"], 6262)
 
     def test_blueprint_validate_runs_input_validation(self):
         with tempfile.TemporaryDirectory() as tmpdir:

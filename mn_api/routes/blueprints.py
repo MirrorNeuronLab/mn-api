@@ -10,6 +10,8 @@ from mn_api.blueprints import (
     load_blueprint_categories,
     load_blueprint_bundle,
     load_blueprint_catalog,
+    cleanup_blueprint_run_processes,
+    start_blueprint_pre_launch_hook,
     validate_blueprint_inputs,
     validate_blueprint_bundle,
     validate_run_id,
@@ -81,6 +83,12 @@ def run_blueprint(
     if req:
         config_overrides = req.config_overwrite or req.config_overrides
     force = bool(req.force) if req else False
+    pre_launch_process = start_blueprint_pre_launch_hook(
+        repo_root,
+        blueprint,
+        run_id,
+        config_overrides=config_overrides,
+    )
     if not force:
         validation = validate_blueprint_inputs(
             repo_root,
@@ -88,6 +96,7 @@ def run_blueprint(
             config_overrides=config_overrides,
         )
         if not validation.get("ok"):
+            cleanup_blueprint_run_processes(run_id)
             return validation_problem_response(
                 validation,
                 status_code=422,
@@ -122,4 +131,5 @@ def run_blueprint(
             "blueprint": blueprint,
         }
     except Exception as exc:
+        cleanup_blueprint_run_processes(run_id)
         return handle_grpc_error(exc)

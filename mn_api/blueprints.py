@@ -6,7 +6,9 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import subprocess
+import time
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
@@ -28,6 +30,7 @@ CATEGORY_SLUG_PATTERN = re.compile(r"[^a-z0-9]+")
 DEFAULT_CATEGORY = "General"
 DEFAULT_RUNS_ROOT = "~/.mn/runs"
 DEFAULT_BLUEPRINT_REPO_CACHE = "~/.cache/mirror-neuron/blueprint-repos"
+PRE_LAUNCH_SCRIPT = Path("scripts/pre-launch.sh")
 
 
 def as_dict(value: Any) -> Dict[str, Any]:
@@ -402,6 +405,168 @@ def load_blueprint_bundle(
                 payloads[payload_path.relative_to(payloads_path).as_posix()] = payload_path.read_bytes()
 
     return json.dumps(manifest), payloads
+
+
+def start_blueprint_pre_launch_hook(
+    repo_root: Path,
+    blueprint: Dict[str, Any],
+    run_id: str,
+    *,
+    config_overrides: Dict[str, Any] | None = None,
+) -> subprocess.Popen[Any] | None:
+    bundle_root = validate_blueprint_bundle(repo_root, blueprint)
+    script_path = (bundle_root / PRE_LAUNCH_SCRIPT).resolve()
+    if not script_path.is_file():
+        return None
+
+    runs_root = Path(shared_runs_root()).expanduser()
+    run_dir = runs_root / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    ready_file = run_dir / "pre_launch.ready"
+    try:
+        ready_file.unlink()
+    except FileNotFoundError:
+        pass
+
+    config = with_shared_run_store_config(
+        load_blueprint_config(bundle_root, config_overrides=config_overrides),
+        run_id,
+        str(runs_root),
+    )
+    runtime_env = blueprint_runtime_environment(
+        bundle_root,
+        config=config,
+        config_overrides=config_overrides,
+    )
+    env = os.environ.copy()
+    env.update(runtime_env)
+    env.update(
+        {
+            "MN_RUN_ID": run_id,
+            "MN_RUN_DIR": str(run_dir),
+            "MN_RUNS_ROOT": str(runs_root),
+            "MN_BLUEPRINT_BUNDLE_DIR": str(bundle_root),
+            "MN_BLUEPRINT_CONFIG_JSON": json.dumps(config, sort_keys=True),
+            "MN_PRE_LAUNCH_READY_FILE": str(ready_file),
+        }
+    )
+
+    command = ["bash", str(script_path)]
+    log_path = run_dir / "pre_launch.log"
+    try:
+        with log_path.open("a", encoding="utf-8") as log_file:
+            process = subprocess.Popen(
+                command,
+                cwd=bundle_root,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                env=env,
+                start_new_session=True,
+            )
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"failed to start blueprint pre-launch hook: {exc}") from exc
+
+    process_info = {
+        "pid": process.pid,
+        "command": command,
+        "script": str(script_path),
+        "log": str(log_path),
+        "ready_file": str(ready_file),
+        "run_id": run_id,
+        "started_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    (run_dir / "pre_launch_process.json").write_text(json.dumps(process_info, indent=2, sort_keys=True) + "\n")
+
+    try:
+        wait_for_pre_launch_ready(run_dir, process, ready_file)
+    except Exception as exc:
+        terminate_pre_launch_process(process)
+        cleanup_run_process(run_dir, "pre_launch_process.json")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return process
+
+
+def wait_for_pre_launch_ready(run_dir: Path, process: subprocess.Popen[Any], ready_file: Path) -> None:
+    try:
+        timeout = max(float(os.getenv("MN_PRE_LAUNCH_TIMEOUT_SECONDS", "30")), 0)
+    except ValueError:
+        timeout = 30.0
+    deadline = time.monotonic() + timeout
+    while time.monotonic() <= deadline:
+        if ready_file.exists():
+            return
+        poll = getattr(process, "poll", None)
+        if callable(poll) and poll() is not None:
+            raise RuntimeError(f"Blueprint pre-launch hook exited before becoming ready. See {run_dir / 'pre_launch.log'}.")
+        time.sleep(0.1)
+    raise RuntimeError(f"Blueprint pre-launch hook timed out after {timeout:g}s. See {run_dir / 'pre_launch.log'}.")
+
+
+def terminate_pre_launch_process(process: subprocess.Popen[Any] | None) -> None:
+    if process is None:
+        return
+    poll = getattr(process, "poll", None)
+    if callable(poll) and poll() is not None:
+        return
+    pid = getattr(process, "pid", None)
+    if isinstance(pid, int):
+        try:
+            os.killpg(pid, signal.SIGTERM)
+        except OSError:
+            try:
+                process.terminate()
+            except OSError:
+                pass
+    else:
+        try:
+            process.terminate()
+        except OSError:
+            pass
+
+
+def cleanup_run_process(run_dir: Path, metadata_name: str) -> None:
+    process_path = run_dir / metadata_name
+    if not process_path.is_file():
+        return
+    try:
+        data = json.loads(process_path.read_text())
+        pid = int(data.get("pid"))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except OSError:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+
+
+def cleanup_blueprint_run_processes(run_id: str) -> None:
+    run_dir = Path(shared_runs_root()).expanduser() / run_id
+    cleanup_run_process(run_dir, "pre_launch_process.json")
+    cleanup_run_process(run_dir, "web_ui_process.json")
+
+
+def cleanup_blueprint_processes_for_job(job_id: str) -> None:
+    runs_root = Path(shared_runs_root()).expanduser()
+    if not runs_root.is_dir():
+        return
+    for run_dir in runs_root.iterdir():
+        job_path = run_dir / "job.json"
+        if not job_path.is_file():
+            continue
+        try:
+            data = json.loads(job_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        if data.get("job_id") == job_id:
+            cleanup_blueprint_run_processes(run_dir.name)
+            return
 
 
 def validate_blueprint_inputs(
