@@ -62,6 +62,7 @@ def validate_blueprint(
     config_overrides = {}
     if req:
         config_overrides = dict(req.config_overwrite or req.config_overrides or {})
+    state.close_client()
     result = validate_blueprint_inputs(
         repo_root,
         blueprint,
@@ -83,6 +84,7 @@ def run_blueprint(
     if req:
         config_overrides = dict(req.config_overwrite or req.config_overrides or {})
     force = bool(req.force) if req else False
+    state.close_client()
     pre_launch_process = start_blueprint_pre_launch_hook(
         repo_root,
         blueprint,
@@ -96,7 +98,7 @@ def run_blueprint(
             config_overrides=config_overrides,
         )
         if not validation.get("ok"):
-            cleanup_blueprint_run_processes(run_id)
+            cleanup_blueprint_run_processes(run_id, reason="validation_failed")
             return validation_problem_response(
                 validation,
                 status_code=422,
@@ -131,5 +133,5 @@ def run_blueprint(
             "blueprint": blueprint,
         }
     except Exception as exc:
-        cleanup_blueprint_run_processes(run_id)
+        cleanup_blueprint_run_processes(run_id, reason="launch_failed")
         return handle_grpc_error(exc)

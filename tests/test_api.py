@@ -82,7 +82,7 @@ class TestAPI(unittest.TestCase):
 
     def test_config_uses_local_grpc_token_files(self):
         with tempfile.TemporaryDirectory() as tmp:
-            token_dir = Path(tmp) / ".mirror_neuron"
+            token_dir = Path(tmp) / ".mn"
             token_dir.mkdir()
             (token_dir / "grpc_auth.token").write_text("auth-from-file\n")
             (token_dir / "grpc_admin.token").write_text("admin-from-file\n")

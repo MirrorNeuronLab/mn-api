@@ -9,6 +9,11 @@ TRUE_VALUES = {"1", "true", "yes", "on"}
 DEFAULT_BLUEPRINT_REPO = "https://github.com/MirrorNeuronLab/otterdesk-blueprints"
 
 
+def _mn_home() -> Path:
+    configured_home = os.getenv("MN_HOME") or os.getenv("MIRROR_NEURON_HOME")
+    return Path(configured_home).expanduser() if configured_home else Path.home() / ".mn"
+
+
 @dataclass(frozen=True)
 class ApiConfig:
     env: str
@@ -39,11 +44,13 @@ class ApiConfig:
             grpc_timeout_seconds=timeout,
             grpc_auth_token=_token_from_env_or_file(
                 "MN_GRPC_AUTH_TOKEN",
-                Path.home() / ".mirror_neuron" / "grpc_auth.token",
+                _mn_home() / "grpc_auth.token",
+                legacy_path=Path.home() / ".mirror_neuron" / "grpc_auth.token",
             ),
             grpc_admin_token=_token_from_env_or_file(
                 "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN",
-                Path.home() / ".mirror_neuron" / "grpc_admin.token",
+                _mn_home() / "grpc_admin.token",
+                legacy_path=Path.home() / ".mirror_neuron" / "grpc_admin.token",
             ),
             api_token=os.getenv("MN_API_TOKEN", ""),
             request_size_limit_bytes=_int(
@@ -100,15 +107,21 @@ def _csv(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
-def _token_from_env_or_file(name: str, path: Path) -> str:
+def _token_from_env_or_file(name: str, path: Path, *, legacy_path: Path | None = None) -> str:
     token = os.getenv(name)
     if token:
         return token
 
-    try:
-        return path.read_text(encoding="utf-8").strip()
-    except OSError:
-        return ""
+    for token_path in (path, legacy_path):
+        if token_path is None:
+            continue
+        try:
+            value = token_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if value:
+            return value
+    return ""
 
 
 def auth_enabled(config: ApiConfig) -> bool:

@@ -28,6 +28,7 @@ def submit_job(req: SubmitJobRequest, _auth=Depends(require_auth)):
     try:
         if req.bundle_path:
             manifest_json, payloads_bytes = load_uploaded_bundle(req.bundle_path, state.BUNDLE_UPLOAD_ROOT)
+            state.close_client()
             validation_response = _validate_job_bundle(req.bundle_path, manifest_json, force=req.force)
             if validation_response is not None:
                 return validation_response
@@ -38,6 +39,7 @@ def submit_job(req: SubmitJobRequest, _auth=Depends(require_auth)):
                 if req.payloads
                 else {}
             )
+            state.close_client()
             validation_response = _validate_job_manifest(manifest_json, force=req.force)
             if validation_response is not None:
                 return validation_response

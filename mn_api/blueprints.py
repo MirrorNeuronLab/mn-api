@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import signal
 import subprocess
+import sys
 import time
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
@@ -31,6 +32,57 @@ DEFAULT_CATEGORY = "General"
 DEFAULT_RUNS_ROOT = "~/.mn/runs"
 DEFAULT_BLUEPRINT_REPO_CACHE = "~/.cache/mirror-neuron/blueprint-repos"
 PRE_LAUNCH_SCRIPT = Path("scripts/pre-launch.sh")
+POST_LAUNCH_SCRIPT = Path("scripts/post-launch.sh")
+
+
+def workspace_root() -> Path:
+    for name in ("MN_WORKSPACE_ROOT", "MIRROR_NEURON_WORKSPACE", "OTTERDESK_MIRROR_NEURON_WORKSPACE"):
+        value = os.getenv(name)
+        if value:
+            return Path(value).expanduser().resolve()
+    return Path(__file__).resolve().parents[2]
+
+
+def runtime_path_environment() -> Dict[str, str]:
+    root = workspace_root()
+    membrane_project_path = Path(os.getenv("MN_MEMBRANE_PROJECT_PATH") or root / "Membrane").expanduser()
+    membrane_sdk_path = Path(
+        os.getenv("MN_MEMBRANE_SDK_PATH")
+        or os.getenv("MN_CONTEXT_PYTHON_SDK_PATH")
+        or membrane_project_path / "mn-context-engine-python-sdk" / "src"
+    ).expanduser()
+    skills_root = Path(os.getenv("MN_SKILLS_ROOT") or root / "mn-skills").expanduser()
+    env = {
+        "MN_WORKSPACE_ROOT": str(root),
+        "MIRROR_NEURON_WORKSPACE": str(root),
+        "OTTERDESK_MIRROR_NEURON_WORKSPACE": str(root),
+        "MN_MEMBRANE_PROJECT_PATH": str(membrane_project_path),
+        "MN_MEMBRANE_SDK_PATH": str(membrane_sdk_path),
+        "MN_SKILLS_ROOT": str(skills_root),
+    }
+    python_paths = [
+        skills_root / "blueprint_support_skill" / "src",
+        skills_root / "tax_pdf_ocr_skill" / "src",
+        skills_root / "pdf_extract_skill" / "src",
+    ]
+    existing_pythonpath = os.getenv("PYTHONPATH")
+    resolved_python_paths = [str(path) for path in python_paths if path.exists()]
+    if existing_pythonpath:
+        resolved_python_paths.append(existing_pythonpath)
+    if resolved_python_paths:
+        env["PYTHONPATH"] = os.pathsep.join(resolved_python_paths)
+    return env
+
+
+def inject_local_blueprint_support_path() -> None:
+    skills_root = Path(runtime_path_environment()["MN_SKILLS_ROOT"]).expanduser()
+    for candidate in (
+        skills_root / "blueprint_support_skill" / "src",
+        skills_root / "blueprint-support-skill" / "src",
+    ):
+        if candidate.is_dir() and str(candidate) not in sys.path:
+            sys.path.insert(0, str(candidate))
+            return
 
 
 def as_dict(value: Any) -> Dict[str, Any]:
@@ -412,6 +464,7 @@ def render_agent_templates_for_submission(manifest: Dict[str, Any]) -> None:
     nodes = manifest.get("nodes")
     if not isinstance(nodes, list) or not any(isinstance(node, dict) and "uses" in node for node in nodes):
         return
+    inject_local_blueprint_support_path()
     try:
         from mn_blueprint_support import render_manifest_agent_templates
     except ImportError as exc:
@@ -429,6 +482,7 @@ def start_blueprint_pre_launch_hook(
     config_overrides: Dict[str, Any] | None = None,
 ) -> subprocess.Popen[Any] | None:
     bundle_root = validate_blueprint_bundle(repo_root, blueprint)
+    register_post_launch_hook(bundle_root, run_id)
     script_path = (bundle_root / PRE_LAUNCH_SCRIPT).resolve()
     if not script_path.is_file():
         return None
@@ -462,6 +516,7 @@ def start_blueprint_pre_launch_hook(
             "MN_BLUEPRINT_BUNDLE_DIR": str(bundle_root),
             "MN_BLUEPRINT_CONFIG_JSON": json.dumps(config, sort_keys=True),
             "MN_PRE_LAUNCH_READY_FILE": str(ready_file),
+            "MN_POST_LAUNCH_STATE_FILE": str(run_dir / "post_launch_state.json"),
         }
     )
 
@@ -500,8 +555,31 @@ def start_blueprint_pre_launch_hook(
     except Exception as exc:
         terminate_pre_launch_process(process)
         cleanup_run_process(run_dir, "pre_launch_process.json")
+        cleanup_post_launch_hook(run_dir, reason="pre_launch_failed")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return process
+
+
+def register_post_launch_hook(bundle_root: Path, run_id: str) -> None:
+    script_path = (bundle_root / POST_LAUNCH_SCRIPT).resolve()
+    if not script_path.is_file():
+        return
+    runs_root = Path(shared_runs_root()).expanduser()
+    run_dir = runs_root / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    hook_info = {
+        "command": ["bash", str(script_path)],
+        "script": str(script_path),
+        "cwd": str(bundle_root),
+        "log": str(run_dir / "post_launch.log"),
+        "run_id": run_id,
+        "bundle_dir": str(bundle_root),
+        "state_file": str(run_dir / "post_launch_state.json"),
+        "pre_launch_ready_file": str(run_dir / "pre_launch.ready"),
+        "pre_launch_process_file": str(run_dir / "pre_launch_process.json"),
+        "registered_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    (run_dir / "post_launch_hook.json").write_text(json.dumps(hook_info, indent=2, sort_keys=True) + "\n")
 
 
 def wait_for_pre_launch_ready(run_dir: Path, process: subprocess.Popen[Any], ready_file: Path) -> None:
@@ -587,9 +665,91 @@ def cleanup_run_process(run_dir: Path, metadata_name: str) -> None:
             pass
 
 
-def cleanup_blueprint_run_processes(run_id: str) -> None:
+def cleanup_post_launch_hook(run_dir: Path, *, reason: str) -> None:
+    hook_path = run_dir / "post_launch_hook.json"
+    if not hook_path.is_file():
+        return
+    try:
+        hook_info = json.loads(hook_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(hook_info, dict):
+        return
+
+    script_value = hook_info.get("script")
+    if not isinstance(script_value, str) or not script_value:
+        return
+    script_path = Path(script_value)
+    if not script_path.is_file():
+        return
+
+    command = hook_info.get("command")
+    if not isinstance(command, list) or not all(isinstance(part, str) for part in command):
+        command = ["bash", str(script_path)]
+
+    cwd_value = hook_info.get("cwd")
+    cwd = Path(cwd_value) if isinstance(cwd_value, str) and cwd_value else script_path.parent
+    if not cwd.is_dir():
+        cwd = script_path.parent
+
+    log_value = hook_info.get("log")
+    log_path = Path(log_value) if isinstance(log_value, str) and log_value else run_dir / "post_launch.log"
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return
+
+    env = os.environ.copy()
+    env.update(post_launch_env(run_dir, hook_info, reason=reason))
+    try:
+        timeout = max(float(os.getenv("MN_POST_LAUNCH_TIMEOUT_SECONDS", "10")), 0.1)
+    except ValueError:
+        timeout = 10.0
+    try:
+        with log_path.open("a", encoding="utf-8") as log_file:
+            log_file.write(f"\n--- post-launch cleanup reason={reason} ---\n")
+            subprocess.run(
+                command,
+                cwd=cwd,
+                env=env,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                timeout=timeout,
+                text=True,
+            )
+    except (OSError, subprocess.TimeoutExpired):
+        return
+
+
+def post_launch_env(run_dir: Path, hook_info: Dict[str, Any], *, reason: str) -> Dict[str, str]:
+    ready_value = hook_info.get("pre_launch_ready_file")
+    ready_path = Path(ready_value) if isinstance(ready_value, str) and ready_value else run_dir / "pre_launch.ready"
+    pre_launch_process_value = hook_info.get("pre_launch_process_file")
+    state_value = hook_info.get("state_file")
+    env = {
+        "MN_RUN_ID": str(hook_info.get("run_id") or run_dir.name),
+        "MN_RUN_DIR": str(run_dir),
+        "MN_RUNS_ROOT": str(run_dir.parent),
+        "MN_BLUEPRINT_BUNDLE_DIR": str(hook_info.get("bundle_dir") or ""),
+        "MN_PRE_LAUNCH_READY_FILE": str(ready_path),
+        "MN_PRE_LAUNCH_PROCESS_FILE": str(pre_launch_process_value or run_dir / "pre_launch_process.json"),
+        "MN_POST_LAUNCH_STATE_FILE": str(state_value or run_dir / "post_launch_state.json"),
+        "MN_POST_LAUNCH_REASON": reason,
+    }
+    try:
+        ready = json.loads(ready_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        ready = {}
+    ready_env = ready.get("env") if isinstance(ready, dict) else None
+    if isinstance(ready_env, dict):
+        env.update({str(key): str(value) for key, value in ready_env.items() if value is not None})
+    return env
+
+
+def cleanup_blueprint_run_processes(run_id: str, *, reason: str = "job_cancelled") -> None:
     run_dir = Path(shared_runs_root()).expanduser() / run_id
     cleanup_run_process(run_dir, "pre_launch_process.json")
+    cleanup_post_launch_hook(run_dir, reason=reason)
     cleanup_run_process(run_dir, "web_ui_process.json")
 
 
@@ -722,7 +882,7 @@ def blueprint_runtime_environment(
     config: Dict[str, Any] | None = None,
     config_overrides: Dict[str, Any] | None = None,
 ) -> Dict[str, str]:
-    env: Dict[str, str] = {}
+    env: Dict[str, str] = runtime_path_environment()
     if config is None:
         config = load_blueprint_config(bundle_root, config_overrides=config_overrides)
     if config is not None:
