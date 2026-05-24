@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from numbers import Number
+from typing import Any
 
 from fastapi import APIRouter, Depends
 
@@ -51,7 +53,8 @@ def get_metrics(_auth=Depends(require_auth)):
 @router.get("/resource")
 def get_resource(_auth=Depends(require_auth)):
     try:
-        return json.loads(state.client.get_resource())
+        resource = json.loads(state.client.get_resource())
+        return ensure_combined_resource_totals(resource)
     except Exception as exc:
         return handle_grpc_error(exc)
 
@@ -64,7 +67,8 @@ def set_resource(req: ResourceSetRequest, _auth=Depends(require_auth)):
             payload = req.model_dump(exclude_none=True)
         else:
             payload = req.dict(exclude_none=True)
-        return json.loads(state.client.set_resource(payload))
+        resource = json.loads(state.client.set_resource(payload))
+        return ensure_combined_resource_totals(resource)
     except Exception as exc:
         return handle_grpc_error(exc)
 
@@ -74,3 +78,65 @@ def counts(values):
     for value in values:
         result[value] = result.get(value, 0) + 1
     return result
+
+
+RESOURCE_TOTAL_KEYS = (
+    "cpu_cores",
+    "gpu_count",
+    "memory_gb",
+    "disk_gb",
+    "disk_available_gb",
+)
+INTEGER_RESOURCE_KEYS = {"cpu_cores", "gpu_count"}
+
+
+def ensure_combined_resource_totals(payload: Any) -> Any:
+    if not isinstance(payload, dict) or isinstance(payload.get("combined"), dict):
+        return payload
+
+    if isinstance(payload.get("totals"), dict):
+        combined = payload["totals"]
+    elif isinstance(payload.get("nodes"), list):
+        combined = combine_node_resources(payload["nodes"])
+    else:
+        return payload
+
+    enriched = dict(payload)
+    enriched["combined"] = normalize_resource_totals(combined)
+    return enriched
+
+
+def combine_node_resources(nodes: Any) -> dict[str, Any]:
+    combined: dict[str, float] = {key: 0.0 for key in RESOURCE_TOTAL_KEYS}
+
+    if not isinstance(nodes, list):
+        return combined
+
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        for key in RESOURCE_TOTAL_KEYS:
+            combined[key] += resource_number(node.get(key))
+
+    return normalize_resource_totals(combined)
+
+
+def normalize_resource_totals(totals: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(totals)
+    for key in RESOURCE_TOTAL_KEYS:
+        if key not in totals:
+            continue
+        value = resource_number(totals.get(key))
+        normalized[key] = int(value) if key in INTEGER_RESOURCE_KEYS else round(value, 2)
+    return normalized
+
+
+def resource_number(value: Any) -> float:
+    if isinstance(value, Number):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return 0.0
+    return 0.0

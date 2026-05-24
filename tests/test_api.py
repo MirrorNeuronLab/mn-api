@@ -167,7 +167,27 @@ class TestAPI(unittest.TestCase):
         response = self.client.get("/api/v1/resource")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["totals"]["cpu_cores"], 8)
+        self.assertEqual(response.json()["combined"]["cpu_cores"], 8)
         mock_client.get_resource.assert_called_once()
+
+    @patch('mn_api.state.client')
+    def test_get_resource_combines_multi_node_resources(self, mock_client):
+        mock_client.get_resource.return_value = json.dumps({
+            "mode": "cluster",
+            "node_count": 2,
+            "nodes": [
+                {"name": "mn1", "cpu_cores": 8, "gpu_count": 2, "memory_gb": 16.0},
+                {"name": "mn2", "cpu_cores": 4, "gpu_count": 0, "memory_gb": 8.0},
+            ],
+        })
+
+        response = self.client.get("/api/v1/resource")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["combined"]["cpu_cores"], 12)
+        self.assertEqual(response.json()["combined"]["gpu_count"], 2)
+        self.assertEqual(response.json()["combined"]["memory_gb"], 24.0)
+        self.assertEqual(response.json()["nodes"][0]["name"], "mn1")
 
     @patch('mn_api.state.client')
     def test_set_resource_success(self, mock_client):

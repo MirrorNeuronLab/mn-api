@@ -244,6 +244,7 @@ def normalize_blueprint(entry: Any) -> Optional[Dict[str, Any]]:
 
     return {
         "id": blueprint_id,
+        "type": record.get("type") or product.get("type") or "batch",
         "name": record.get("name") or product.get("name") or blueprint_id,
         "tagline": record.get("tagline") or product.get("tagline") or product.get("one_line") or "",
         "summary": record.get("summary") or product.get("summary") or product.get("one_line") or "",
@@ -846,6 +847,7 @@ def enrich_blueprint_from_manifest(repo_root: Path, blueprint: Dict[str, Any]) -
     manifest = load_optional_manifest(repo_root, enriched)
     if not manifest:
         return enriched
+    enriched["type"] = manifest.get("type") or "batch"
     init_config_review = manifest_init_config_review(manifest)
     if init_config_review is not None:
         enriched["init_config_review"] = init_config_review
