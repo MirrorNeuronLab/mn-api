@@ -24,3 +24,27 @@ class ResourceSetRequest(BaseModel):
     gpu: Optional[int] = None
     memory: Optional[int] = None
     disk: Optional[int] = None
+
+
+class CreateScheduleRequest(BaseModel):
+    manifest_json: Optional[str] = None
+    payloads: Optional[Dict[str, str]] = Field(default_factory=dict)
+    bundle_path: Optional[str] = Field(default=None, alias="_bundle_path")
+    schedule: Dict[str, Any] = Field(default_factory=dict)
+    source: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ScheduleUpdateRequest(BaseModel):
+    attrs: Dict[str, Any] = Field(default_factory=dict)
+    reason: str = ""
+
+
+class DispatchScheduleRequest(BaseModel):
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    reason: str = "manual"
+
+
+class EmitEventRequest(BaseModel):
+    event_type: str
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    source: str = "api"

@@ -14,7 +14,20 @@ router = APIRouter(prefix="/api/v1")
 @router.post("/bundles/upload")
 async def upload_bundle(bundle: UploadFile = File(...), _auth=Depends(require_auth)):
     try:
-        return await save_uploaded_bundle(bundle, state.BUNDLE_UPLOAD_ROOT)
+        result = await save_uploaded_bundle(bundle, state.BUNDLE_UPLOAD_ROOT)
+        try:
+            state.client.emit_trigger_event(
+                "bundle_uploaded",
+                payload={
+                    "bundle_path": result.get("bundle_path") or result.get("_bundle_path"),
+                    "filename": bundle.filename,
+                    "content_type": bundle.content_type,
+                },
+                source="mn-api",
+            )
+        except Exception as exc:
+            state.logger.warning("bundle upload event emission failed: %s", exc)
+        return result
     except HTTPException:
         raise
     except zipfile.BadZipFile as exc:
