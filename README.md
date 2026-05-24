@@ -56,7 +56,7 @@ All runtime configuration uses environment variables.
 | --- | --- | --- |
 | `MN_ENV` | `dev` | Runtime mode. Use `prod` for protected deployments. |
 | `MN_API_HOST` | `localhost` | Bind host for the HTTP server. |
-| `MN_API_PORT` | `4001` | Bind port for the HTTP server. |
+| `MN_API_PORT` | `54001` | Bind port for the HTTP server. |
 | `MN_API_TOKEN` | unset | Required when `MN_ENV=prod`. |
 | `MN_CORE_HOST` | `localhost` | Core host used to build the default gRPC target. |
 | `MN_GRPC_TARGET` | unset | Full core gRPC target. Takes precedence over `MN_CORE_GRPC_TARGET`. |
@@ -84,14 +84,14 @@ Authorization: Bearer <MN_API_TOKEN>
 mn-api
 ```
 
-The service listens on `http://localhost:4001` by default.
+The service listens on `http://localhost:54001` by default.
 
 Example production-style local run:
 
 ```bash
 MN_ENV=prod \
 MN_API_TOKEN=replace-me \
-MN_GRPC_TARGET=localhost:50051 \
+MN_GRPC_TARGET=localhost:55051 \
 mn-api
 ```
 
@@ -129,7 +129,7 @@ Validation endpoints return `validation.report/v1` payloads with legacy `errors`
 Example health check:
 
 ```bash
-curl http://localhost:4001/api/v1/health
+curl http://localhost:54001/api/v1/health
 ```
 
 Example authenticated request:
@@ -137,13 +137,13 @@ Example authenticated request:
 ```bash
 curl \
   -H "Authorization: Bearer $MN_API_TOKEN" \
-  http://localhost:4001/api/v1/system/summary
+  http://localhost:54001/api/v1/system/summary
 ```
 
 Example blueprint category filter:
 
 ```bash
-curl "http://localhost:4001/api/v1/blueprints?category=finance"
+curl "http://localhost:54001/api/v1/blueprints?category=finance"
 ```
 
 The response includes normalized blueprint entries with `category` and `category_slug`, plus a `categories` list with `{name, slug, count}` facet metadata.

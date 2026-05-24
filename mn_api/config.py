@@ -36,10 +36,10 @@ class ApiConfig:
         config = cls(
             env=env,
             host=os.getenv("MN_API_HOST", "localhost"),
-            port=_int("MN_API_PORT", "4001"),
+            port=_int("MN_API_PORT", "54001"),
             grpc_target=os.getenv(
                 "MN_GRPC_TARGET",
-                os.getenv("MN_CORE_GRPC_TARGET", f"{core_host}:50051"),
+                os.getenv("MN_CORE_GRPC_TARGET", f"{core_host}:55051"),
             ),
             grpc_timeout_seconds=timeout,
             grpc_auth_token=_token_from_env_or_file(

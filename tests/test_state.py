@@ -13,7 +13,7 @@ class TestStateClient(unittest.TestCase):
         self.original_client_class = state.Client
         state._client = None
         state.config = SimpleNamespace(
-            grpc_target="localhost:50051",
+            grpc_target="localhost:55051",
             grpc_timeout_seconds=10.0,
             grpc_auth_token="",
             grpc_admin_token="admin-secret",
@@ -45,7 +45,7 @@ class TestStateClient(unittest.TestCase):
             calls,
             [
                 {
-                    "target": "localhost:50051",
+                    "target": "localhost:55051",
                     "timeout": 10.0,
                     "auth_token": "",
                 }
@@ -80,7 +80,7 @@ class TestStateClient(unittest.TestCase):
             calls,
             [
                 {
-                    "target": "localhost:50051",
+                    "target": "localhost:55051",
                     "timeout": 10.0,
                     "auth_token": "",
                     "admin_token": "admin-secret",
