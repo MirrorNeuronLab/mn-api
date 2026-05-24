@@ -93,6 +93,10 @@ def as_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
+def string_env_values(values: Dict[str, Any] | None) -> Dict[str, str]:
+    return {str(key): str(value) for key, value in (values or {}).items() if value is not None}
+
+
 def normalize_category_name(value: Any) -> str:
     if not isinstance(value, str):
         return DEFAULT_CATEGORY
@@ -403,6 +407,7 @@ def load_blueprint_bundle(
     run_id: str,
     *,
     config_overrides: Dict[str, Any] | None = None,
+    env_overrides: Dict[str, str] | None = None,
     force: bool = False,
 ) -> tuple[str, Dict[str, bytes]]:
     bundle_root = validate_blueprint_bundle(repo_root, blueprint)
@@ -447,6 +452,7 @@ def load_blueprint_bundle(
         config=config,
         config_overrides=config_overrides,
     )
+    runtime_env.update(string_env_values(env_overrides))
     runtime_env.setdefault("MN_RUN_ID", run_id)
     runtime_env["MN_RUNS_ROOT"] = runs_root
     if runtime_env:
@@ -481,6 +487,7 @@ def start_blueprint_pre_launch_hook(
     run_id: str,
     *,
     config_overrides: Dict[str, Any] | None = None,
+    env_overrides: Dict[str, str] | None = None,
 ) -> subprocess.Popen[Any] | None:
     bundle_root = validate_blueprint_bundle(repo_root, blueprint)
     register_post_launch_hook(bundle_root, run_id)
@@ -552,6 +559,7 @@ def start_blueprint_pre_launch_hook(
         apply_pre_launch_ready_metadata(
             ready_file,
             config_overrides=config_overrides,
+            env_overrides=env_overrides,
         )
     except Exception as exc:
         terminate_pre_launch_process(process)
@@ -603,9 +611,8 @@ def apply_pre_launch_ready_metadata(
     ready_file: Path,
     *,
     config_overrides: Dict[str, Any] | None,
+    env_overrides: Dict[str, str] | None = None,
 ) -> None:
-    if config_overrides is None:
-        return
     raw = ready_file.read_text().strip()
     if not raw or raw == "ready":
         return
@@ -615,8 +622,11 @@ def apply_pre_launch_ready_metadata(
         return
     if not isinstance(metadata, dict):
         return
+    env_patch = metadata.get("env")
+    if isinstance(env_patch, dict) and env_overrides is not None:
+        env_overrides.update(string_env_values(env_patch))
     config_patch = metadata.get("config") or metadata.get("config_overrides")
-    if isinstance(config_patch, dict):
+    if isinstance(config_patch, dict) and config_overrides is not None:
         merged = deep_merge(config_overrides, config_patch)
         config_overrides.clear()
         config_overrides.update(merged)
@@ -776,6 +786,7 @@ def validate_blueprint_inputs(
     blueprint: Dict[str, Any],
     *,
     config_overrides: Dict[str, Any] | None = None,
+    env_overrides: Dict[str, str] | None = None,
 ) -> Dict[str, Any]:
     bundle_root = validate_blueprint_bundle(repo_root, blueprint)
     manifest_path = bundle_root / "manifest.json"
@@ -797,6 +808,7 @@ def validate_blueprint_inputs(
         config=config,
         config_overrides=config_overrides,
     )
+    env.update(string_env_values(env_overrides))
     return run_input_validation(bundle_root, manifest, config=config, env=env)
 
 

@@ -83,19 +83,22 @@ def run_blueprint(
     config_overrides = {}
     if req:
         config_overrides = dict(req.config_overwrite or req.config_overrides or {})
+    env_overrides = {}
     force = bool(req.force) if req else False
     state.close_client()
-    pre_launch_process = start_blueprint_pre_launch_hook(
+    start_blueprint_pre_launch_hook(
         repo_root,
         blueprint,
         run_id,
         config_overrides=config_overrides,
+        env_overrides=env_overrides,
     )
     if not force:
         validation = validate_blueprint_inputs(
             repo_root,
             blueprint,
             config_overrides=config_overrides,
+            env_overrides=env_overrides,
         )
         if not validation.get("ok"):
             cleanup_blueprint_run_processes(run_id, reason="validation_failed")
@@ -112,6 +115,7 @@ def run_blueprint(
         blueprint,
         run_id,
         config_overrides=config_overrides,
+        env_overrides=env_overrides,
         force=force,
     )
 

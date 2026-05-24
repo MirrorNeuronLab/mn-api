@@ -2,6 +2,7 @@ import unittest
 import io
 import json
 import os
+import sys
 import tempfile
 import zipfile
 from pathlib import Path
@@ -884,7 +885,23 @@ class TestAPI(unittest.TestCase):
                 ],
                 "edges": [],
                 "metadata": {},
+                "input_validation": {
+                    "rules": [
+                        {
+                            "name": "pre_launch_env",
+                            "type": "command",
+                            "command": [sys.executable, "payloads/check_pre_launch_env.py"],
+                        }
+                    ]
+                },
             }))
+            (repo / "worker_one" / "payloads" / "check_pre_launch_env.py").write_text(
+                "import os\n"
+                "from pathlib import Path\n"
+                "value = os.environ.get('VIDEO_SOURCE_URI', '')\n"
+                "Path('validation_env.txt').write_text(value)\n"
+                "raise SystemExit(0 if value == 'rtsp://host.openshell.internal:8562/video-watch' else 1)\n"
+            )
             script_path = repo / "worker_one" / "scripts" / "pre-launch.sh"
             script_path.parent.mkdir()
             script_path.write_text("#!/usr/bin/env bash\n")
@@ -896,15 +913,20 @@ class TestAPI(unittest.TestCase):
             }))
             process = SimpleNamespace(pid=6262, poll=lambda: None)
             captured_env = {}
+            pre_launch_commands = []
+            real_popen = __import__("subprocess").Popen
 
             def fake_popen(_command, **kwargs):
+                if _command != ["bash", str(script_path.resolve())]:
+                    return real_popen(_command, **kwargs)
+                pre_launch_commands.append(_command)
                 captured_env.update(kwargs["env"])
                 Path(kwargs["env"]["MN_PRE_LAUNCH_READY_FILE"]).write_text(json.dumps({
                     "status": "ready",
                     "env": {
                         "RTSP_PORT": "8562",
                         "STREAM_URI": "rtsp://127.0.0.1:8562/video-watch",
-                        "VIDEO_SOURCE_URI": "rtsp://127.0.0.1:8562/video-watch",
+                        "VIDEO_SOURCE_URI": "rtsp://host.openshell.internal:8562/video-watch",
                     },
                     "config": {
                         "video_source": {"uri": "rtsp://127.0.0.1:8562/video-watch"},
@@ -916,24 +938,26 @@ class TestAPI(unittest.TestCase):
             original = self._set_blueprint_config(repo)
             try:
                 with patch.dict('os.environ', {"MN_RUNS_ROOT": str(runs_root)}):
-                    with patch('mn_api.blueprints.subprocess.Popen', side_effect=fake_popen) as popen:
+                    with patch('mn_api.blueprints.subprocess.Popen', side_effect=fake_popen):
                         response = self.client.post(
                             "/api/v1/blueprints/worker_one/runs",
                             json={"run_id": "run-pre-launch"},
                         )
                         process_info = json.loads((runs_root / "run-pre-launch" / "pre_launch_process.json").read_text())
+                        validation_env = (repo / "worker_one" / "validation_env.txt").read_text()
             finally:
                 self._restore_config(original)
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["job_id"], "job-pre-launch")
-        self.assertEqual(popen.call_args.args[0], ["bash", str(script_path.resolve())])
+        self.assertEqual(pre_launch_commands, [["bash", str(script_path.resolve())]])
         self.assertEqual(captured_env["MN_RUN_ID"], "run-pre-launch")
         self.assertEqual(captured_env["MN_BLUEPRINT_BUNDLE_DIR"], str((repo / "worker_one").resolve()))
         self.assertEqual(json.loads(captured_env["MN_BLUEPRINT_CONFIG_JSON"])["identity"]["run_id"], "run-pre-launch")
         submitted_manifest = json.loads(mock_client.submit_job.call_args.args[0])
         submitted_env = submitted_manifest["nodes"][0]["config"]["environment"]
-        self.assertEqual(submitted_env["VIDEO_SOURCE_URI"], "rtsp://127.0.0.1:8562/video-watch")
+        self.assertEqual(submitted_env["VIDEO_SOURCE_URI"], "rtsp://host.openshell.internal:8562/video-watch")
+        self.assertEqual(validation_env, "rtsp://host.openshell.internal:8562/video-watch")
         self.assertEqual(process_info["pid"], 6262)
 
     def test_blueprint_validate_runs_input_validation(self):
@@ -1025,6 +1049,72 @@ class TestAPI(unittest.TestCase):
         self.assertTrue(json.loads(manifest_json)["metadata"]["mn_validation"]["force"])
         self.assertEqual(json.loads(manifest_json)["metadata"]["mn_validation"]["status"], "skipped")
         self.assertTrue(mock_client.submit_job.call_args.kwargs["force"])
+
+    @patch('mn_api.state.client')
+    def test_blueprint_run_validation_failure_runs_post_launch_cleanup(self, mock_client):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            runs_root = (repo / "runs").resolve()
+            self._write_blueprint_repo(repo)
+            (repo / "worker_one" / "manifest.json").write_text(json.dumps({
+                "graph_id": "worker_one_graph",
+                "nodes": [],
+                "edges": [],
+                "metadata": {},
+                "input_validation": {
+                    "rules": [
+                        {
+                            "name": "model_url",
+                            "type": "pattern",
+                            "path": "llm.api_base",
+                            "pattern": "^https?://",
+                        }
+                    ]
+                },
+            }))
+            scripts_dir = repo / "worker_one" / "scripts"
+            scripts_dir.mkdir()
+            (scripts_dir / "pre-launch.sh").write_text(
+                "#!/usr/bin/env bash\n"
+                "printf 'ready\\n' > \"$MN_PRE_LAUNCH_READY_FILE\"\n"
+                "while true; do sleep 1; done\n"
+            )
+            (scripts_dir / "post-launch.sh").write_text(
+                "#!/usr/bin/env bash\n"
+                "cat > \"$MN_RUN_DIR/post_cleanup_seen.json\" <<EOF\n"
+                "{\n"
+                "  \"reason\": \"$MN_POST_LAUNCH_REASON\",\n"
+                "  \"run_id\": \"$MN_RUN_ID\",\n"
+                "  \"ready_file\": \"$MN_PRE_LAUNCH_READY_FILE\",\n"
+                "  \"process_file\": \"$MN_PRE_LAUNCH_PROCESS_FILE\",\n"
+                "  \"state_file\": \"$MN_POST_LAUNCH_STATE_FILE\"\n"
+                "}\n"
+                "EOF\n"
+            )
+            config_dir = repo / "worker_one" / "config"
+            config_dir.mkdir()
+            (config_dir / "default.json").write_text(json.dumps({
+                "llm": {"api_base": "not-a-url"}
+            }))
+            original = self._set_blueprint_config(repo)
+            try:
+                with patch.dict('os.environ', {"MN_RUNS_ROOT": str(runs_root)}):
+                    response = self.client.post(
+                        "/api/v1/blueprints/worker_one/runs",
+                        json={"run_id": "run-post-cleanup"},
+                    )
+                    cleanup_record = json.loads((runs_root / "run-post-cleanup" / "post_cleanup_seen.json").read_text())
+            finally:
+                self._restore_config(original)
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["error"], "input_validation_failed")
+        self.assertEqual(cleanup_record["reason"], "validation_failed")
+        self.assertEqual(cleanup_record["run_id"], "run-post-cleanup")
+        self.assertTrue(cleanup_record["ready_file"].endswith("pre_launch.ready"))
+        self.assertTrue(cleanup_record["process_file"].endswith("pre_launch_process.json"))
+        self.assertTrue(cleanup_record["state_file"].endswith("post_launch_state.json"))
+        mock_client.submit_job.assert_not_called()
 
     @patch('mn_api.state.client')
     def test_blueprint_run_rejects_invalid_run_id_before_submit(self, mock_client):
