@@ -457,7 +457,9 @@ class TestAPI(unittest.TestCase):
                 "  \"reason\": \"$MN_POST_LAUNCH_REASON\",\n"
                 "  \"run_id\": \"$MN_RUN_ID\",\n"
                 "  \"rtsp_port\": \"$RTSP_PORT\",\n"
-                "  \"state_file\": \"$MN_POST_LAUNCH_STATE_FILE\"\n"
+                "  \"state_file\": \"$MN_POST_LAUNCH_STATE_FILE\",\n"
+                "  \"pre_launch_pid\": \"$MN_PRE_LAUNCH_PID\",\n"
+                "  \"pre_launch_pgid\": \"$MN_PRE_LAUNCH_PROCESS_GROUP_ID\"\n"
                 "}\n"
                 "EOF\n"
             )
@@ -472,6 +474,10 @@ class TestAPI(unittest.TestCase):
                     "RTSP_PORT": "8562",
                     "VIDEO_SOURCE_URI": "rtsp://host.openshell.internal:8562/video-watch",
                 },
+            }))
+            (run_dir / "pre_launch_process.json").write_text(json.dumps({
+                "pid": 24679,
+                "process_group_id": 24680,
             }))
             (run_dir / "post_launch_hook.json").write_text(json.dumps({
                 "command": ["bash", str(script_path)],
@@ -495,6 +501,8 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(cleanup_record["run_id"], "run-cancel-cleanup")
         self.assertEqual(cleanup_record["rtsp_port"], "8562")
         self.assertTrue(cleanup_record["state_file"].endswith("post_launch_state.json"))
+        self.assertEqual(cleanup_record["pre_launch_pid"], "24679")
+        self.assertEqual(cleanup_record["pre_launch_pgid"], "24680")
 
     @patch('mn_api.state.client')
     def test_blueprint_run_cleans_stale_same_blueprint_hooks_before_start(self, mock_client):

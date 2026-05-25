@@ -37,6 +37,7 @@ PRE_LAUNCH_SCRIPT = Path("scripts/pre-launch.sh")
 POST_LAUNCH_SCRIPT = Path("scripts/post-launch.sh")
 TERMINAL_JOB_STATUSES = {"completed", "failed", "cancelled"}
 UNMAPPED_RUN_STALE_SECONDS = 120
+PROCESS_CLEANUP_TIMEOUT_SECONDS = 5.0
 
 
 def workspace_root() -> Path:
@@ -714,6 +715,12 @@ def start_blueprint_pre_launch_hook(
         "run_id": run_id,
         "started_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
+    process_group_id = process_group_id_for_pid(process.pid)
+    if process_group_id:
+        process_info["process_group_id"] = process_group_id
+    session_id = process_session_id_for_pid(process.pid)
+    if session_id:
+        process_info["session_id"] = session_id
     (run_dir / "pre_launch_process.json").write_text(json.dumps(process_info, indent=2, sort_keys=True) + "\n")
 
     try:
@@ -816,26 +823,238 @@ def terminate_pre_launch_process(process: subprocess.Popen[Any] | None) -> None:
             pass
 
 
+def positive_int(value: Any) -> int | None:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 1 else None
+
+
+def process_group_id_for_pid(pid: int) -> int | None:
+    try:
+        return positive_int(os.getpgid(pid))
+    except OSError:
+        return None
+
+
+def process_session_id_for_pid(pid: int) -> int | None:
+    try:
+        return positive_int(os.getsid(pid))
+    except OSError:
+        return None
+
+
+def cleanup_timeout_seconds() -> float:
+    try:
+        return max(float(os.getenv("MN_PROCESS_CLEANUP_TIMEOUT_SECONDS", str(PROCESS_CLEANUP_TIMEOUT_SECONDS))), 0.1)
+    except ValueError:
+        return PROCESS_CLEANUP_TIMEOUT_SECONDS
+
+
+def process_group_exists(process_group_id: int) -> bool:
+    try:
+        os.killpg(process_group_id, 0)
+        return True
+    except OSError:
+        return False
+
+
+def pid_exists(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def wait_until_gone(exists, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not exists():
+            return True
+        time.sleep(0.1)
+    return not exists()
+
+
+def reap_child_pid(pid: int) -> bool:
+    try:
+        waited_pid, _status = os.waitpid(pid, os.WNOHANG)
+    except ChildProcessError:
+        return False
+    except OSError:
+        return False
+    return waited_pid == pid
+
+
+def wait_for_pid_exit(pid: int, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if reap_child_pid(pid) or not pid_exists(pid):
+            return True
+        time.sleep(0.1)
+    return reap_child_pid(pid) or not pid_exists(pid)
+
+
+def terminate_process_group(process_group_id: int | None, *, leader_pid: int | None = None) -> None:
+    if not process_group_id:
+        return
+    current_group = process_group_id_for_pid(os.getpid())
+    if current_group == process_group_id:
+        return
+    if not process_group_exists(process_group_id):
+        return
+
+    timeout = cleanup_timeout_seconds()
+
+    def group_is_gone() -> bool:
+        if leader_pid is not None:
+            reap_child_pid(leader_pid)
+        return not process_group_exists(process_group_id)
+
+    try:
+        os.killpg(process_group_id, signal.SIGTERM)
+    except OSError:
+        return
+    if wait_until_gone(lambda: not group_is_gone(), timeout):
+        return
+    try:
+        os.killpg(process_group_id, signal.SIGKILL)
+    except OSError:
+        pass
+    wait_until_gone(lambda: not group_is_gone(), timeout)
+
+
+def terminate_pid(pid: int | None) -> None:
+    if not pid or not pid_exists(pid):
+        return
+    timeout = cleanup_timeout_seconds()
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        return
+    if wait_for_pid_exit(pid, timeout):
+        return
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except OSError:
+        pass
+    wait_for_pid_exit(pid, timeout)
+
+
 def cleanup_run_process(run_dir: Path, metadata_name: str) -> None:
     process_path = run_dir / metadata_name
     if not process_path.is_file():
         return
     try:
         data = json.loads(process_path.read_text())
-        pid = int(data.get("pid"))
-    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError):
         return
-    try:
-        os.kill(pid, 0)
-    except OSError:
+    if not isinstance(data, dict):
         return
+    pid = positive_int(data.get("pid"))
+    process_group_id = positive_int(data.get("process_group_id") or data.get("pgid"))
+    if process_group_id is None and pid is not None:
+        process_group_id = process_group_id_for_pid(pid)
+    terminate_process_group(process_group_id, leader_pid=pid)
+    terminate_pid(pid)
+
+
+def read_optional_json_object(path: Path) -> Dict[str, Any]:
     try:
-        os.killpg(pid, signal.SIGTERM)
+        value = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def collect_run_cleanup_metadata(run_dir: Path) -> Dict[str, Any]:
+    process_info = read_optional_json_object(run_dir / "pre_launch_process.json")
+    state = read_optional_json_object(run_dir / "post_launch_state.json")
+    ready = read_optional_json_object(run_dir / "pre_launch.ready")
+    ready_env = ready.get("env") if isinstance(ready.get("env"), dict) else {}
+    ports = {
+        positive_int(state.get("rtsp_port")),
+        positive_int(state.get("webrtc_port")),
+        positive_int(state.get("webrtc_local_tcp_port")),
+        positive_int(ready_env.get("RTSP_PORT")),
+        positive_int(ready_env.get("WEBRTC_PORT")),
+        positive_int(ready_env.get("WEBRTC_LOCAL_TCP_PORT")),
+    }
+    pids = {
+        positive_int(process_info.get("pid")),
+        positive_int(state.get("server_pid")),
+        positive_int(state.get("publisher_pid")),
+    }
+    process_group_ids = {
+        positive_int(process_info.get("process_group_id") or process_info.get("pgid")),
+    }
+    return {
+        "ports": {port for port in ports if port is not None},
+        "pids": {pid for pid in pids if pid is not None},
+        "process_group_ids": {pgid for pgid in process_group_ids if pgid is not None},
+    }
+
+
+def command_for_pid(pid: int) -> str:
+    try:
+        result = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
     except OSError:
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except OSError:
-            pass
+        return ""
+    return result.stdout.strip()
+
+
+def listener_pids_for_port(port: int) -> set[int]:
+    if not shutil.which("lsof"):
+        return set()
+    try:
+        result = subprocess.run(
+            ["lsof", "-nP", f"-tiTCP:{port}", "-sTCP:LISTEN"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return set()
+    pids: set[int] = set()
+    for line in result.stdout.splitlines():
+        pid = positive_int(line.strip())
+        if pid is not None:
+            pids.add(pid)
+    return pids
+
+
+def cleanup_owned_port_listeners(metadata: Dict[str, Any]) -> None:
+    ports = metadata.get("ports") if isinstance(metadata.get("ports"), set) else set()
+    if not ports:
+        return
+    recorded_pids = metadata.get("pids") if isinstance(metadata.get("pids"), set) else set()
+    recorded_groups = metadata.get("process_group_ids") if isinstance(metadata.get("process_group_ids"), set) else set()
+    for port in ports:
+        for pid in listener_pids_for_port(port):
+            if port_listener_is_cleanup_owned(pid, recorded_pids, recorded_groups):
+                terminate_pid(pid)
+
+
+def port_listener_is_cleanup_owned(pid: int, recorded_pids: set[int], recorded_groups: set[int]) -> bool:
+    if pid in recorded_pids:
+        return True
+    process_group_id = process_group_id_for_pid(pid)
+    if process_group_id is not None and process_group_id in recorded_groups:
+        return True
+    command = command_for_pid(pid)
+    owns_video_watch_artifacts = (
+        "video_watch_assistant" in command
+        or "/tmp/video_watch_assistant_mediamtx." in command
+    )
+    if not owns_video_watch_artifacts:
+        return False
+    return any(token in command for token in ("mediamtx", "rtsp-simple-server", "ffmpeg", "pre-launch.sh"))
 
 
 def cleanup_post_launch_hook(run_dir: Path, *, reason: str) -> None:
@@ -899,16 +1118,28 @@ def post_launch_env(run_dir: Path, hook_info: Dict[str, Any], *, reason: str) ->
     ready_path = Path(ready_value) if isinstance(ready_value, str) and ready_value else run_dir / "pre_launch.ready"
     pre_launch_process_value = hook_info.get("pre_launch_process_file")
     state_value = hook_info.get("state_file")
+    pre_launch_process_path = Path(pre_launch_process_value) if isinstance(pre_launch_process_value, str) and pre_launch_process_value else run_dir / "pre_launch_process.json"
     env = {
         "MN_RUN_ID": str(hook_info.get("run_id") or run_dir.name),
         "MN_RUN_DIR": str(run_dir),
         "MN_RUNS_ROOT": str(run_dir.parent),
         "MN_BLUEPRINT_BUNDLE_DIR": str(hook_info.get("bundle_dir") or ""),
         "MN_PRE_LAUNCH_READY_FILE": str(ready_path),
-        "MN_PRE_LAUNCH_PROCESS_FILE": str(pre_launch_process_value or run_dir / "pre_launch_process.json"),
+        "MN_PRE_LAUNCH_PROCESS_FILE": str(pre_launch_process_path),
         "MN_POST_LAUNCH_STATE_FILE": str(state_value or run_dir / "post_launch_state.json"),
         "MN_POST_LAUNCH_REASON": reason,
     }
+    try:
+        pre_launch_process = json.loads(pre_launch_process_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        pre_launch_process = {}
+    if isinstance(pre_launch_process, dict):
+        pid = positive_int(pre_launch_process.get("pid"))
+        process_group_id = positive_int(pre_launch_process.get("process_group_id") or pre_launch_process.get("pgid"))
+        if pid:
+            env["MN_PRE_LAUNCH_PID"] = str(pid)
+        if process_group_id:
+            env["MN_PRE_LAUNCH_PROCESS_GROUP_ID"] = str(process_group_id)
     try:
         ready = json.loads(ready_path.read_text())
     except (OSError, json.JSONDecodeError):
@@ -921,8 +1152,10 @@ def post_launch_env(run_dir: Path, hook_info: Dict[str, Any], *, reason: str) ->
 
 def cleanup_blueprint_run_processes(run_id: str, *, reason: str = "job_cancelled") -> None:
     run_dir = Path(shared_runs_root()).expanduser() / run_id
-    cleanup_run_process(run_dir, "pre_launch_process.json")
+    cleanup_metadata = collect_run_cleanup_metadata(run_dir)
     cleanup_post_launch_hook(run_dir, reason=reason)
+    cleanup_run_process(run_dir, "pre_launch_process.json")
+    cleanup_owned_port_listeners(cleanup_metadata)
     cleanup_run_process(run_dir, "web_ui_process.json")
 
 

@@ -1,5 +1,11 @@
 import json
+import os
+import shutil
+import socket
+import subprocess
+import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,6 +16,8 @@ from fastapi import HTTPException
 from mn_api.blueprints import (
     blueprint_bundle_root,
     cached_git_repo_path,
+    cleanup_blueprint_run_processes,
+    cleanup_run_process,
     ensure_git_blueprint_repo,
     filter_blueprints_by_category,
     load_blueprint_categories,
@@ -17,6 +25,31 @@ from mn_api.blueprints import (
     load_blueprint_catalog,
     validate_run_id,
 )
+
+
+def _pid_exists(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _wait_until(predicate, timeout: float = 5.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.1)
+    return predicate()
+
+
+def _port_accepts_connection(port: int) -> bool:
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+            return True
+    except OSError:
+        return False
 
 
 class TestBlueprintServices(unittest.TestCase):
@@ -371,3 +404,117 @@ class TestBlueprintServices(unittest.TestCase):
 
         self.assertEqual(raised.exception.status_code, 400)
         self.assertEqual(raised.exception.detail, "invalid run id")
+
+    def test_cleanup_run_process_uses_recorded_process_group_after_parent_exits(self):
+        child_pid: int | None = None
+        process_group_id: int | None = None
+        proc: subprocess.Popen | None = None
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            run_dir = root / "run"
+            run_dir.mkdir()
+            marker = root / "spawned.json"
+            spawner = root / "spawn_child.py"
+            spawner.write_text(
+                "import json\n"
+                "import os\n"
+                "import subprocess\n"
+                "import sys\n"
+                "from pathlib import Path\n"
+                "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])\n"
+                "Path(sys.argv[1]).write_text(json.dumps({\n"
+                "    'parent_pid': os.getpid(),\n"
+                "    'process_group_id': os.getpgrp(),\n"
+                "    'child_pid': child.pid,\n"
+                "}))\n"
+            )
+
+            try:
+                proc = subprocess.Popen([sys.executable, str(spawner), str(marker)], start_new_session=True)
+                self.assertTrue(_wait_until(marker.exists), "spawn marker was not written")
+                process_info = json.loads(marker.read_text())
+                child_pid = int(process_info["child_pid"])
+                process_group_id = int(process_info["process_group_id"])
+                proc.wait(timeout=5)
+                self.assertTrue(_pid_exists(child_pid), "spawned child exited before cleanup")
+
+                (run_dir / "pre_launch_process.json").write_text(json.dumps({
+                    "pid": process_info["parent_pid"],
+                    "process_group_id": process_group_id,
+                }))
+
+                cleanup_run_process(run_dir, "pre_launch_process.json")
+
+                self.assertTrue(
+                    _wait_until(lambda: not _pid_exists(child_pid), timeout=8),
+                    "cleanup did not stop the recorded process group child",
+                )
+            finally:
+                if process_group_id is not None:
+                    try:
+                        os.killpg(process_group_id, 9)
+                    except OSError:
+                        pass
+                if child_pid is not None and _pid_exists(child_pid):
+                    try:
+                        os.kill(child_pid, 9)
+                    except OSError:
+                        pass
+                if proc is not None and proc.poll() is None:
+                    proc.kill()
+                    proc.wait(timeout=5)
+
+    def test_cleanup_blueprint_run_processes_collects_recorded_port_listener(self):
+        if not shutil.which("lsof"):
+            self.skipTest("lsof is required to discover local listener PIDs")
+        server: subprocess.Popen | None = None
+        port: int | None = None
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            runs_root = root / "runs"
+            run_dir = runs_root / "run-port-listener"
+            run_dir.mkdir(parents=True)
+            marker = root / "listener.json"
+            server_script = root / "listener.py"
+            server_script.write_text(
+                "import json\n"
+                "import os\n"
+                "import socket\n"
+                "import sys\n"
+                "from pathlib import Path\n"
+                "sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\n"
+                "sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)\n"
+                "sock.bind(('127.0.0.1', 0))\n"
+                "sock.listen(5)\n"
+                "Path(sys.argv[1]).write_text(json.dumps({'pid': os.getpid(), 'port': sock.getsockname()[1]}))\n"
+                "while True:\n"
+                "    conn, _addr = sock.accept()\n"
+                "    conn.close()\n"
+            )
+
+            try:
+                server = subprocess.Popen([sys.executable, str(server_script), str(marker)])
+                self.assertTrue(_wait_until(marker.exists), "listener marker was not written")
+                info = json.loads(marker.read_text())
+                port = int(info["port"])
+                self.assertTrue(_port_accepts_connection(port), "test listener did not accept connections")
+                (run_dir / "post_launch_state.json").write_text(json.dumps({
+                    "server_pid": int(info["pid"]),
+                    "rtsp_port": port,
+                }))
+
+                with patch.dict(os.environ, {
+                    "MN_RUNS_ROOT": str(runs_root),
+                    "MN_PROCESS_CLEANUP_TIMEOUT_SECONDS": "1",
+                }):
+                    cleanup_blueprint_run_processes("run-port-listener", reason="test")
+
+                self.assertTrue(
+                    _wait_until(lambda: not _pid_exists(int(info["pid"])), timeout=5),
+                    "cleanup did not stop the recorded port listener",
+                )
+                self.assertFalse(_port_accepts_connection(port))
+            finally:
+                if server is not None and server.poll() is None:
+                    server.kill()
+                    server.wait(timeout=5)
