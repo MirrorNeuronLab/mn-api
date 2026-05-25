@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from mn_api import state
 from mn_api.blueprints import (
@@ -122,14 +122,19 @@ def run_blueprint(
                 detail="Fix the highlighted blueprint input fields, or pass force=true to run anyway.",
                 extra={"run_id": run_id, "blueprint": blueprint},
             )
-    manifest_json, payloads = load_blueprint_bundle(
-        repo_root,
-        blueprint,
-        run_id,
-        config_overrides=config_overrides,
-        env_overrides=env_overrides,
-        force=force,
-    )
+    try:
+        manifest_json, payloads = load_blueprint_bundle(
+            repo_root,
+            blueprint,
+            run_id,
+            config_overrides=config_overrides,
+            env_overrides=env_overrides,
+            force=force,
+            web_ui_reserved_ports=runtime_blueprint_web_ui_reserved_ports(),
+        )
+    except HTTPException:
+        cleanup_blueprint_run_processes(run_id, reason="manifest_prepare_failed")
+        raise
 
     try:
         if force:
@@ -171,3 +176,37 @@ def runtime_active_job_ids() -> set[str] | None:
     except Exception:
         return None
     return active_job_ids_from_jobs_payload(payload)
+
+
+def runtime_blueprint_web_ui_reserved_ports() -> set[int]:
+    try:
+        payload = json.loads(
+            state.client.resolve_service(
+                "blueprint-web-ui",
+                tags=["web_ui"],
+                passing_only=False,
+            )
+        )
+    except Exception:
+        return set()
+    return service_ports_from_payload(payload)
+
+
+def service_ports_from_payload(payload: object) -> set[int]:
+    if not isinstance(payload, dict):
+        return set()
+    services = payload.get("services")
+    if not isinstance(services, list):
+        return set()
+    ports: set[int] = set()
+    for service in services:
+        if not isinstance(service, dict):
+            continue
+        raw_port = service.get("port")
+        try:
+            port = int(raw_port)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= port <= 65535:
+            ports.add(port)
+    return ports

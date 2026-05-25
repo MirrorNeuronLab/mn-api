@@ -238,6 +238,70 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertEqual(env["MN_LLM_MODEL"], "ollama/test")
         self.assertEqual(payload_bytes, {"nested/input.txt": b"hello"})
 
+    def test_load_blueprint_bundle_stages_configured_local_input_folder(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            host_docs = repo / "host_tax_docs"
+            host_docs.mkdir()
+            (host_docs / "w2.txt").write_text("box 1 wages 100\n")
+            (host_docs / "ignore.csv").write_text("skip\n")
+            bundle = repo / "tax_worker"
+            (bundle / "payloads" / "tax_workflow").mkdir(parents=True)
+            config_dir = bundle / "config"
+            config_dir.mkdir()
+            (config_dir / "default.json").write_text(
+                json.dumps(
+                    {
+                        "tax_documents": {"folder_path": ""},
+                        "inputs": {"payload": {"document_folder": ""}},
+                        "local_inputs": {
+                            "folders": [
+                                {
+                                    "config_path": "tax_documents.folder_path",
+                                    "payload_path": "tax_workflow/mn_local_inputs/tax_documents",
+                                    "runtime_path": "mn_local_inputs/tax_documents",
+                                    "allowed_extensions": [".txt"],
+                                    "linked_config_paths": ["inputs.payload.document_folder"],
+                                }
+                            ]
+                        },
+                    }
+                )
+            )
+            (bundle / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "graph_id": "tax_worker",
+                        "nodes": [
+                            {
+                                "node_id": "document_intake_agent",
+                                "config": {"environment": {}},
+                            }
+                        ],
+                        "metadata": {},
+                    }
+                )
+            )
+
+            manifest_json, payload_bytes = load_blueprint_bundle(
+                repo.resolve(),
+                {"id": "tax_worker", "path": "tax_worker"},
+                "tax-run-1",
+                config_overrides={"tax_documents": {"folder_path": str(host_docs)}},
+            )
+
+        manifest = json.loads(manifest_json)
+        env = manifest["nodes"][0]["config"]["environment"]
+        injected_config = json.loads(env["MN_BLUEPRINT_CONFIG_JSON"])
+        self.assertEqual(injected_config["tax_documents"]["folder_path"], "mn_local_inputs/tax_documents")
+        self.assertEqual(injected_config["inputs"]["payload"]["document_folder"], "mn_local_inputs/tax_documents")
+        self.assertEqual(
+            payload_bytes["tax_workflow/mn_local_inputs/tax_documents/w2.txt"],
+            b"box 1 wages 100\n",
+        )
+        self.assertNotIn("tax_workflow/mn_local_inputs/tax_documents/ignore.csv", payload_bytes)
+        self.assertEqual(manifest["metadata"]["mn_local_inputs"]["folders"][0]["file_count"], 1)
+
     def test_load_blueprint_bundle_injects_runtime_web_ui_service(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
@@ -284,20 +348,22 @@ class TestBlueprintServices(unittest.TestCase):
             with patch.dict(
                 os.environ,
                 {
-                    "MN_BLUEPRINT_WEB_UI_PORT_START": "58210",
-                    "MN_BLUEPRINT_WEB_UI_PORT_END": "58210",
+                    "MN_BLUEPRINT_WEB_UI_PORT_START": "61000",
+                    "MN_BLUEPRINT_WEB_UI_PORT_END": "61001",
+                    "MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE": "prepublished",
                 },
-            ), patch("mn_blueprint_support.runtime_web_ui.web_ui_port_available", return_value=True):
-                manifest_json, _payload_bytes = load_blueprint_bundle(
+            ), patch("mn_blueprint_support.runtime_web_ui.web_ui_port_available", return_value=False):
+                manifest_json, payload_bytes = load_blueprint_bundle(
                     repo.resolve(),
                     {"id": "video_watch_assistant", "path": "video_watch_assistant"},
                     "video-run-7",
+                    web_ui_reserved_ports={61000},
                 )
 
         manifest = json.loads(manifest_json)
         web_ui_node = next(node for node in manifest["nodes"] if node["node_id"] == "web_ui_dashboard")
         self.assertIn("web_ui_dashboard", manifest["entrypoints"])
-        self.assertEqual(web_ui_node["resources"]["ports"][0]["port"], 58210)
+        self.assertEqual(web_ui_node["resources"]["ports"][0]["port"], 61001)
         self.assertEqual(web_ui_node["services"][0]["name"], "blueprint-web-ui")
         self.assertEqual(web_ui_node["services"][0]["meta"]["run_id"], "video-run-7")
         self.assertEqual(
@@ -306,7 +372,11 @@ class TestBlueprintServices(unittest.TestCase):
         )
         self.assertEqual(
             manifest["metadata"]["blueprint_web_ui_service"]["url"],
-            "http://localhost:58210",
+            "http://localhost:61001",
+        )
+        self.assertIn(
+            ".mn_runtime_web_ui/src/mn_blueprint_support/gradio_dashboard.py",
+            payload_bytes,
         )
 
     def test_dirty_hosted_git_cache_is_reset_before_pull(self):

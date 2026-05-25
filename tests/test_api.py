@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from mn_api.config import ApiConfig
 from mn_api import state
 from mn_api.main import app
+from mn_api.routes.blueprints import service_ports_from_payload
 from unittest.mock import patch
 import grpc
 
@@ -153,6 +154,21 @@ class TestAPI(unittest.TestCase):
             config = ApiConfig.from_env()
 
         self.assertEqual(config.grpc_auth_token, "auth-secret")
+
+    def test_service_ports_from_payload_extracts_valid_ports(self):
+        self.assertEqual(
+            service_ports_from_payload(
+                {
+                    "services": [
+                        {"name": "blueprint-web-ui", "port": 61000},
+                        {"name": "blueprint-web-ui", "port": "61001"},
+                        {"name": "blueprint-web-ui", "port": "not-a-port"},
+                        {"name": "other"},
+                    ]
+                }
+            ),
+            {61000, 61001},
+        )
 
     def test_config_uses_grpc_admin_token(self):
         with patch.dict(os.environ, {"MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN": "admin-secret"}, clear=False):

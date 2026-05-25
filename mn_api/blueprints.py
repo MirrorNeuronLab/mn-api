@@ -430,6 +430,7 @@ def load_blueprint_bundle(
     config_overrides: Dict[str, Any] | None = None,
     env_overrides: Dict[str, str] | None = None,
     force: bool = False,
+    web_ui_reserved_ports: set[int] | None = None,
 ) -> tuple[str, Dict[str, bytes]]:
     bundle_root = validate_blueprint_bundle(repo_root, blueprint)
     manifest_path = bundle_root / "manifest.json"
@@ -476,6 +477,7 @@ def load_blueprint_bundle(
             run_id=run_id,
             runs_root=runs_root,
             env_overrides=env_overrides,
+            reserved_ports=web_ui_reserved_ports,
         )
     runtime_env = blueprint_runtime_environment(
         bundle_root,
@@ -493,6 +495,8 @@ def load_blueprint_bundle(
         for payload_path in payloads_path.rglob("*"):
             if payload_path.is_file():
                 payloads[payload_path.relative_to(payloads_path).as_posix()] = payload_path.read_bytes()
+    payloads.update(runtime_web_ui_support_payloads_for_manifest(manifest))
+    stage_local_input_payloads_for_manifest(manifest, payloads, bundle_dir=bundle_root)
 
     return json.dumps(manifest), payloads
 
@@ -505,6 +509,7 @@ def inject_runtime_web_ui_service_for_submission(
     run_id: str,
     runs_root: str,
     env_overrides: Dict[str, str] | None = None,
+    reserved_ports: set[int] | None = None,
 ) -> Dict[str, Any] | None:
     inject_local_blueprint_support_path()
     try:
@@ -514,14 +519,49 @@ def inject_runtime_web_ui_service_for_submission(
             status_code=500,
             detail="blueprint web UI service injection requires mn_blueprint_support",
         ) from exc
-    return inject_runtime_web_ui_service(
-        manifest,
-        bundle_dir=bundle_dir,
-        config=config,
-        run_id=run_id,
-        runs_root=runs_root,
-        env_overrides=env_overrides,
-    )
+    try:
+        return inject_runtime_web_ui_service(
+            manifest,
+            bundle_dir=bundle_dir,
+            config=config,
+            run_id=run_id,
+            runs_root=runs_root,
+            env_overrides=env_overrides,
+            reserved_ports=reserved_ports,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+def runtime_web_ui_support_payloads_for_manifest(manifest: Dict[str, Any]) -> Dict[str, bytes]:
+    inject_local_blueprint_support_path()
+    try:
+        from mn_blueprint_support import runtime_web_ui_service_from_manifest, runtime_web_ui_support_payloads
+    except ImportError:
+        return {}
+    if not runtime_web_ui_service_from_manifest(manifest):
+        return {}
+    return runtime_web_ui_support_payloads()
+
+
+def stage_local_input_payloads_for_manifest(
+    manifest: Dict[str, Any],
+    payloads: Dict[str, bytes],
+    *,
+    bundle_dir: Path,
+) -> Dict[str, Any]:
+    inject_local_blueprint_support_path()
+    try:
+        from mn_blueprint_support import stage_local_input_payloads_for_manifest as stage_payloads
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="local blueprint input staging requires mn_blueprint_support",
+        ) from exc
+    try:
+        return stage_payloads(manifest, payloads, bundle_dir=bundle_dir)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def prepare_openshell_custom_images(bundle_root: Path, manifest: Dict[str, Any]) -> None:
@@ -1732,8 +1772,24 @@ def inject_node_environment(manifest: Dict[str, Any], env: Dict[str, str]) -> No
         environment = node_config.setdefault("environment", {})
         if not isinstance(environment, dict):
             continue
-        environment.update(env)
+        node_env = dict(env)
+        if environment.get("PYTHONPATH") and node_env.get("PYTHONPATH"):
+            node_env["PYTHONPATH"] = merge_path_values(
+                str(environment["PYTHONPATH"]),
+                str(node_env["PYTHONPATH"]),
+            )
+        environment.update(node_env)
         add_mn_llm_aliases(environment)
+
+
+def merge_path_values(*values: str) -> str:
+    merged: list[str] = []
+    for value in values:
+        for item in value.split(os.pathsep):
+            item = item.strip()
+            if item and item not in merged:
+                merged.append(item)
+    return os.pathsep.join(merged)
 
 
 def add_mn_llm_aliases(environment: Dict[str, Any]) -> None:
