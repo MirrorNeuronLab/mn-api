@@ -67,7 +67,11 @@ class TestAPI(unittest.TestCase):
     def test_health(self):
         response = self.client.get("/api/v1/health")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"status": "ok", "auth": "disabled"})
+        body = response.json()
+        self.assertEqual(body["status"], "ok")
+        self.assertEqual(body["auth"], "disabled")
+        self.assertIn("blueprint_repo", body)
+        self.assertIn("runs_root", body)
 
     def test_config_uses_grpc_auth_token(self):
         with patch.dict(os.environ, {"MN_GRPC_AUTH_TOKEN": "auth-secret"}, clear=False):
@@ -80,6 +84,37 @@ class TestAPI(unittest.TestCase):
             config = ApiConfig.from_env()
 
         self.assertEqual(config.grpc_admin_token, "admin-secret")
+
+    def test_config_uses_dev_local_blueprint_repo_only_in_dev(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(
+                os.environ,
+                {
+                    "MN_ENV": "dev",
+                    "MN_BLUEPRINT_REPO": "https://example.com/base-blueprints.git",
+                    "MN_DEV_LOCAL_BLUEPRINT_REPO": tmp,
+                },
+                clear=False,
+            ):
+                config = ApiConfig.from_env()
+
+        self.assertEqual(config.blueprint_repo, tmp)
+        self.assertEqual(config.configured_blueprint_repo, "https://example.com/base-blueprints.git")
+        self.assertEqual(config.dev_local_blueprint_repo, tmp)
+
+    def test_config_rejects_dev_local_blueprint_repo_in_prod(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(
+                os.environ,
+                {
+                    "MN_ENV": "prod",
+                    "MN_API_TOKEN": "api-secret",
+                    "MN_DEV_LOCAL_BLUEPRINT_REPO": tmp,
+                },
+                clear=False,
+            ):
+                with self.assertRaisesRegex(ValueError, "MN_DEV_LOCAL_BLUEPRINT_REPO"):
+                    ApiConfig.from_env()
 
     def test_config_uses_local_grpc_token_files(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -402,6 +437,135 @@ class TestAPI(unittest.TestCase):
         response = self.client.post("/api/v1/jobs/test_job_123/cancel")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"status": "cancelled", "job_id": "test_job_123"})
+
+    @patch('mn_api.state.client')
+    def test_cancel_job_runs_blueprint_post_launch_cleanup(self, mock_client):
+        mock_client.cancel_job.return_value = "cancelled"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            runs_root = root / "runs"
+            run_dir = runs_root / "run-cancel-cleanup"
+            bundle_dir = root / "bundle"
+            scripts_dir = bundle_dir / "scripts"
+            scripts_dir.mkdir(parents=True)
+            run_dir.mkdir(parents=True)
+            script_path = scripts_dir / "post-launch.sh"
+            script_path.write_text(
+                "#!/usr/bin/env bash\n"
+                "cat > \"$MN_RUN_DIR/post_cleanup_seen.json\" <<EOF\n"
+                "{\n"
+                "  \"reason\": \"$MN_POST_LAUNCH_REASON\",\n"
+                "  \"run_id\": \"$MN_RUN_ID\",\n"
+                "  \"rtsp_port\": \"$RTSP_PORT\",\n"
+                "  \"state_file\": \"$MN_POST_LAUNCH_STATE_FILE\"\n"
+                "}\n"
+                "EOF\n"
+            )
+            (run_dir / "job.json").write_text(json.dumps({
+                "job_id": "job-cleanup",
+                "run_id": "run-cancel-cleanup",
+                "blueprint_id": "worker_one",
+            }))
+            (run_dir / "pre_launch.ready").write_text(json.dumps({
+                "status": "ready",
+                "env": {
+                    "RTSP_PORT": "8562",
+                    "VIDEO_SOURCE_URI": "rtsp://host.openshell.internal:8562/video-watch",
+                },
+            }))
+            (run_dir / "post_launch_hook.json").write_text(json.dumps({
+                "command": ["bash", str(script_path)],
+                "script": str(script_path),
+                "cwd": str(bundle_dir),
+                "log": str(run_dir / "post_launch.log"),
+                "run_id": "run-cancel-cleanup",
+                "bundle_dir": str(bundle_dir),
+                "state_file": str(run_dir / "post_launch_state.json"),
+                "pre_launch_ready_file": str(run_dir / "pre_launch.ready"),
+                "pre_launch_process_file": str(run_dir / "pre_launch_process.json"),
+            }))
+
+            with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
+                response = self.client.post("/api/v1/jobs/job-cleanup/cancel")
+                cleanup_record = json.loads((run_dir / "post_cleanup_seen.json").read_text())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"status": "cancelled", "job_id": "job-cleanup"})
+        self.assertEqual(cleanup_record["reason"], "job_cancelled")
+        self.assertEqual(cleanup_record["run_id"], "run-cancel-cleanup")
+        self.assertEqual(cleanup_record["rtsp_port"], "8562")
+        self.assertTrue(cleanup_record["state_file"].endswith("post_launch_state.json"))
+
+    @patch('mn_api.state.client')
+    def test_blueprint_run_cleans_stale_same_blueprint_hooks_before_start(self, mock_client):
+        mock_client.list_jobs.return_value = json.dumps({
+            "data": [
+                {"job_id": "job-active", "status": "running"},
+                {"job_id": "job-stale", "status": "failed"},
+            ]
+        })
+        mock_client.submit_job.return_value = "job-new"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            runs_root = (repo / "runs").resolve()
+            self._write_blueprint_repo(repo)
+            bundle_dir = repo / "worker_one"
+            scripts_dir = bundle_dir / "scripts"
+            scripts_dir.mkdir()
+            cleanup_script = scripts_dir / "post-launch.sh"
+            cleanup_script.write_text(
+                "#!/usr/bin/env bash\n"
+                "cat > \"$MN_RUN_DIR/cleanup_marker.json\" <<EOF\n"
+                "{\n"
+                "  \"reason\": \"$MN_POST_LAUNCH_REASON\",\n"
+                "  \"run_id\": \"$MN_RUN_ID\"\n"
+                "}\n"
+                "EOF\n"
+            )
+
+            def write_run(run_name, job_id, blueprint_id="worker_one"):
+                run_dir = runs_root / run_name
+                run_dir.mkdir(parents=True)
+                (run_dir / "job.json").write_text(json.dumps({
+                    "job_id": job_id,
+                    "run_id": run_name,
+                    "blueprint_id": blueprint_id,
+                }))
+                (run_dir / "post_launch_hook.json").write_text(json.dumps({
+                    "command": ["bash", str(cleanup_script)],
+                    "script": str(cleanup_script),
+                    "cwd": str(bundle_dir),
+                    "log": str(run_dir / "post_launch.log"),
+                    "run_id": run_name,
+                    "bundle_dir": str(bundle_dir),
+                    "state_file": str(run_dir / "post_launch_state.json"),
+                    "pre_launch_ready_file": str(run_dir / "pre_launch.ready"),
+                    "pre_launch_process_file": str(run_dir / "pre_launch_process.json"),
+                }))
+                return run_dir
+
+            stale_run = write_run("stale-run", "job-stale")
+            active_run = write_run("active-run", "job-active")
+            other_run = write_run("other-run", "job-other", blueprint_id="worker_two")
+            original = self._set_blueprint_config(repo)
+            try:
+                with patch.dict('os.environ', {"MN_RUNS_ROOT": str(runs_root)}):
+                    response = self.client.post(
+                        "/api/v1/blueprints/worker_one/runs",
+                        json={"run_id": "run-new"},
+                    )
+                    cleanup_record = json.loads((stale_run / "cleanup_marker.json").read_text())
+                    active_marker_exists = (active_run / "cleanup_marker.json").exists()
+                    other_marker_exists = (other_run / "cleanup_marker.json").exists()
+            finally:
+                self._restore_config(original)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["job_id"], "job-new")
+        self.assertEqual(cleanup_record["reason"], "stale_blueprint_start")
+        self.assertEqual(cleanup_record["run_id"], "stale-run")
+        self.assertFalse(active_marker_exists)
+        self.assertFalse(other_marker_exists)
 
     @patch('mn_api.state.client')
     def test_cancel_job_grpc_error(self, mock_client):
@@ -867,6 +1031,43 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(manifest["metadata"]["run_id"], body["run_id"])
         self.assertEqual(manifest["metadata"]["blueprint_run_id"], body["run_id"])
         self.assertTrue(mapping_exists)
+
+    @patch('mn_api.state.client')
+    def test_blueprint_run_reads_latest_local_repo_config(self, mock_client):
+        mock_client.submit_job.return_value = "job-local-config"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            self._write_blueprint_repo(repo)
+            (repo / "worker_one" / "manifest.json").write_text(json.dumps({
+                "graph_id": "worker_one_graph",
+                "nodes": [
+                    {
+                        "node_id": "worker",
+                        "config": {"environment": {}},
+                    }
+                ],
+                "edges": [],
+                "metadata": {},
+            }))
+            config_dir = repo / "worker_one" / "config"
+            config_dir.mkdir()
+            (config_dir / "default.json").write_text(json.dumps({
+                "vl_model": {"model": "edited-local-model"}
+            }))
+            original = self._set_blueprint_config(repo)
+            try:
+                response = self.client.post(
+                    "/api/v1/blueprints/worker_one/runs",
+                    json={"run_id": "run-local-config"},
+                )
+            finally:
+                self._restore_config(original)
+
+        self.assertEqual(response.status_code, 200)
+        manifest_json, _payloads = mock_client.submit_job.call_args.args
+        submitted_env = json.loads(manifest_json)["nodes"][0]["config"]["environment"]
+        submitted_config = json.loads(submitted_env["MN_BLUEPRINT_CONFIG_JSON"])
+        self.assertEqual(submitted_config["vl_model"]["model"], "edited-local-model")
 
     @patch('mn_api.state.client')
     def test_blueprint_run_starts_pre_launch_before_submit(self, mock_client):

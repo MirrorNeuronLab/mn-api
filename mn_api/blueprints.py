@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import signal
+import shutil
 import subprocess
 import sys
 import time
@@ -28,11 +29,14 @@ from mn_api.path_utils import inside_path
 BLUEPRINT_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,160}$")
 RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,220}$")
 CATEGORY_SLUG_PATTERN = re.compile(r"[^a-z0-9]+")
+ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-9;]*m")
 DEFAULT_CATEGORY = "General"
 DEFAULT_RUNS_ROOT = "~/.mn/runs"
 DEFAULT_BLUEPRINT_REPO_CACHE = "~/.cache/mirror-neuron/blueprint-repos"
 PRE_LAUNCH_SCRIPT = Path("scripts/pre-launch.sh")
 POST_LAUNCH_SCRIPT = Path("scripts/post-launch.sh")
+TERMINAL_JOB_STATUSES = {"completed", "failed", "cancelled"}
+UNMAPPED_RUN_STALE_SECONDS = 120
 
 
 def workspace_root() -> Path:
@@ -138,9 +142,27 @@ def cached_git_repo_path(repo_url: str) -> Path:
     name = Path(parsed.path.rstrip("/")).stem or "blueprints"
     digest = hashlib.sha256(repo_url.encode("utf-8")).hexdigest()[:12]
     configured_cache = Path(os.getenv("MN_BLUEPRINT_REPO_CACHE", DEFAULT_BLUEPRINT_REPO_CACHE)).expanduser()
-    if not os.getenv("MN_BLUEPRINT_REPO_CACHE"):
-        return configured_cache
     return configured_cache / f"{name}-{digest}"
+
+
+def run_git(args: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *args],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+
+def clone_git_blueprint_repo(repo_url: str, target: Path) -> None:
+    temp_target = target.with_name(f".{target.name}.tmp-{os.getpid()}-{int(time.time() * 1000)}")
+    if temp_target.exists():
+        shutil.rmtree(temp_target)
+    run_git(["clone", "--depth", "1", repo_url, str(temp_target)])
+    if target.exists():
+        shutil.rmtree(target)
+    temp_target.replace(target)
 
 
 def ensure_git_blueprint_repo(repo_url: str) -> Path:
@@ -152,21 +174,16 @@ def ensure_git_blueprint_repo(repo_url: str) -> Path:
         raise HTTPException(status_code=500, detail="blueprint repo cache path exists but is not a git repository")
     try:
         if target.exists():
-            subprocess.run(
-                ["git", "-C", str(target), "pull", "--ff-only"],
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
+            status = run_git(["-C", str(target), "status", "--porcelain"])
+            if status.stdout.strip():
+                run_git(["-C", str(target), "reset", "--hard", "HEAD"])
+                run_git(["-C", str(target), "clean", "-fdx"])
+            try:
+                run_git(["-C", str(target), "pull", "--ff-only"])
+            except (OSError, subprocess.CalledProcessError):
+                clone_git_blueprint_repo(repo_url, target)
         else:
-            subprocess.run(
-                ["git", "clone", "--depth", "1", repo_url, str(target)],
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
+            clone_git_blueprint_repo(repo_url, target)
     except (OSError, subprocess.CalledProcessError) as exc:
         detail = getattr(exc, "stderr", "") or str(exc)
         raise HTTPException(status_code=500, detail=f"blueprint repo clone failed: {detail}") from exc
@@ -439,6 +456,7 @@ def load_blueprint_bundle(
         metadata["blueprint_revision"] = blueprint["revision"]
     manifest["run_id"] = run_id
     render_agent_templates_for_submission(manifest)
+    prepare_openshell_custom_images(bundle_root, manifest)
     runs_root = shared_runs_root()
     config = with_shared_run_store_config(
         load_blueprint_config(bundle_root, config_overrides=config_overrides),
@@ -465,6 +483,150 @@ def load_blueprint_bundle(
                 payloads[payload_path.relative_to(payloads_path).as_posix()] = payload_path.read_bytes()
 
     return json.dumps(manifest), payloads
+
+
+def prepare_openshell_custom_images(bundle_root: Path, manifest: Dict[str, Any]) -> None:
+    nodes = manifest.get("nodes")
+    if not isinstance(nodes, list):
+        return
+
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        config = node.get("config")
+        if not isinstance(config, dict):
+            continue
+        if config.get("runner_module") != "MirrorNeuron.Sandbox.OpenShell":
+            continue
+
+        custom_image = config.get("custom_openshell_image")
+        if custom_image is not None:
+            source_path = openshell_local_from_path(bundle_root, custom_image)
+            if source_path is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        f"custom_openshell_image for {node.get('node_id') or 'OpenShell node'} "
+                        f"must point to a payload directory or Dockerfile: {custom_image}"
+                    ),
+                )
+        else:
+            source_path = openshell_local_from_path(bundle_root, config.get("from"))
+
+        if source_path is None:
+            continue
+
+        config["from"] = build_openshell_sandbox_image(source_path)
+
+
+def openshell_local_from_path(bundle_root: Path, source: Any) -> Path | None:
+    if not isinstance(source, str) or not source.strip() or "://" in source:
+        return None
+
+    source_value = source.strip()
+    raw = Path(source_value).expanduser()
+    candidates = [raw] if raw.is_absolute() else [bundle_root / "payloads" / source_value, bundle_root / source_value]
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if resolved.is_dir() and (resolved / "Dockerfile").is_file():
+            return resolved
+        if resolved.is_file() and resolved.name == "Dockerfile":
+            return resolved
+    return None
+
+
+def openshell_config_dir() -> Path:
+    return Path(os.getenv("OPENSHELL_CONFIG_DIR", str(Path.home() / ".config" / "openshell"))).expanduser()
+
+
+def openshell_gateway_name() -> str:
+    configured = os.getenv("OPENSHELL_GATEWAY", "").strip()
+    if configured:
+        return configured
+    config_dir = openshell_config_dir()
+    try:
+        active = (config_dir / "active_gateway").read_text(encoding="utf-8").strip()
+        if active:
+            return active
+    except OSError:
+        pass
+    if (config_dir / "gateways" / "openshell" / "metadata.json").is_file():
+        return "openshell"
+    return ""
+
+
+def openshell_gateway_metadata(gateway_name: str) -> Dict[str, Any]:
+    if not gateway_name:
+        return {}
+    try:
+        metadata = json.loads((openshell_config_dir() / "gateways" / gateway_name / "metadata.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def openshell_gateway_uses_local_docker() -> bool:
+    gateway_name = openshell_gateway_name()
+    if not gateway_name:
+        return False
+    metadata = openshell_gateway_metadata(gateway_name)
+    if metadata.get("is_remote") is True:
+        return False
+    endpoint = metadata.get("gateway_endpoint")
+    if not isinstance(endpoint, str):
+        return False
+    parsed = urlparse(endpoint)
+    return parsed.hostname in {"127.0.0.1", "localhost", "::1"}
+
+
+def openshell_env() -> Dict[str, str]:
+    env = os.environ.copy()
+    if env.get("OPENSHELL_GATEWAY_ENDPOINT"):
+        return env
+    gateway_name = openshell_gateway_name()
+    if gateway_name:
+        env.setdefault("OPENSHELL_GATEWAY", gateway_name)
+    return env
+
+
+def build_openshell_sandbox_image(source_path: Path) -> str:
+    source_path = source_path.resolve()
+    if openshell_gateway_uses_local_docker():
+        digest = hashlib.sha256(str(source_path).encode("utf-8")).hexdigest()[:12]
+        image_ref = f"openshell/sandbox-from:{digest}"
+        result = subprocess.run(
+            ["docker", "build", "-t", image_ref, str(source_path)],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            detail = f"{result.stdout}\n{result.stderr}".strip() or "docker build failed"
+            raise HTTPException(status_code=500, detail=f"OpenShell sandbox image build failed: {detail}")
+        return image_ref
+
+    result = subprocess.run(
+        [
+            "openshell",
+            "sandbox",
+            "create",
+            "--from",
+            str(source_path),
+            "--no-tty",
+            "--no-keep",
+            "--",
+            "true",
+        ],
+        capture_output=True,
+        text=True,
+        env=openshell_env(),
+    )
+    output = f"{result.stdout}\n{result.stderr}"
+    if result.returncode != 0:
+        raise HTTPException(status_code=500, detail=f"OpenShell sandbox image build failed: {output.strip()}")
+    matches = re.findall(r"Image\s+([^\s]+)\s+is available in the gateway", output)
+    if not matches:
+        raise HTTPException(status_code=500, detail="OpenShell did not report an image reference")
+    return ANSI_ESCAPE_PATTERN.sub("", matches[-1])
 
 
 def render_agent_templates_for_submission(manifest: Dict[str, Any]) -> None:
@@ -762,6 +924,103 @@ def cleanup_blueprint_run_processes(run_id: str, *, reason: str = "job_cancelled
     cleanup_run_process(run_dir, "pre_launch_process.json")
     cleanup_post_launch_hook(run_dir, reason=reason)
     cleanup_run_process(run_dir, "web_ui_process.json")
+
+
+def active_job_ids_from_jobs_payload(payload: Any) -> set[str]:
+    if isinstance(payload, dict):
+        jobs = payload.get("data") or payload.get("jobs") or []
+    elif isinstance(payload, list):
+        jobs = payload
+    else:
+        jobs = []
+
+    active_job_ids: set[str] = set()
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+        status = str(job.get("status") or "").lower()
+        if status in TERMINAL_JOB_STATUSES:
+            continue
+        job_id = job.get("job_id") or job.get("id")
+        if isinstance(job_id, str) and job_id:
+            active_job_ids.add(job_id)
+    return active_job_ids
+
+
+def cleanup_stale_blueprint_run_processes(
+    repo_root: Path,
+    blueprint: Dict[str, Any],
+    *,
+    keep_run_id: str,
+    active_job_ids: set[str] | None,
+    reason: str = "stale_blueprint_run",
+) -> None:
+    runs_root = Path(shared_runs_root()).expanduser()
+    if not runs_root.is_dir():
+        return
+
+    bundle_root = validate_blueprint_bundle(repo_root, blueprint).resolve()
+    blueprint_id = str(blueprint.get("id") or "")
+    for run_dir in runs_root.iterdir():
+        if not run_dir.is_dir() or run_dir.name == keep_run_id:
+            continue
+        if not run_dir_matches_blueprint(run_dir, blueprint_id=blueprint_id, bundle_root=bundle_root):
+            continue
+
+        job_id = run_dir_job_id(run_dir)
+        if job_id:
+            if active_job_ids is None or job_id in active_job_ids:
+                continue
+        elif not unmapped_run_dir_is_stale(run_dir):
+            continue
+
+        cleanup_blueprint_run_processes(run_dir.name, reason=reason)
+
+
+def run_dir_matches_blueprint(run_dir: Path, *, blueprint_id: str, bundle_root: Path) -> bool:
+    job_path = run_dir / "job.json"
+    try:
+        job_data = json.loads(job_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        job_data = {}
+    if isinstance(job_data, dict):
+        recorded_blueprint_id = job_data.get("blueprint_id")
+        if isinstance(recorded_blueprint_id, str) and recorded_blueprint_id:
+            return recorded_blueprint_id == blueprint_id
+
+    hook_path = run_dir / "post_launch_hook.json"
+    try:
+        hook_data = json.loads(hook_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        hook_data = {}
+    if not isinstance(hook_data, dict):
+        return False
+
+    bundle_value = hook_data.get("bundle_dir")
+    if not isinstance(bundle_value, str) or not bundle_value:
+        return False
+    try:
+        return Path(bundle_value).expanduser().resolve() == bundle_root
+    except OSError:
+        return False
+
+
+def run_dir_job_id(run_dir: Path) -> str:
+    try:
+        data = json.loads((run_dir / "job.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    job_id = data.get("job_id") or data.get("id")
+    return job_id if isinstance(job_id, str) else ""
+
+
+def unmapped_run_dir_is_stale(run_dir: Path) -> bool:
+    try:
+        return time.time() - run_dir.stat().st_mtime >= UNMAPPED_RUN_STALE_SECONDS
+    except OSError:
+        return False
 
 
 def cleanup_blueprint_processes_for_job(job_id: str) -> None:

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 from numbers import Number
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends
 
 from mn_api import state
+from mn_api.blueprints import is_git_repo_url, shared_runs_root
 from mn_api.config import auth_enabled
 from mn_api.dependencies import require_auth
 from mn_api.errors import handle_grpc_error
@@ -18,7 +20,30 @@ router = APIRouter(prefix="/api/v1")
 
 @router.get("/health")
 def health():
-    return {"status": "ok", "auth": "enabled" if auth_enabled(state.config) else "disabled"}
+    configured_blueprint_repo = getattr(state.config, "blueprint_repo", "")
+    base_blueprint_repo = getattr(state.config, "configured_blueprint_repo", configured_blueprint_repo)
+    dev_local_blueprint_repo = getattr(state.config, "dev_local_blueprint_repo", "")
+    blueprint_repo = (
+        configured_blueprint_repo
+        if is_git_repo_url(configured_blueprint_repo)
+        else str(Path(configured_blueprint_repo).expanduser().resolve()) if configured_blueprint_repo else ""
+    )
+    configured_repo = (
+        base_blueprint_repo
+        if is_git_repo_url(base_blueprint_repo)
+        else str(Path(base_blueprint_repo).expanduser().resolve()) if base_blueprint_repo else ""
+    )
+    dev_repo = str(Path(dev_local_blueprint_repo).expanduser().resolve()) if dev_local_blueprint_repo else ""
+    return {
+        "status": "ok",
+        "auth": "enabled" if auth_enabled(state.config) else "disabled",
+        "blueprint_repo": blueprint_repo,
+        "blueprint_repo_mode": "remote" if is_git_repo_url(configured_blueprint_repo) else "local",
+        "configured_blueprint_repo": configured_repo,
+        "dev_local_blueprint_repo": dev_repo,
+        "dev_local_blueprint_repo_active": bool(dev_repo and dev_repo == blueprint_repo),
+        "runs_root": shared_runs_root(),
+    }
 
 
 @router.get("/system/summary")

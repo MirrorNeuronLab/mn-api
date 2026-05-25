@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, Depends, Query
 
 from mn_api import state
 from mn_api.blueprints import (
+    active_job_ids_from_jobs_payload,
     create_blueprint_run_id,
     filter_blueprints_by_category,
     find_blueprint,
@@ -11,6 +14,7 @@ from mn_api.blueprints import (
     load_blueprint_bundle,
     load_blueprint_catalog,
     cleanup_blueprint_run_processes,
+    cleanup_stale_blueprint_run_processes,
     start_blueprint_pre_launch_hook,
     validate_blueprint_inputs,
     validate_blueprint_bundle,
@@ -86,6 +90,13 @@ def run_blueprint(
     env_overrides = {}
     force = bool(req.force) if req else False
     state.close_client()
+    cleanup_stale_blueprint_run_processes(
+        repo_root,
+        blueprint,
+        keep_run_id=run_id,
+        active_job_ids=runtime_active_job_ids(),
+        reason="stale_blueprint_start",
+    )
     start_blueprint_pre_launch_hook(
         repo_root,
         blueprint,
@@ -139,3 +150,11 @@ def run_blueprint(
     except Exception as exc:
         cleanup_blueprint_run_processes(run_id, reason="launch_failed")
         return handle_grpc_error(exc)
+
+
+def runtime_active_job_ids() -> set[str] | None:
+    try:
+        payload = json.loads(state.client.list_jobs(0, False))
+    except Exception:
+        return None
+    return active_job_ids_from_jobs_payload(payload)

@@ -3,11 +3,14 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from fastapi import HTTPException
 
 from mn_api.blueprints import (
     blueprint_bundle_root,
+    cached_git_repo_path,
+    ensure_git_blueprint_repo,
     filter_blueprints_by_category,
     load_blueprint_categories,
     load_blueprint_bundle,
@@ -193,6 +196,71 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertEqual(env["CUSTOM_MODEL"], "overwrite")
         self.assertEqual(env["MN_LLM_MODEL"], "ollama/test")
         self.assertEqual(payload_bytes, {"nested/input.txt": b"hello"})
+
+    def test_dirty_hosted_git_cache_is_reset_before_pull(self):
+        repo_url = "https://example.test/MirrorNeuronLab/otterdesk-blueprints.git"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_root = Path(tmpdir) / "cache"
+            with patch.dict("os.environ", {"MN_BLUEPRINT_REPO_CACHE": str(cache_root)}):
+                target = cached_git_repo_path(repo_url)
+                (target / ".git").mkdir(parents=True)
+                (target / "index.json").write_text("[]")
+                calls = []
+
+                def fake_run(command, **_kwargs):
+                    calls.append(command)
+                    if command[-2:] == ["status", "--porcelain"]:
+                        return SimpleNamespace(stdout=" M index.json\n?? personal_income_tax_expert/\n", stderr="")
+                    return SimpleNamespace(stdout="", stderr="")
+
+                with patch("mn_api.blueprints.subprocess.run", side_effect=fake_run):
+                    result = ensure_git_blueprint_repo(repo_url)
+
+        self.assertEqual(result, target)
+        self.assertIn(["git", "-C", str(target), "reset", "--hard", "HEAD"], calls)
+        self.assertIn(["git", "-C", str(target), "clean", "-fdx"], calls)
+        self.assertIn(["git", "-C", str(target), "pull", "--ff-only"], calls)
+
+    def test_load_blueprint_bundle_prepares_openshell_custom_image(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            bundle = repo / "worker_one"
+            sandbox = bundle / "payloads" / "worker" / "openshell_sandbox"
+            sandbox.mkdir(parents=True)
+            (sandbox / "Dockerfile").write_text("FROM alpine\n")
+            (bundle / "manifest.json").write_text(
+                json.dumps({
+                    "graph_id": "worker_graph",
+                    "nodes": [
+                        {
+                            "node_id": "worker",
+                            "config": {
+                                "runner_module": "MirrorNeuron.Sandbox.OpenShell",
+                                "custom_openshell_image": "worker/openshell_sandbox",
+                            },
+                        }
+                    ],
+                    "metadata": {},
+                })
+            )
+            calls = []
+
+            def fake_run(command, **_kwargs):
+                calls.append(command)
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+            with patch("mn_api.blueprints.openshell_gateway_uses_local_docker", return_value=True):
+                with patch("mn_api.blueprints.subprocess.run", side_effect=fake_run):
+                    manifest_json, _payloads = load_blueprint_bundle(
+                        repo.resolve(),
+                        {"id": "worker_one", "path": "worker_one"},
+                        "run-openshell",
+                    )
+
+        manifest = json.loads(manifest_json)
+        config = manifest["nodes"][0]["config"]
+        self.assertTrue(config["from"].startswith("openshell/sandbox-from:"))
+        self.assertEqual(calls[0][:3], ["docker", "build", "-t"])
 
     def test_load_blueprint_bundle_ignores_misnamed_overwrite_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:
