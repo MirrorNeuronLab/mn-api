@@ -20,6 +20,8 @@ from mn_api.blueprints import (
     cleanup_run_process,
     ensure_git_blueprint_repo,
     filter_blueprints_by_category,
+    inject_local_blueprint_support_path,
+    is_git_repo_url,
     load_blueprint_categories,
     load_blueprint_bundle,
     load_blueprint_catalog,
@@ -53,6 +55,12 @@ def _port_accepts_connection(port: int) -> bool:
 
 
 class TestBlueprintServices(unittest.TestCase):
+    def test_is_git_repo_url_accepts_common_remote_forms(self):
+        self.assertTrue(is_git_repo_url("https://github.com/MirrorNeuronLab/otterdesk-blueprints.git"))
+        self.assertTrue(is_git_repo_url("ssh://git@github.com/MirrorNeuronLab/otterdesk-blueprints.git"))
+        self.assertTrue(is_git_repo_url("git@github.com:MirrorNeuronLab/otterdesk-blueprints.git"))
+        self.assertFalse(is_git_repo_url("/Users/homer/Projects/mirror-neuron-set/otterdesk-blueprints"))
+
     def test_catalog_accepts_wrapped_index_and_normalizes_aliases(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
@@ -229,6 +237,77 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertEqual(env["CUSTOM_MODEL"], "overwrite")
         self.assertEqual(env["MN_LLM_MODEL"], "ollama/test")
         self.assertEqual(payload_bytes, {"nested/input.txt": b"hello"})
+
+    def test_load_blueprint_bundle_injects_runtime_web_ui_service(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            bundle = repo / "video_watch_assistant"
+            payloads = bundle / "payloads"
+            payloads.mkdir(parents=True)
+            config_dir = bundle / "config"
+            config_dir.mkdir()
+            (config_dir / "default.json").write_text(
+                json.dumps(
+                    {
+                        "identity": {"blueprint_id": "video_watch_assistant", "name": "Video Watch"},
+                        "web_ui": {
+                            "enabled": True,
+                            "output": {"adapter": "gradio", "title": "Video Dashboard"},
+                            "dashboard": {
+                                "browser_video_source": "http://127.0.0.1:8889/video-watch/"
+                            },
+                        },
+                    }
+                )
+            )
+            (bundle / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "manifest_version": "1.0",
+                        "type": "service",
+                        "graph_id": "video_watch_assistant_v1",
+                        "nodes": [
+                            {
+                                "node_id": "worker",
+                                "agent_type": "executor",
+                                "config": {"environment": {}},
+                            }
+                        ],
+                        "entrypoints": ["worker"],
+                        "initial_inputs": {"worker": [{}]},
+                        "metadata": {},
+                    }
+                )
+            )
+
+            inject_local_blueprint_support_path()
+            with patch.dict(
+                os.environ,
+                {
+                    "MN_BLUEPRINT_WEB_UI_PORT_START": "58210",
+                    "MN_BLUEPRINT_WEB_UI_PORT_END": "58210",
+                },
+            ), patch("mn_blueprint_support.runtime_web_ui.web_ui_port_available", return_value=True):
+                manifest_json, _payload_bytes = load_blueprint_bundle(
+                    repo.resolve(),
+                    {"id": "video_watch_assistant", "path": "video_watch_assistant"},
+                    "video-run-7",
+                )
+
+        manifest = json.loads(manifest_json)
+        web_ui_node = next(node for node in manifest["nodes"] if node["node_id"] == "web_ui_dashboard")
+        self.assertIn("web_ui_dashboard", manifest["entrypoints"])
+        self.assertEqual(web_ui_node["resources"]["ports"][0]["port"], 58210)
+        self.assertEqual(web_ui_node["services"][0]["name"], "blueprint-web-ui")
+        self.assertEqual(web_ui_node["services"][0]["meta"]["run_id"], "video-run-7")
+        self.assertEqual(
+            web_ui_node["services"][0]["meta"]["browser_video_source"],
+            "http://127.0.0.1:8889/video-watch/",
+        )
+        self.assertEqual(
+            manifest["metadata"]["blueprint_web_ui_service"]["url"],
+            "http://localhost:58210",
+        )
 
     def test_dirty_hosted_git_cache_is_reset_before_pull(self):
         repo_url = "https://example.test/MirrorNeuronLab/otterdesk-blueprints.git"

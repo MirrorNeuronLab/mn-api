@@ -15,6 +15,7 @@ from mn_api.blueprints import (
     load_blueprint_catalog,
     cleanup_blueprint_run_processes,
     cleanup_stale_blueprint_run_processes,
+    start_background_event_relay_if_needed,
     start_blueprint_pre_launch_hook,
     validate_blueprint_inputs,
     validate_blueprint_bundle,
@@ -140,6 +141,18 @@ def run_blueprint(
             job_id,
             blueprint_id=blueprint["id"],
             blueprint_revision=blueprint.get("revision") or None,
+        )
+        start_background_event_relay_if_needed(
+            repo_root,
+            blueprint,
+            run_id,
+            job_id,
+            manifest_json,
+            config_overrides=config_overrides,
+            env_overrides=env_overrides,
+            grpc_target=getattr(state.config, "grpc_target", None),
+            grpc_auth_token=getattr(state.config, "grpc_auth_token", None),
+            grpc_timeout_seconds=getattr(state.config, "grpc_timeout_seconds", None),
         )
         return {
             "job_id": job_id,

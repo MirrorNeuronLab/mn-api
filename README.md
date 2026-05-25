@@ -55,8 +55,8 @@ All runtime configuration uses environment variables.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `MN_ENV` | `dev` | Runtime mode. Use `prod` for protected deployments. |
-| `MN_API_HOST` | `localhost` | Bind host for the HTTP server. |
-| `MN_API_PORT` | `54001` | Bind port for the HTTP server. |
+| `MN_API_HOST` | `~/.mn/docker-compose.env`, then `localhost` | Bind host for the HTTP server. |
+| `MN_API_PORT` | `~/.mn/docker-compose.env`, then `54001` | Bind port for the HTTP server. |
 | `MN_API_TOKEN` | unset | Required when `MN_ENV=prod`. |
 | `MN_CORE_HOST` | `localhost` | Core host used to build the default gRPC target. |
 | `MN_GRPC_TARGET` | `~/.mn/docker-compose.env` when present | Full core gRPC target. Takes precedence over `MN_CORE_GRPC_TARGET`. |
@@ -66,7 +66,7 @@ All runtime configuration uses environment variables.
 | `MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN` | `~/.mn/docker-compose.env`, then `~/.mn/grpc_admin.token` when present | Admin token sent from `mn-api` to destructive core gRPC calls such as job cleanup; falls back to the legacy `~/.mirror_neuron/grpc_admin.token` during migration. |
 | `MN_API_REQUEST_SIZE_LIMIT_BYTES` | `5242880` | Maximum request body size. |
 | `MN_API_CORS_ALLOW_ORIGINS` | unset | Comma-separated CORS allowlist. |
-| `MN_BLUEPRINT_REPO` | `~/Projects/otterdesk-blueprints` | Blueprint catalog repository used by `/blueprints` endpoints. |
+| `MN_BLUEPRINT_REPO` | `https://github.com/MirrorNeuronLab/mn-blueprints.git` | Blueprint catalog repository used by `/blueprints` endpoints. OtterDesk overrides this to its co-worker catalog. |
 | `MN_API_LOG_PATH` | `~/.mn/logs/api.log` | API log file path. |
 | `MN_LOG_LEVEL` | package default | Log level used by shared logging setup. |
 | `MN_LOG_MAX_BYTES` | package default | Rotating log size limit. |

@@ -131,6 +131,9 @@ def create_blueprint_run_id(blueprint_id: str) -> str:
 
 
 def is_git_repo_url(value: str) -> bool:
+    value = (value or "").strip()
+    if re.fullmatch(r"[\w.-]+@[\w.-]+:[^\s]+", value):
+        return True
     try:
         parsed = urlparse(value)
     except Exception:
@@ -466,6 +469,14 @@ def load_blueprint_bundle(
     )
     if config is not None:
         apply_manifest_config_bindings(manifest, config)
+        inject_runtime_web_ui_service_for_submission(
+            manifest,
+            bundle_dir=bundle_root,
+            config=config,
+            run_id=run_id,
+            runs_root=runs_root,
+            env_overrides=env_overrides,
+        )
     runtime_env = blueprint_runtime_environment(
         bundle_root,
         config=config,
@@ -484,6 +495,33 @@ def load_blueprint_bundle(
                 payloads[payload_path.relative_to(payloads_path).as_posix()] = payload_path.read_bytes()
 
     return json.dumps(manifest), payloads
+
+
+def inject_runtime_web_ui_service_for_submission(
+    manifest: Dict[str, Any],
+    *,
+    bundle_dir: Path,
+    config: Dict[str, Any],
+    run_id: str,
+    runs_root: str,
+    env_overrides: Dict[str, str] | None = None,
+) -> Dict[str, Any] | None:
+    inject_local_blueprint_support_path()
+    try:
+        from mn_blueprint_support import inject_runtime_web_ui_service
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="blueprint web UI service injection requires mn_blueprint_support",
+        ) from exc
+    return inject_runtime_web_ui_service(
+        manifest,
+        bundle_dir=bundle_dir,
+        config=config,
+        run_id=run_id,
+        runs_root=runs_root,
+        env_overrides=env_overrides,
+    )
 
 
 def prepare_openshell_custom_images(bundle_root: Path, manifest: Dict[str, Any]) -> None:
@@ -1157,6 +1195,140 @@ def cleanup_blueprint_run_processes(run_id: str, *, reason: str = "job_cancelled
     cleanup_run_process(run_dir, "pre_launch_process.json")
     cleanup_owned_port_listeners(cleanup_metadata)
     cleanup_run_process(run_dir, "web_ui_process.json")
+    cleanup_run_process(run_dir, "event_relay.json")
+
+
+def start_background_event_relay_if_needed(
+    repo_root: Path,
+    blueprint: Dict[str, Any],
+    run_id: str,
+    job_id: str,
+    manifest_json: str,
+    *,
+    config_overrides: Dict[str, Any] | None = None,
+    env_overrides: Dict[str, str] | None = None,
+    grpc_target: str | None = None,
+    grpc_auth_token: str | None = None,
+    grpc_timeout_seconds: float | None = None,
+) -> None:
+    if os.getenv("MN_RUN_BACKGROUND_EVENT_RELAY", "1").strip().lower() in {"0", "false", "no", "off"}:
+        return
+    try:
+        manifest = json.loads(manifest_json)
+    except json.JSONDecodeError:
+        return
+    service_info = runtime_web_ui_service_from_manifest(manifest)
+    if not service_info:
+        return
+
+    bundle_root = validate_blueprint_bundle(repo_root, blueprint)
+    runs_root = Path(shared_runs_root()).expanduser()
+    run_dir = runs_root / run_id
+    config = with_shared_run_store_config(
+        load_blueprint_config(bundle_root, config_overrides=config_overrides),
+        run_id,
+        str(runs_root),
+    )
+    max_seconds = background_event_relay_max_seconds(config)
+    poll_seconds = background_event_relay_poll_seconds(config)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    log_path = run_dir / "event_relay.log"
+    command = [
+        sys.executable,
+        "-m",
+        "mn_blueprint_support.event_relay",
+        "--job-id",
+        job_id,
+        "--run-dir",
+        str(run_dir),
+        "--poll-seconds",
+        f"{poll_seconds:g}",
+    ]
+    if max_seconds is not None:
+        command.extend(["--max-seconds", f"{max_seconds:g}"])
+
+    env = os.environ.copy()
+    env.update(runtime_path_environment())
+    env.update(string_env_values(env_overrides))
+    env["MN_RUN_EVENT_RELAY_CHILD"] = "1"
+    if grpc_target:
+        env["MN_GRPC_TARGET"] = grpc_target
+    if grpc_auth_token:
+        env["MN_GRPC_AUTH_TOKEN"] = grpc_auth_token
+    if grpc_timeout_seconds is None:
+        env.setdefault("MN_GRPC_TIMEOUT_SECONDS", "10")
+    else:
+        env["MN_GRPC_TIMEOUT_SECONDS"] = f"{grpc_timeout_seconds:g}"
+
+    try:
+        with log_path.open("a", encoding="utf-8") as relay_log:
+            process = subprocess.Popen(
+                command,
+                stdout=relay_log,
+                stderr=relay_log,
+                stdin=subprocess.DEVNULL,
+                close_fds=True,
+                start_new_session=True,
+                env=env,
+            )
+    except OSError:
+        return
+
+    relay_info = {
+        "job_id": job_id,
+        "pid": process.pid,
+        "poll_seconds": poll_seconds,
+        "max_seconds": max_seconds,
+        "log_path": str(log_path),
+        "run_id": run_id,
+        "service": service_info,
+        "started_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    process_group_id = process_group_id_for_pid(process.pid)
+    if process_group_id:
+        relay_info["process_group_id"] = process_group_id
+    (run_dir / "event_relay.json").write_text(json.dumps(relay_info, indent=2, sort_keys=True) + "\n")
+
+
+def runtime_web_ui_service_from_manifest(manifest: Dict[str, Any]) -> Dict[str, Any]:
+    metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
+    service_info = metadata.get("blueprint_web_ui_service") if isinstance(metadata, dict) else {}
+    return service_info if isinstance(service_info, dict) else {}
+
+
+def background_event_relay_poll_seconds(config: Dict[str, Any] | None) -> float:
+    raw = os.getenv("MN_RUN_EVENT_RELAY_POLL_SECONDS")
+    if raw is not None:
+        try:
+            return max(float(raw), 0.1)
+        except ValueError:
+            return 1.0
+
+    config = config if isinstance(config, dict) else {}
+    web_ui = config.get("web_ui") if isinstance(config.get("web_ui"), dict) else {}
+    output = web_ui.get("output") if isinstance(web_ui.get("output"), dict) else {}
+    try:
+        return max(float(output.get("refresh_seconds", 1.0)), 0.1)
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def background_event_relay_max_seconds(config: Dict[str, Any] | None) -> float | None:
+    raw = os.getenv("MN_RUN_EVENT_RELAY_MAX_SECONDS")
+    if raw is not None:
+        if raw.strip().lower() in {"", "0", "none", "infinity"}:
+            return None
+        try:
+            return max(float(raw), 0.0)
+        except ValueError:
+            return None
+
+    config = config if isinstance(config, dict) else {}
+    budgets = config.get("budgets") if isinstance(config.get("budgets"), dict) else {}
+    try:
+        return max(float(budgets.get("max_stream_duration_seconds", 3600)), 0.0)
+    except (TypeError, ValueError):
+        return 3600.0
 
 
 def active_job_ids_from_jobs_payload(payload: Any) -> set[str]:

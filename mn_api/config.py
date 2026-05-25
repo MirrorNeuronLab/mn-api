@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
-DEFAULT_BLUEPRINT_REPO = "https://github.com/MirrorNeuronLab/otterdesk-blueprints"
+DEFAULT_BLUEPRINT_REPO = "https://github.com/MirrorNeuronLab/mn-blueprints.git"
 DEV_LOCAL_BLUEPRINT_REPO_ENV = "MN_DEV_LOCAL_BLUEPRINT_REPO"
 DEV_LOCAL_BLUEPRINT_REPO_ALIAS_ENV = "DEV_LOCAL_BLUEPRINT_REPO"
 
@@ -39,11 +39,8 @@ class ApiConfig:
         timeout = _optional_float("MN_GRPC_TIMEOUT_SECONDS", "10")
         core_host = os.getenv("MN_CORE_HOST") or runtime_env.get("MN_CORE_HOST") or "localhost"
         grpc_port = os.getenv("MN_GRPC_PORT") or runtime_env.get("MN_GRPC_PORT") or "55051"
-        configured_blueprint_repo = os.getenv(
-            "MN_BLUEPRINT_REPO",
-            DEFAULT_BLUEPRINT_REPO,
-        )
-        dev_local_blueprint_repo = _dev_local_blueprint_repo()
+        configured_blueprint_repo = _env_value("MN_BLUEPRINT_REPO", runtime_env, _default_blueprint_repo(runtime_env))
+        dev_local_blueprint_repo = _dev_local_blueprint_repo(runtime_env)
         blueprint_repo = (
             dev_local_blueprint_repo
             if env in {"dev", "test"} and dev_local_blueprint_repo
@@ -51,8 +48,8 @@ class ApiConfig:
         )
         config = cls(
             env=env,
-            host=os.getenv("MN_API_HOST", "localhost"),
-            port=_int("MN_API_PORT", "54001"),
+            host=os.getenv("MN_API_HOST") or runtime_env.get("MN_API_HOST") or "localhost",
+            port=_int_value(os.getenv("MN_API_PORT") or runtime_env.get("MN_API_PORT") or "54001", "MN_API_PORT"),
             grpc_target=os.getenv(
                 "MN_GRPC_TARGET",
                 os.getenv(
@@ -109,15 +106,30 @@ class ApiConfig:
             raise ValueError(f"{DEV_LOCAL_BLUEPRINT_REPO_ENV} can only be used when MN_ENV=dev or MN_ENV=test")
 
 
-def _dev_local_blueprint_repo() -> str:
+def _env_value(name: str, runtime_env: dict[str, str], default: str = "") -> str:
+    return (os.getenv(name, "").strip() or str(runtime_env.get(name) or "").strip() or default)
+
+
+def _default_blueprint_repo(runtime_env: dict[str, str]) -> str:
+    return _env_value("MN_DEFAULT_BLUEPRINT_REPO", runtime_env, DEFAULT_BLUEPRINT_REPO)
+
+
+def _dev_local_blueprint_repo(runtime_env: dict[str, str] | None = None) -> str:
+    runtime_env = runtime_env or {}
     return (
         os.getenv(DEV_LOCAL_BLUEPRINT_REPO_ENV, "").strip()
         or os.getenv(DEV_LOCAL_BLUEPRINT_REPO_ALIAS_ENV, "").strip()
+        or str(runtime_env.get(DEV_LOCAL_BLUEPRINT_REPO_ENV) or "").strip()
+        or str(runtime_env.get(DEV_LOCAL_BLUEPRINT_REPO_ALIAS_ENV) or "").strip()
     )
 
 
 def _int(name: str, default: str) -> int:
     value = os.getenv(name, default)
+    return _int_value(value, name)
+
+
+def _int_value(value: str, name: str) -> int:
     try:
         return int(value)
     except ValueError as exc:

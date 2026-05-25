@@ -73,6 +73,81 @@ class TestAPI(unittest.TestCase):
         self.assertIn("blueprint_repo", body)
         self.assertIn("runs_root", body)
 
+    @patch('mn_api.state.client')
+    def test_service_routes_proxy_runtime_registry(self, mock_client):
+        mock_client.list_services.return_value = json.dumps({"services": [{"name": "blueprint-web-ui"}]})
+        mock_client.resolve_service.return_value = json.dumps({"services": [{"name": "blueprint-web-ui"}]})
+
+        list_response = self.client.get("/api/v1/services", params={"tag": "web_ui", "job_id": "job-1"})
+        resolve_response = self.client.get(
+            "/api/v1/services/blueprint-web-ui/resolve",
+            params={"tag": "video_watch_assistant", "passing_only": "false"},
+        )
+
+        self.assertEqual(list_response.status_code, 200)
+        self.assertEqual(resolve_response.status_code, 200)
+        mock_client.list_services.assert_called_once_with(
+            name=None,
+            node=None,
+            job_id="job-1",
+            agent_id=None,
+            status=None,
+            tags=["web_ui"],
+            passing_only=True,
+        )
+        mock_client.resolve_service.assert_called_once_with(
+            "blueprint-web-ui",
+            node=None,
+            job_id=None,
+            agent_id=None,
+            tags=["video_watch_assistant"],
+            passing_only=False,
+        )
+
+    @patch('mn_api.state.client')
+    def test_run_ui_falls_back_to_registered_web_ui_service(self, mock_client):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runs_root = Path(tmpdir)
+            run_dir = runs_root / "run-with-service-ui"
+            run_dir.mkdir()
+            (run_dir / "job.json").write_text(json.dumps({"job_id": "job-service-ui"}))
+            mock_client.resolve_service.return_value = json.dumps({
+                "services": [
+                    {
+                        "id": "job-service-ui:web_ui_dashboard:blueprint-web-ui",
+                        "name": "blueprint-web-ui",
+                        "job_id": "job-service-ui",
+                        "status": "warning",
+                        "address": "127.0.0.1",
+                        "port": 58101,
+                        "meta": {
+                            "run_id": "run-with-service-ui",
+                            "blueprint_id": "video_watch_assistant",
+                            "title": "Video Dashboard",
+                            "adapter": "gradio",
+                            "url": "http://localhost:58101",
+                            "browser_video_source": "http://127.0.0.1:8889/video-watch/",
+                            "run_ui_path": str(run_dir / "ui.json"),
+                        },
+                    }
+                ]
+            })
+
+            with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
+                response = self.client.get("/api/v1/runs/run-with-service-ui/ui")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["web_ui"]["url"], "http://localhost:58101")
+        self.assertEqual(body["web_ui"]["status"], "warning")
+        self.assertEqual(body["ui"]["metadata"]["service_name"], "blueprint-web-ui")
+        mock_client.resolve_service.assert_called_once_with(
+            "blueprint-web-ui",
+            job_id="job-service-ui",
+            tags=["web_ui"],
+            passing_only=False,
+        )
+
     def test_config_uses_grpc_auth_token(self):
         with patch.dict(os.environ, {"MN_GRPC_AUTH_TOKEN": "auth-secret"}, clear=False):
             config = ApiConfig.from_env()
@@ -101,6 +176,17 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(config.blueprint_repo, tmp)
         self.assertEqual(config.configured_blueprint_repo, "https://example.com/base-blueprints.git")
         self.assertEqual(config.dev_local_blueprint_repo, tmp)
+
+    def test_config_ignores_blank_persisted_blueprint_repo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp) / ".mn"
+            state_dir.mkdir()
+            (state_dir / "docker-compose.env").write_text("MN_BLUEPRINT_REPO=\nMN_DEV_LOCAL_BLUEPRINT_REPO=\n")
+
+            with patch.dict(os.environ, {"HOME": tmp}, clear=True):
+                config = ApiConfig.from_env()
+
+        self.assertEqual(config.blueprint_repo, "https://github.com/MirrorNeuronLab/mn-blueprints.git")
 
     def test_config_rejects_dev_local_blueprint_repo_in_prod(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -144,6 +230,8 @@ class TestAPI(unittest.TestCase):
             (state_dir / "docker-compose.env").write_text(
                 "\n".join(
                     [
+                        "MN_API_HOST=127.0.0.1",
+                        "MN_API_PORT=54111",
                         "MN_GRPC_PORT=55111",
                         "MN_CORE_GRPC_TARGET=127.0.0.1:55111",
                         "MN_GRPC_AUTH_TOKEN=auth-from-state",
@@ -156,6 +244,8 @@ class TestAPI(unittest.TestCase):
             with patch.dict(os.environ, {"HOME": tmp}, clear=True):
                 config = ApiConfig.from_env()
 
+        self.assertEqual(config.host, "127.0.0.1")
+        self.assertEqual(config.port, 54111)
         self.assertEqual(config.grpc_target, "127.0.0.1:55111")
         self.assertEqual(config.grpc_auth_token, "auth-from-state")
         self.assertEqual(config.grpc_admin_token, "admin-from-state")
