@@ -137,6 +137,29 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(config.grpc_auth_token, "auth-from-file")
         self.assertEqual(config.grpc_admin_token, "admin-from-file")
 
+    def test_config_uses_persisted_runtime_grpc_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp) / ".mn"
+            state_dir.mkdir()
+            (state_dir / "docker-compose.env").write_text(
+                "\n".join(
+                    [
+                        "MN_GRPC_PORT=55111",
+                        "MN_CORE_GRPC_TARGET=127.0.0.1:55111",
+                        "MN_GRPC_AUTH_TOKEN=auth-from-state",
+                        "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN=admin-from-state",
+                    ]
+                )
+                + "\n"
+            )
+
+            with patch.dict(os.environ, {"HOME": tmp}, clear=True):
+                config = ApiConfig.from_env()
+
+        self.assertEqual(config.grpc_target, "127.0.0.1:55111")
+        self.assertEqual(config.grpc_auth_token, "auth-from-state")
+        self.assertEqual(config.grpc_admin_token, "admin-from-state")
+
     def test_auth_required_when_token_configured(self):
         original = state.config
         state.config = SimpleNamespace(api_token="secret", request_size_limit_bytes=1024 * 1024)

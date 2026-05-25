@@ -34,9 +34,11 @@ class ApiConfig:
 
     @classmethod
     def from_env(cls) -> "ApiConfig":
+        runtime_env = _read_env_file(_mn_home() / "docker-compose.env")
         env = os.getenv("MN_ENV", "dev")
         timeout = _optional_float("MN_GRPC_TIMEOUT_SECONDS", "10")
-        core_host = os.getenv("MN_CORE_HOST", "localhost")
+        core_host = os.getenv("MN_CORE_HOST") or runtime_env.get("MN_CORE_HOST") or "localhost"
+        grpc_port = os.getenv("MN_GRPC_PORT") or runtime_env.get("MN_GRPC_PORT") or "55051"
         configured_blueprint_repo = os.getenv(
             "MN_BLUEPRINT_REPO",
             DEFAULT_BLUEPRINT_REPO,
@@ -53,18 +55,25 @@ class ApiConfig:
             port=_int("MN_API_PORT", "54001"),
             grpc_target=os.getenv(
                 "MN_GRPC_TARGET",
-                os.getenv("MN_CORE_GRPC_TARGET", f"{core_host}:55051"),
+                os.getenv(
+                    "MN_CORE_GRPC_TARGET",
+                    runtime_env.get("MN_GRPC_TARGET")
+                    or runtime_env.get("MN_CORE_GRPC_TARGET")
+                    or f"{core_host}:{grpc_port}",
+                ),
             ),
             grpc_timeout_seconds=timeout,
             grpc_auth_token=_token_from_env_or_file(
                 "MN_GRPC_AUTH_TOKEN",
                 _mn_home() / "grpc_auth.token",
                 legacy_path=Path.home() / ".mirror_neuron" / "grpc_auth.token",
+                runtime_env=runtime_env,
             ),
             grpc_admin_token=_token_from_env_or_file(
                 "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN",
                 _mn_home() / "grpc_admin.token",
                 legacy_path=Path.home() / ".mirror_neuron" / "grpc_admin.token",
+                runtime_env=runtime_env,
             ),
             api_token=os.getenv("MN_API_TOKEN", ""),
             request_size_limit_bytes=_int(
@@ -129,8 +138,33 @@ def _csv(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
-def _token_from_env_or_file(name: str, path: Path, *, legacy_path: Path | None = None) -> str:
+def _read_env_file(path: Path) -> dict[str, str]:
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return {}
+
+    values: dict[str, str] = {}
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        values[key] = value
+    return values
+
+
+def _token_from_env_or_file(
+    name: str,
+    path: Path,
+    *,
+    legacy_path: Path | None = None,
+    runtime_env: dict[str, str] | None = None,
+) -> str:
     token = os.getenv(name)
+    if token:
+        return token
+    token = (runtime_env or {}).get(name, "")
     if token:
         return token
 
