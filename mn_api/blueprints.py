@@ -22,7 +22,7 @@ from mn_sdk import (
     validate_requirements_spec_issues,
 )
 
-from mn_api.config import ApiConfig
+from mn_api.config import ApiConfig, runtime_env_values
 from mn_api.path_utils import inside_path
 
 
@@ -38,6 +38,22 @@ POST_LAUNCH_SCRIPT = Path("scripts/post-launch.sh")
 TERMINAL_JOB_STATUSES = {"completed", "failed", "cancelled"}
 UNMAPPED_RUN_STALE_SECONDS = 120
 PROCESS_CLEANUP_TIMEOUT_SECONDS = 5.0
+BLUEPRINT_RUNTIME_ENV_KEYS = (
+    "MN_BLUEPRINT_WEB_UI_BIND_HOST",
+    "MN_BLUEPRINT_WEB_UI_HOST",
+    "MN_BLUEPRINT_WEB_UI_PUBLIC_HOST",
+    "MN_BLUEPRINT_WEB_UI_BASE_URL",
+    "MN_BLUEPRINT_WEB_UI_PUBLISH_HOST",
+    "MN_BLUEPRINT_WEB_UI_PORT_START",
+    "MN_BLUEPRINT_WEB_UI_PORT_END",
+    "MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE",
+    "MN_BLUEPRINT_WEB_UI_API_BASE_URL",
+    "MN_BLUEPRINT_RUN_EVENTS_URL",
+    "MN_API_BASE_URL",
+    "MN_API_HOST",
+    "MN_API_PORT",
+    "MN_API_TOKEN",
+)
 
 
 def workspace_root() -> Path:
@@ -100,6 +116,16 @@ def as_list(value: Any) -> list[Any]:
 
 def string_env_values(values: Dict[str, Any] | None) -> Dict[str, str]:
     return {str(key): str(value) for key, value in (values or {}).items() if value is not None}
+
+
+def runtime_blueprint_environment_overrides() -> Dict[str, str]:
+    runtime_env = runtime_env_values()
+    overrides: Dict[str, str] = {}
+    for key in BLUEPRINT_RUNTIME_ENV_KEYS:
+        value = os.getenv(key) or runtime_env.get(key)
+        if isinstance(value, str) and value.strip():
+            overrides[key] = value.strip()
+    return overrides
 
 
 def normalize_category_name(value: Any) -> str:

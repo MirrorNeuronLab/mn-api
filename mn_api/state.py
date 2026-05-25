@@ -24,19 +24,44 @@ BUNDLE_UPLOAD_ROOT = Path(tempfile.gettempdir()) / "mirror_neuron_api_bundles"
 _client: Client | None = None
 
 
+def _grpc_client_settings(config_obj) -> tuple:
+    return (
+        getattr(config_obj, "grpc_target", None),
+        getattr(config_obj, "grpc_timeout_seconds", None),
+        getattr(config_obj, "grpc_auth_token", None),
+        getattr(config_obj, "grpc_admin_token", None),
+    )
+
+
+def refresh_config_from_env():
+    global config
+    if not isinstance(config, ApiConfig):
+        return config
+    try:
+        refreshed = ApiConfig.from_env()
+    except Exception:
+        logger.exception("Failed to refresh mn-api runtime configuration")
+        return config
+    if _client is not None and _grpc_client_settings(refreshed) != _grpc_client_settings(config):
+        close_client()
+    config = refreshed
+    return config
+
+
 def _client_kwargs() -> dict:
+    current_config = refresh_config_from_env()
     kwargs = {
-        "target": config.grpc_target,
-        "timeout": config.grpc_timeout_seconds,
-        "auth_token": config.grpc_auth_token,
+        "target": current_config.grpc_target,
+        "timeout": current_config.grpc_timeout_seconds,
+        "auth_token": current_config.grpc_auth_token,
     }
     try:
         client_params = inspect.signature(Client).parameters
     except (TypeError, ValueError):
         client_params = {}
     if "admin_token" in client_params:
-        kwargs["admin_token"] = config.grpc_admin_token
-    elif config.grpc_admin_token:
+        kwargs["admin_token"] = current_config.grpc_admin_token
+    elif current_config.grpc_admin_token:
         logger.warning(
             "mn_sdk.Client does not accept admin_token; upgrade mirrorneuron-python-sdk "
             "for destructive admin RPC support."

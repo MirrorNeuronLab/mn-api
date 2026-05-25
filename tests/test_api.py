@@ -170,6 +170,21 @@ class TestAPI(unittest.TestCase):
             {61000, 61001},
         )
 
+    def test_service_ports_from_payload_can_filter_to_active_jobs(self):
+        self.assertEqual(
+            service_ports_from_payload(
+                {
+                    "services": [
+                        {"job_id": "active-job", "port": 61000},
+                        {"job_id": "terminal-job", "port": 61001},
+                        {"port": 61002},
+                    ]
+                },
+                active_job_ids={"active-job"},
+            ),
+            {61000},
+        )
+
     def test_config_uses_grpc_admin_token(self):
         with patch.dict(os.environ, {"MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN": "admin-secret"}, clear=False):
             config = ApiConfig.from_env()

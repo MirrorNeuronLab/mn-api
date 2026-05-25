@@ -25,6 +25,7 @@ from mn_api.blueprints import (
     load_blueprint_categories,
     load_blueprint_bundle,
     load_blueprint_catalog,
+    runtime_blueprint_environment_overrides,
     validate_run_id,
 )
 
@@ -60,6 +61,32 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertTrue(is_git_repo_url("ssh://git@github.com/MirrorNeuronLab/otterdesk-blueprints.git"))
         self.assertTrue(is_git_repo_url("git@github.com:MirrorNeuronLab/otterdesk-blueprints.git"))
         self.assertFalse(is_git_repo_url("/Users/homer/Projects/mirror-neuron-set/otterdesk-blueprints"))
+
+    def test_runtime_blueprint_environment_overrides_reads_persisted_web_ui_settings(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mn_home = Path(tmpdir) / ".mn"
+            mn_home.mkdir()
+            (mn_home / "docker-compose.env").write_text(
+                "\n".join(
+                    [
+                        "MN_BLUEPRINT_WEB_UI_BIND_HOST=0.0.0.0",
+                        "MN_BLUEPRINT_WEB_UI_PUBLIC_HOST=localhost",
+                        "MN_BLUEPRINT_WEB_UI_PORT_START=61000",
+                        "MN_BLUEPRINT_WEB_UI_PORT_END=61049",
+                        "MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE=prepublished",
+                    ]
+                )
+                + "\n"
+            )
+
+            with patch.dict(os.environ, {"HOME": tmpdir}, clear=True):
+                overrides = runtime_blueprint_environment_overrides()
+
+        self.assertEqual(overrides["MN_BLUEPRINT_WEB_UI_BIND_HOST"], "0.0.0.0")
+        self.assertEqual(overrides["MN_BLUEPRINT_WEB_UI_PUBLIC_HOST"], "localhost")
+        self.assertEqual(overrides["MN_BLUEPRINT_WEB_UI_PORT_START"], "61000")
+        self.assertEqual(overrides["MN_BLUEPRINT_WEB_UI_PORT_END"], "61049")
+        self.assertEqual(overrides["MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE"], "prepublished")
 
     def test_catalog_accepts_wrapped_index_and_normalizes_aliases(self):
         with tempfile.TemporaryDirectory() as tmpdir:

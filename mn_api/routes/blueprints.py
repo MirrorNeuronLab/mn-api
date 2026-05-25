@@ -15,6 +15,7 @@ from mn_api.blueprints import (
     load_blueprint_catalog,
     cleanup_blueprint_run_processes,
     cleanup_stale_blueprint_run_processes,
+    runtime_blueprint_environment_overrides,
     start_background_event_relay_if_needed,
     start_blueprint_pre_launch_hook,
     validate_blueprint_inputs,
@@ -88,7 +89,7 @@ def run_blueprint(
     config_overrides = {}
     if req:
         config_overrides = dict(req.config_overwrite or req.config_overrides or {})
-    env_overrides = {}
+    env_overrides = runtime_blueprint_environment_overrides()
     force = bool(req.force) if req else False
     state.close_client()
     cleanup_stale_blueprint_run_processes(
@@ -179,6 +180,7 @@ def runtime_active_job_ids() -> set[str] | None:
 
 
 def runtime_blueprint_web_ui_reserved_ports() -> set[int]:
+    active_job_ids = runtime_active_job_ids()
     try:
         payload = json.loads(
             state.client.resolve_service(
@@ -189,10 +191,10 @@ def runtime_blueprint_web_ui_reserved_ports() -> set[int]:
         )
     except Exception:
         return set()
-    return service_ports_from_payload(payload)
+    return service_ports_from_payload(payload, active_job_ids=active_job_ids)
 
 
-def service_ports_from_payload(payload: object) -> set[int]:
+def service_ports_from_payload(payload: object, *, active_job_ids: set[str] | None = None) -> set[int]:
     if not isinstance(payload, dict):
         return set()
     services = payload.get("services")
@@ -201,6 +203,8 @@ def service_ports_from_payload(payload: object) -> set[int]:
     ports: set[int] = set()
     for service in services:
         if not isinstance(service, dict):
+            continue
+        if active_job_ids is not None and str(service.get("job_id") or "") not in active_job_ids:
             continue
         raw_port = service.get("port")
         try:

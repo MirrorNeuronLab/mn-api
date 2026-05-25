@@ -166,6 +166,10 @@ def _read_env_file(path: Path) -> dict[str, str]:
     return values
 
 
+def runtime_env_values() -> dict[str, str]:
+    return _read_env_file(_mn_home() / "docker-compose.env")
+
+
 def _token_from_env_or_file(
     name: str,
     path: Path,
