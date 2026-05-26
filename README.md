@@ -64,6 +64,7 @@ All runtime configuration uses environment variables.
 | `MN_GRPC_TIMEOUT_SECONDS` | `10` | SDK call timeout. Use `0` or `none` to disable. |
 | `MN_GRPC_AUTH_TOKEN` | `~/.mn/docker-compose.env`, then `~/.mn/grpc_auth.token` when present | Bearer token sent from `mn-api` to the core gRPC service; falls back to the legacy `~/.mirror_neuron/grpc_auth.token` during migration. |
 | `MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN` | `~/.mn/docker-compose.env`, then `~/.mn/grpc_admin.token` when present | Admin token sent from `mn-api` to destructive core gRPC calls such as job cleanup; falls back to the legacy `~/.mirror_neuron/grpc_admin.token` during migration. |
+| `MN_RUNS_ROOT` | `~/.mn/runs` | Shared run-artifact filesystem used by `/runs/{run_id}/...` endpoints for result JSON, final artifacts, Markdown, PDFs, logs, events, and resources. |
 | `MN_API_REQUEST_SIZE_LIMIT_BYTES` | `5242880` | Maximum request body size. |
 | `MN_API_CORS_ALLOW_ORIGINS` | unset | Comma-separated CORS allowlist. |
 | `MN_BLUEPRINT_REPO` | `https://github.com/MirrorNeuronLab/mn-blueprints.git` | Blueprint catalog repository used by `/blueprints` endpoints. OtterDesk overrides this to its co-worker catalog. |

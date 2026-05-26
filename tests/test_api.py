@@ -564,6 +564,36 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(resources.status_code, 200)
         self.assertEqual(resources.json()["sample_count"], 1)
 
+    def test_run_artifact_endpoints_read_shared_run_store_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs_root = Path(tmp)
+            run_dir = runs_root / "artifact-run"
+            run_dir.mkdir()
+            (run_dir / "result.json").write_text(json.dumps({"ok": True, "value": 42}))
+            (run_dir / "final_artifact.json").write_text(json.dumps({"type": "prepared_1040_tax_packet"}))
+            (run_dir / "report.md").write_text("# Draft Review Packet\n")
+            (run_dir / "packet.pdf").write_bytes(b"%PDF-1.4\n% test pdf\n")
+
+            with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
+                result = self.client.get("/api/v1/runs/artifact-run/result")
+                final_artifact = self.client.get("/api/v1/runs/artifact-run/final-artifact")
+                listing = self.client.get("/api/v1/runs/artifact-run/artifacts")
+                markdown = self.client.get("/api/v1/runs/artifact-run/artifacts/report.md")
+                pdf = self.client.get("/api/v1/runs/artifact-run/artifacts/packet.pdf")
+
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.json()["value"], 42)
+        self.assertEqual(final_artifact.status_code, 200)
+        self.assertEqual(final_artifact.json()["type"], "prepared_1040_tax_packet")
+        self.assertEqual(listing.status_code, 200)
+        artifact_ids = {artifact["artifact_id"] for artifact in listing.json()["artifacts"]}
+        self.assertIn("result_json", artifact_ids)
+        self.assertIn("final_artifact_json", artifact_ids)
+        self.assertEqual(markdown.status_code, 200)
+        self.assertIn("# Draft Review Packet", markdown.text)
+        self.assertEqual(pdf.status_code, 200)
+        self.assertEqual(pdf.content[:5], b"%PDF-")
+
     @patch('mn_api.state.client')
     def test_submit_by_unknown_bundle_path_is_rejected_before_sdk_call(self, mock_client):
         response = self.client.post(
@@ -829,6 +859,68 @@ class TestAPI(unittest.TestCase):
         response = self.client.get("/api/v1/jobs/test_job_123/events")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"data": [{"id": "e1"}, {"id": "e2"}]})
+
+    @patch('mn_api.state.client')
+    def test_get_job_defaults_to_compact_artifact_refs_for_large_runs(self, mock_client):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs_root = Path(tmp)
+            run_dir = runs_root / "compact-run"
+            run_dir.mkdir()
+            (run_dir / "job.json").write_text(json.dumps({
+                "job_id": "job-large",
+                "run_id": "compact-run",
+                "graph_id": "personal_income_tax_expert_v1",
+                "status": "completed",
+            }))
+            (run_dir / "result.json").write_text(json.dumps({"ok": True}))
+            (run_dir / "final_artifact.json").write_text(json.dumps({
+                "type": "prepared_1040_tax_packet",
+                "advisor_message": "Draft packet.",
+            }))
+            (run_dir / "report.md").write_text("# Draft Review Packet\n")
+            (run_dir / "tax-review-packet.pdf").write_bytes(b"%PDF-1.4\n")
+
+            huge_log = "x" * (5 * 1024 * 1024)
+            mock_client.get_job.side_effect = AssertionError("default job details should not call full gRPC get_job")
+            mock_client.stream_events.return_value = [
+                json.dumps({
+                    "type": "job_completed",
+                    "timestamp": "2026-05-25T23:00:00Z",
+                    "agent_id": "tax_manager",
+                    "sandbox": {"logs": huge_log},
+                    "payload": {
+                        "run_id": "compact-run",
+                        "result": {"final_artifact": {"body": huge_log}},
+                    },
+                })
+            ]
+
+            with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
+                response = self.client.get("/api/v1/jobs/job-large")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertLess(len(response.content), 4 * 1024 * 1024)
+        self.assertNotIn(huge_log[:1024], response.text)
+        body = response.json()
+        self.assertEqual(body["job"]["run_id"], "compact-run")
+        self.assertEqual(body["job"]["status"], "completed")
+        self.assertEqual(body["summary"]["mode"], "compact")
+        artifact_ids = {artifact["artifact_id"] for artifact in body["artifacts"]}
+        self.assertIn("result_json", artifact_ids)
+        self.assertIn("final_artifact_json", artifact_ids)
+        self.assertTrue(any(artifact["content_type"] == "application/pdf" for artifact in body["artifacts"]))
+
+    @patch('mn_api.state.client')
+    def test_get_job_include_full_keeps_debug_grpc_path(self, mock_client):
+        mock_client.get_job.return_value = json.dumps({
+            "job": {"job_id": "job-full", "graph_id": "graph-1", "status": "running"}
+        })
+
+        response = self.client.get("/api/v1/jobs/job-full?include=full")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["job"]["job_id"], "job-full")
+        mock_client.get_job.assert_called_once_with("job-full")
 
     @patch('mn_api.state.client')
     def test_get_job_agent_graph_success(self, mock_client):

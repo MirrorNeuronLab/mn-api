@@ -6,6 +6,7 @@ import re
 import sys
 import time
 import urllib.parse
+import hashlib
 from collections import deque
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,14 @@ from mn_api.dependencies import require_auth
 
 router = APIRouter(prefix="/api/v1")
 _SAFE_RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$")
+_ARTIFACT_CONTENT_TYPES = {
+    ".json": "application/json",
+    ".jsonl": "application/x-ndjson",
+    ".md": "text/markdown; charset=utf-8",
+    ".pdf": "application/pdf",
+    ".txt": "text/plain; charset=utf-8",
+    ".log": "text/plain; charset=utf-8",
+}
 
 
 def _runs_root() -> Path:
@@ -43,6 +52,84 @@ def _read_json_file(path: Path) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError) as exc:
         raise HTTPException(status_code=500, detail=f"failed to read {path.name}") from exc
     return payload if isinstance(payload, dict) else {}
+
+
+def _read_required_json_file(path: Path, label: str) -> dict[str, Any]:
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"{label} not found")
+    return _read_json_file(path)
+
+
+def _artifact_content_type(path: Path) -> str:
+    return _ARTIFACT_CONTENT_TYPES.get(path.suffix.lower(), "application/octet-stream")
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"failed to read {path.name}") from exc
+    return digest.hexdigest()
+
+
+def _artifact_id(path: Path, run_dir: Path) -> str:
+    rel = path.relative_to(run_dir).as_posix()
+    known = {
+        "result.json": "result_json",
+        "final_artifact.json": "final_artifact_json",
+        "events.jsonl": "events_jsonl",
+        "logs.jsonl": "logs_jsonl",
+        "resources.jsonl": "resources_jsonl",
+        "human.jsonl": "human_events_jsonl",
+        "job.json": "job_json",
+        "run.json": "run_json",
+        "ui.json": "ui_json",
+        "web_ui.json": "web_ui_json",
+    }
+    if rel in known:
+        return known[rel]
+    normalized = re.sub(r"[^A-Za-z0-9]+", "_", rel).strip("_").lower()
+    return normalized or "artifact"
+
+
+def _artifact_ref(run_id: str, path: Path, run_dir: Path) -> dict[str, Any]:
+    stat = path.stat()
+    rel = path.relative_to(run_dir).as_posix()
+    return {
+        "artifact_id": _artifact_id(path, run_dir),
+        "path": str(path),
+        "relative_path": rel,
+        "size_bytes": stat.st_size,
+        "sha256": _sha256_file(path),
+        "content_type": _artifact_content_type(path),
+        "url": f"/api/v1/runs/{urllib.parse.quote(run_id)}/artifacts/{urllib.parse.quote(rel, safe='/')}",
+    }
+
+
+def _list_artifact_files(run_dir: Path) -> list[Path]:
+    if not run_dir.exists():
+        return []
+    files: list[Path] = []
+    for path in run_dir.rglob("*"):
+        if not path.is_file() or path.name.startswith("."):
+            continue
+        if path.suffix.lower() in _ARTIFACT_CONTENT_TYPES or path.name in {"result.json", "final_artifact.json"}:
+            files.append(path)
+    return sorted(files, key=lambda item: item.relative_to(run_dir).as_posix())
+
+
+def _artifact_file_path(run_dir: Path, artifact_path: str) -> Path:
+    if not artifact_path:
+        raise HTTPException(status_code=400, detail="artifact path is required")
+    candidate = (run_dir / urllib.parse.unquote(artifact_path)).resolve()
+    if not candidate.is_relative_to(run_dir):
+        raise HTTPException(status_code=400, detail="invalid artifact path")
+    if not candidate.is_file():
+        raise HTTPException(status_code=404, detail="artifact not found")
+    return candidate
 
 
 def _read_event_tail(path: Path, *, limit: int) -> list[dict[str, Any]]:
@@ -101,6 +188,32 @@ def _allowed_local_roots(run_dir: Path, ui: dict[str, Any]) -> list[Path]:
 
 def _is_allowed_local_path(path: Path, roots: list[Path]) -> bool:
     return any(path == root or path.is_relative_to(root) for root in roots)
+
+
+@router.get("/runs/{run_id}/result")
+def get_run_result(run_id: str, _auth=Depends(require_auth)):
+    run_dir = _ensure_run_exists(run_id)
+    return _read_required_json_file(run_dir / "result.json", "result")
+
+
+@router.get("/runs/{run_id}/final-artifact")
+def get_run_final_artifact(run_id: str, _auth=Depends(require_auth)):
+    run_dir = _ensure_run_exists(run_id)
+    return _read_required_json_file(run_dir / "final_artifact.json", "final artifact")
+
+
+@router.get("/runs/{run_id}/artifacts")
+def list_run_artifacts(run_id: str, _auth=Depends(require_auth)):
+    run_dir = _ensure_run_exists(run_id)
+    artifacts = [_artifact_ref(run_id, path, run_dir) for path in _list_artifact_files(run_dir)]
+    return {"run_id": run_id, "run_dir": str(run_dir), "artifacts": artifacts}
+
+
+@router.get("/runs/{run_id}/artifacts/{artifact_path:path}")
+def get_run_artifact(run_id: str, artifact_path: str, _auth=Depends(require_auth)):
+    run_dir = _ensure_run_exists(run_id)
+    path = _artifact_file_path(run_dir, artifact_path)
+    return FileResponse(path, media_type=_artifact_content_type(path))
 
 
 @router.get("/runs/{run_id}/ui")
