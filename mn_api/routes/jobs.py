@@ -354,17 +354,34 @@ def _infer_status(events: list[dict[str, Any]], stored_job: dict[str, Any], run_
     for event in reversed(events):
         event_type = str(event.get("type") or "").lower()
         event_status = _first_string(event.get("status"), _extract_nested_string(event.get("payload"), "status"))
-        if event_status:
+        if event_status and _is_job_status_event(event_type):
             return event_status
         if "failed" in event_type or "error" in event_type:
             return "failed"
         if "cancel" in event_type:
             return "cancelled"
-        if "completed" in event_type or "finished" in event_type:
+        if _is_job_completion_event(event_type):
             return "completed"
         if "started" in event_type or "running" in event_type:
             return "running"
     return "unknown"
+
+
+def _is_job_completion_event(event_type: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9]+", "_", event_type.lower()).strip("_")
+    return normalized in {
+        "job_completed",
+        "job_finished",
+        "workflow_completed",
+        "workflow_finished",
+        "blueprint_completed",
+        "blueprint_finished",
+    }
+
+
+def _is_job_status_event(event_type: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9]+", "_", event_type.lower()).strip("_")
+    return normalized.startswith(("job_", "workflow_", "blueprint_"))
 
 
 def _agent_summaries(stored_job: dict[str, Any], events: list[dict[str, Any]]) -> list[dict[str, Any]]:

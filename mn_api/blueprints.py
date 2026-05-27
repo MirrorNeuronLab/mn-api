@@ -1283,13 +1283,14 @@ def start_background_event_relay_if_needed(
         manifest = json.loads(manifest_json)
     except json.JSONDecodeError:
         return
+    runs_root = Path(shared_runs_root()).expanduser()
+    run_dir = runs_root / run_id
     service_info = runtime_web_ui_service_from_manifest(manifest)
-    if not service_info:
+    has_post_launch_hook = (run_dir / "post_launch_hook.json").is_file()
+    if not service_info and not has_post_launch_hook:
         return
 
     bundle_root = validate_blueprint_bundle(repo_root, blueprint)
-    runs_root = Path(shared_runs_root()).expanduser()
-    run_dir = runs_root / run_id
     config = with_shared_run_store_config(
         load_blueprint_config(bundle_root, config_overrides=config_overrides),
         run_id,
@@ -1416,6 +1417,76 @@ def active_job_ids_from_jobs_payload(payload: Any) -> set[str]:
         if isinstance(job_id, str) and job_id:
             active_job_ids.add(job_id)
     return active_job_ids
+
+
+def scheduler_allocated_ports_from_jobs_payload(
+    payload: Any,
+    *,
+    active_job_ids: set[str] | None = None,
+) -> set[int]:
+    ports: set[int] = set()
+    for job in job_dicts_from_payload(payload):
+        if active_job_ids is not None:
+            job_id = job_id_from_payload(job)
+            if job_id is not None and job_id not in active_job_ids:
+                continue
+        ports.update(scheduler_allocated_ports_from_job(job))
+    return ports
+
+
+def job_dicts_from_payload(payload: Any) -> list[Dict[str, Any]]:
+    if isinstance(payload, dict):
+        for key in ("data", "jobs"):
+            jobs = payload.get(key)
+            if isinstance(jobs, list):
+                return [job for job in jobs if isinstance(job, dict)]
+        return [payload]
+    if isinstance(payload, list):
+        return [job for job in payload if isinstance(job, dict)]
+    return []
+
+
+def job_id_from_payload(payload: Dict[str, Any]) -> str | None:
+    for candidate in (
+        payload.get("job_id"),
+        payload.get("id"),
+        as_dict(payload.get("job")).get("job_id"),
+        as_dict(payload.get("job")).get("id"),
+        as_dict(payload.get("summary")).get("job_id"),
+        as_dict(payload.get("summary")).get("id"),
+    ):
+        if isinstance(candidate, str) and candidate:
+            return candidate
+    return None
+
+
+def scheduler_allocated_ports_from_job(job: Dict[str, Any]) -> set[int]:
+    ports: set[int] = set()
+    for candidate in (
+        job,
+        as_dict(job.get("job")),
+        as_dict(job.get("summary")),
+    ):
+        scheduler = as_dict(candidate.get("scheduler"))
+        placements = scheduler.get("placements")
+        if not isinstance(placements, list):
+            continue
+        for placement in placements:
+            if not isinstance(placement, dict):
+                continue
+            allocations = as_dict(placement.get("allocations"))
+            allocated_ports = allocations.get("ports")
+            if not isinstance(allocated_ports, list):
+                continue
+            for allocated_port in allocated_ports:
+                raw_port = allocated_port.get("port") if isinstance(allocated_port, dict) else allocated_port
+                try:
+                    port = int(raw_port)
+                except (TypeError, ValueError):
+                    continue
+                if 1 <= port <= 65535:
+                    ports.add(port)
+    return ports
 
 
 def cleanup_stale_blueprint_run_processes(
@@ -1568,6 +1639,7 @@ def write_blueprint_job_mapping(
     *,
     blueprint_id: str | None = None,
     blueprint_revision: str | None = None,
+    web_ui_service: Dict[str, Any] | None = None,
 ) -> Path:
     run_dir = Path(shared_runs_root()).expanduser() / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -1578,6 +1650,8 @@ def write_blueprint_job_mapping(
         "blueprint_revision": blueprint_revision,
         "submitted_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
+    if web_ui_service:
+        payload["web_ui_service"] = dict(web_ui_service)
     tmp = run_dir / f".job.json.{os.getpid()}.tmp"
     tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
     tmp.replace(run_dir / "job.json")

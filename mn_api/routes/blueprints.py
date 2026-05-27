@@ -16,6 +16,8 @@ from mn_api.blueprints import (
     cleanup_blueprint_run_processes,
     cleanup_stale_blueprint_run_processes,
     runtime_blueprint_environment_overrides,
+    runtime_web_ui_service_from_manifest,
+    scheduler_allocated_ports_from_jobs_payload,
     start_background_event_relay_if_needed,
     start_blueprint_pre_launch_hook,
     validate_blueprint_inputs,
@@ -142,11 +144,14 @@ def run_blueprint(
             job_id = state.client.submit_job(manifest_json, payloads, force=True)
         else:
             job_id = state.client.submit_job(manifest_json, payloads)
+        submitted_manifest = json.loads(manifest_json)
+        web_ui_service = runtime_web_ui_service_from_manifest(submitted_manifest)
         write_blueprint_job_mapping(
             run_id,
             job_id,
             blueprint_id=blueprint["id"],
             blueprint_revision=blueprint.get("revision") or None,
+            web_ui_service=web_ui_service,
         )
         start_background_event_relay_if_needed(
             repo_root,
@@ -165,22 +170,41 @@ def run_blueprint(
             "run_id": run_id,
             "status": "pending",
             "blueprint": blueprint,
+            "web_ui_service": web_ui_service or None,
         }
     except Exception as exc:
         cleanup_blueprint_run_processes(run_id, reason="launch_failed")
         return handle_grpc_error(exc)
 
 
-def runtime_active_job_ids() -> set[str] | None:
+def runtime_active_jobs_payload() -> object | None:
     try:
-        payload = json.loads(state.client.list_jobs(0, False))
+        return json.loads(state.client.list_jobs(0, False))
     except Exception:
+        return None
+
+
+def runtime_active_job_ids(payload: object | None = None) -> set[str] | None:
+    if payload is None:
+        payload = runtime_active_jobs_payload()
+    if payload is None:
         return None
     return active_job_ids_from_jobs_payload(payload)
 
 
 def runtime_blueprint_web_ui_reserved_ports() -> set[int]:
-    active_job_ids = runtime_active_job_ids()
+    active_jobs_payload = runtime_active_jobs_payload()
+    active_job_ids = runtime_active_job_ids(active_jobs_payload)
+    ports = scheduler_allocated_ports_from_jobs_payload(
+        active_jobs_payload,
+        active_job_ids=active_job_ids,
+    )
+    for job_id in active_job_ids or set():
+        try:
+            job_payload = json.loads(state.client.get_job(job_id))
+        except Exception:
+            continue
+        ports.update(scheduler_allocated_ports_from_jobs_payload(job_payload))
     try:
         payload = json.loads(
             state.client.resolve_service(
@@ -190,11 +214,17 @@ def runtime_blueprint_web_ui_reserved_ports() -> set[int]:
             )
         )
     except Exception:
-        return set()
-    return service_ports_from_payload(payload, active_job_ids=active_job_ids)
+        return ports
+    ports.update(service_ports_from_payload(payload, live_only=True))
+    return ports
 
 
-def service_ports_from_payload(payload: object, *, active_job_ids: set[str] | None = None) -> set[int]:
+def service_ports_from_payload(
+    payload: object,
+    *,
+    active_job_ids: set[str] | None = None,
+    live_only: bool = False,
+) -> set[int]:
     if not isinstance(payload, dict):
         return set()
     services = payload.get("services")
@@ -204,7 +234,9 @@ def service_ports_from_payload(payload: object, *, active_job_ids: set[str] | No
     for service in services:
         if not isinstance(service, dict):
             continue
-        if active_job_ids is not None and str(service.get("job_id") or "") not in active_job_ids:
+        if active_job_ids is not None and active_job_ids and str(service.get("job_id") or "") not in active_job_ids:
+            continue
+        if live_only and not service_may_be_live(service):
             continue
         raw_port = service.get("port")
         try:
@@ -214,3 +246,19 @@ def service_ports_from_payload(payload: object, *, active_job_ids: set[str] | No
         if 1 <= port <= 65535:
             ports.add(port)
     return ports
+
+
+def service_may_be_live(service: dict[str, object]) -> bool:
+    status = str(service.get("status") or "").strip().lower()
+    health = service.get("health") if isinstance(service.get("health"), dict) else {}
+    health_status = str(health.get("status") or "").strip().lower()
+    terminal_statuses = {
+        "archived",
+        "cancelled",
+        "critical",
+        "failed",
+        "offline",
+        "stopped",
+        "unavailable",
+    }
+    return status not in terminal_statuses and health_status not in terminal_statuses

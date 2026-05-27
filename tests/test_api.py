@@ -11,7 +11,8 @@ from types import SimpleNamespace
 from mn_api.config import ApiConfig
 from mn_api import state
 from mn_api.main import app
-from mn_api.routes.blueprints import service_ports_from_payload
+from mn_api.blueprints import scheduler_allocated_ports_from_jobs_payload
+from mn_api.routes.blueprints import runtime_blueprint_web_ui_reserved_ports, service_ports_from_payload
 from unittest.mock import patch
 import grpc
 
@@ -149,6 +150,82 @@ class TestAPI(unittest.TestCase):
             passing_only=False,
         )
 
+    @patch('mn_api.state.client')
+    def test_run_ui_falls_back_to_persisted_web_ui_service_contract(self, mock_client):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runs_root = Path(tmpdir)
+            run_dir = runs_root / "run-with-persisted-ui"
+            run_dir.mkdir()
+            (run_dir / "job.json").write_text(json.dumps({
+                "job_id": "job-persisted-ui",
+                "run_id": "run-with-persisted-ui",
+                "web_ui_service": {
+                    "node_id": "web_ui_dashboard",
+                    "service_name": "blueprint-web-ui",
+                    "run_id": "run-with-persisted-ui",
+                    "blueprint_id": "video_watch_assistant",
+                    "title": "Video Dashboard",
+                    "adapter": "gradio",
+                    "url": "http://localhost:61000",
+                    "host": "127.0.0.1",
+                    "address": "127.0.0.1",
+                    "port": 61000,
+                    "browser_video_source": "http://127.0.0.1:8889/video-watch/",
+                },
+            }))
+            mock_client.resolve_service.side_effect = RuntimeError("gRPC auth token is required for this RPC")
+
+            with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
+                with patch("mn_api.routes.runs._web_ui_url_status", return_value="running"):
+                    response = self.client.get("/api/v1/runs/run-with-persisted-ui/ui")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["web_ui"]["url"], "http://localhost:61000")
+        self.assertEqual(body["web_ui"]["status"], "running")
+        self.assertEqual(body["web_ui"]["metadata"]["registered_by"], "blueprint_job_mapping")
+        self.assertEqual(body["ui"]["metadata"]["registered_by"], "blueprint_job_mapping")
+        self.assertEqual(body["ui"]["components"][0]["browser_source"], "http://127.0.0.1:8889/video-watch/")
+
+    @patch('mn_api.state.client')
+    def test_run_ui_falls_back_to_event_relay_web_ui_service_contract(self, mock_client):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runs_root = Path(tmpdir)
+            run_dir = runs_root / "run-with-relay-ui"
+            run_dir.mkdir()
+            (run_dir / "job.json").write_text(json.dumps({
+                "job_id": "job-relay-ui",
+                "run_id": "run-with-relay-ui",
+            }))
+            (run_dir / "event_relay.json").write_text(json.dumps({
+                "job_id": "job-relay-ui",
+                "run_id": "run-with-relay-ui",
+                "service": {
+                    "node_id": "web_ui_dashboard",
+                    "service_name": "blueprint-web-ui",
+                    "run_id": "run-with-relay-ui",
+                    "blueprint_id": "video_watch_assistant",
+                    "title": "Video Dashboard",
+                    "adapter": "gradio",
+                    "url": "http://localhost:61000",
+                    "host": "0.0.0.0",
+                    "address": "127.0.0.1",
+                    "port": 61000,
+                    "browser_video_source": "http://127.0.0.1:8889/video-watch/",
+                },
+            }))
+            mock_client.resolve_service.side_effect = RuntimeError("gRPC auth token is required for this RPC")
+
+            with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
+                with patch("mn_api.routes.runs._web_ui_url_status", return_value="running"):
+                    response = self.client.get("/api/v1/runs/run-with-relay-ui/ui")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["web_ui"]["url"], "http://localhost:61000")
+        self.assertEqual(body["web_ui"]["metadata"]["registered_by"], "blueprint_job_mapping")
+        self.assertEqual(body["ui"]["components"][0]["browser_source"], "http://127.0.0.1:8889/video-watch/")
+
     def test_config_uses_grpc_auth_token(self):
         with patch.dict(os.environ, {"MN_GRPC_AUTH_TOKEN": "auth-secret"}, clear=False):
             config = ApiConfig.from_env()
@@ -184,6 +261,145 @@ class TestAPI(unittest.TestCase):
             ),
             {61000},
         )
+
+    def test_service_ports_from_payload_can_filter_to_live_services(self):
+        self.assertEqual(
+            service_ports_from_payload(
+                {
+                    "services": [
+                        {"job_id": "missing-job", "status": "passing", "port": 61000},
+                        {"job_id": "critical-job", "status": "critical", "port": 61001},
+                        {"job_id": "failed-health-job", "status": "warning", "health": {"status": "critical"}, "port": 61002},
+                        {"job_id": "unknown-status-job", "port": 61003},
+                    ]
+                },
+                live_only=True,
+            ),
+            {61000, 61003},
+        )
+
+    def test_scheduler_allocated_ports_from_jobs_payload_extracts_web_ui_ports(self):
+        self.assertEqual(
+            scheduler_allocated_ports_from_jobs_payload(
+                {
+                    "job": {
+                        "job_id": "active-job",
+                        "scheduler": {
+                            "placements": [
+                                {
+                                    "agent_id": "web_ui_dashboard",
+                                    "allocations": {
+                                        "ports": [
+                                            {"label": "web_ui", "port": 61000, "protocol": "http"},
+                                            {"label": "debug", "port": "61001"},
+                                            {"label": "bad", "port": "not-a-port"},
+                                        ]
+                                    },
+                                }
+                            ]
+                        },
+                    }
+                }
+            ),
+            {61000, 61001},
+        )
+
+    @patch("mn_api.state.client")
+    def test_runtime_blueprint_web_ui_reserved_ports_falls_back_to_job_placements(self, mock_client):
+        mock_client.list_jobs.return_value = json.dumps(
+            {"data": [{"job_id": "active-job", "status": "running"}]}
+        )
+        mock_client.get_job.return_value = json.dumps(
+            {
+                "job": {
+                    "job_id": "active-job",
+                    "status": "running",
+                    "scheduler": {
+                        "placements": [
+                            {
+                                "agent_id": "web_ui_dashboard",
+                                "allocations": {
+                                    "ports": [{"label": "web_ui", "port": 61000, "protocol": "http"}]
+                                },
+                            }
+                        ]
+                    },
+                }
+            }
+        )
+        mock_client.resolve_service.side_effect = RuntimeError("gRPC auth token is required for this RPC")
+
+        self.assertEqual(runtime_blueprint_web_ui_reserved_ports(), {61000})
+        mock_client.get_job.assert_called_once_with("active-job")
+
+    @patch("mn_api.state.client")
+    def test_runtime_blueprint_web_ui_reserved_ports_uses_live_registry_when_jobs_are_missing(self, mock_client):
+        mock_client.list_jobs.return_value = json.dumps({"data": []})
+        mock_client.resolve_service.return_value = json.dumps({
+            "services": [
+                {"job_id": "registry-live-job", "status": "passing", "port": 61000},
+                {"job_id": "registry-stale-job", "status": "critical", "port": 61001},
+            ]
+        })
+
+        self.assertEqual(runtime_blueprint_web_ui_reserved_ports(), {61000})
+        mock_client.get_job.assert_not_called()
+
+    @patch('mn_api.state.client')
+    def test_blueprint_run_persists_runtime_web_ui_service_contract(self, mock_client):
+        mock_client.list_jobs.return_value = json.dumps({"data": []})
+        mock_client.resolve_service.return_value = json.dumps({"services": []})
+        mock_client.submit_job.return_value = "job-web-ui-contract"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            runs_root = repo / "runs"
+            self._write_blueprint_repo(repo)
+            (repo / "worker_one" / "manifest.json").write_text(json.dumps({
+                "graph_id": "worker_one_graph",
+                "type": "service",
+                "nodes": [],
+                "edges": [],
+                "metadata": {},
+            }))
+            config_dir = repo / "worker_one" / "config"
+            config_dir.mkdir()
+            (config_dir / "default.json").write_text(json.dumps({
+                "identity": {"blueprint_id": "worker_one", "name": "Worker One"},
+                "web_ui": {
+                    "enabled": True,
+                    "dashboard": {
+                        "browser_video_source": "http://127.0.0.1:8889/video-watch/",
+                    },
+                    "output": {
+                        "adapter": "gradio",
+                        "auto_generate": True,
+                        "title": "Worker One Dashboard",
+                    },
+                },
+            }))
+            original = self._set_blueprint_config(repo)
+            try:
+                with patch.dict(os.environ, {
+                    "MN_RUNS_ROOT": str(runs_root),
+                    "MN_BLUEPRINT_WEB_UI_PORT_START": "61000",
+                    "MN_BLUEPRINT_WEB_UI_PORT_END": "61000",
+                    "MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE": "prepublished",
+                }):
+                    response = self.client.post(
+                        "/api/v1/blueprints/worker_one/runs",
+                        json={"run_id": "run-web-ui-contract", "force": True},
+                    )
+                    job_record = json.loads((runs_root / "run-web-ui-contract" / "job.json").read_text())
+            finally:
+                self._restore_config(original)
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["web_ui_service"]["service_name"], "blueprint-web-ui")
+        self.assertEqual(body["web_ui_service"]["url"], "http://localhost:61000")
+        self.assertEqual(job_record["web_ui_service"]["run_id"], "run-web-ui-contract")
+        self.assertEqual(job_record["web_ui_service"]["port"], 61000)
+        self.assertEqual(job_record["web_ui_service"]["browser_video_source"], "http://127.0.0.1:8889/video-watch/")
 
     def test_config_uses_grpc_admin_token(self):
         with patch.dict(os.environ, {"MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN": "admin-secret"}, clear=False):
@@ -911,6 +1127,30 @@ class TestAPI(unittest.TestCase):
         self.assertTrue(any(artifact["content_type"] == "application/pdf" for artifact in body["artifacts"]))
 
     @patch('mn_api.state.client')
+    def test_get_job_compact_does_not_treat_agent_completion_as_job_completion(self, mock_client):
+        mock_client.get_job.side_effect = AssertionError("default job details should not call full gRPC get_job")
+        mock_client.stream_events.return_value = [
+            json.dumps({
+                "type": "job_started",
+                "timestamp": "2026-05-25T23:00:00Z",
+                "payload": {"run_id": "service-run"},
+            }),
+            json.dumps({
+                "type": "sandbox_job_completed",
+                "timestamp": "2026-05-25T23:00:05Z",
+                "agent_id": "visual_detector",
+                "payload": {"exit_code": 0, "run_id": "service-run"},
+            }),
+        ]
+
+        response = self.client.get("/api/v1/jobs/service-job")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["job"]["status"], "running")
+        self.assertEqual(body["summary"]["status"], "running")
+
+    @patch('mn_api.state.client')
     def test_get_job_include_full_keeps_debug_grpc_path(self, mock_client):
         mock_client.get_job.return_value = json.dumps({
             "job": {"job_id": "job-full", "graph_id": "graph-1", "status": "running"}
@@ -1275,6 +1515,54 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(manifest["metadata"]["run_id"], body["run_id"])
         self.assertEqual(manifest["metadata"]["blueprint_run_id"], body["run_id"])
         self.assertTrue(mapping_exists)
+
+    @patch('mn_api.state.client')
+    def test_blueprint_run_starts_event_relay_for_post_launch_batch_worker(self, mock_client):
+        mock_client.submit_job.return_value = "job-post-launch"
+        mock_client.list_jobs.return_value = json.dumps({"data": []})
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            runs_root = (repo / "runs").resolve()
+            self._write_blueprint_repo(repo)
+            scripts_dir = repo / "worker_one" / "scripts"
+            scripts_dir.mkdir()
+            post_launch_script = scripts_dir / "post-launch.sh"
+            post_launch_script.write_text("#!/usr/bin/env bash\n")
+            popen_commands = []
+
+            def fake_popen(command, **_kwargs):
+                popen_commands.append(command)
+                return SimpleNamespace(pid=55555)
+
+            original = self._set_blueprint_config(repo)
+            try:
+                with patch.dict('os.environ', {"MN_RUNS_ROOT": str(runs_root)}):
+                    with patch('mn_api.blueprints.subprocess.Popen', side_effect=fake_popen):
+                        response = self.client.post(
+                            "/api/v1/blueprints/worker_one/runs",
+                            json={"run_id": "run-post-launch"},
+                        )
+                        relay_info = json.loads((runs_root / "run-post-launch" / "event_relay.json").read_text())
+            finally:
+                self._restore_config(original)
+
+        self.assertEqual(response.status_code, 200)
+        relay_commands = [command for command in popen_commands if "mn_blueprint_support.event_relay" in command]
+        self.assertEqual(len(relay_commands), 1)
+        self.assertEqual(relay_commands[0][:9], [
+            sys.executable,
+            "-m",
+            "mn_blueprint_support.event_relay",
+            "--job-id",
+            "job-post-launch",
+            "--run-dir",
+            str(runs_root / "run-post-launch"),
+            "--poll-seconds",
+            "1",
+        ])
+        self.assertEqual(relay_info["job_id"], "job-post-launch")
+        self.assertEqual(relay_info["run_id"], "run-post-launch")
+        self.assertEqual(relay_info["service"], {})
 
     @patch('mn_api.state.client')
     def test_blueprint_run_reads_latest_local_repo_config(self, mock_client):
