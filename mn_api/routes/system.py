@@ -1,21 +1,27 @@
 from __future__ import annotations
 
 import json
+import re
+import socket
 from numbers import Number
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+import grpc
+from mn_sdk import Client
 
 from mn_api import state
 from mn_api.blueprints import is_git_repo_url, shared_runs_root
 from mn_api.config import auth_enabled
 from mn_api.dependencies import require_auth
 from mn_api.errors import handle_grpc_error
-from mn_api.schemas import ResourceSetRequest
+from mn_api.schemas import ClusterNodeAddRequest, ClusterNodeRemoveRequest, ResourceSetRequest
 
 
 router = APIRouter(prefix="/api/v1")
+
+DEFAULT_NODE_ADD_GRPC_PORTS = (55051, 50051)
 
 
 @router.get("/health")
@@ -98,6 +104,53 @@ def set_resource(req: ResourceSetRequest, _auth=Depends(require_auth)):
         return handle_grpc_error(exc)
 
 
+@router.post("/system/cluster/nodes:add")
+@router.post("/system/cluster/nodes:join")
+def add_cluster_node(req: ClusterNodeAddRequest, _auth=Depends(require_auth)):
+    try:
+        host = normalize_node_host(req.host)
+        token = normalize_node_token(req.token)
+        local_host = detect_lan_ip()
+        handshake = network_handshake_with_fallback(
+            host=host,
+            token=token,
+            grpc_ports=candidate_grpc_ports(req.grpc_port),
+            local_host=local_host,
+        )
+        node_name = normalize_node_name(handshake.get("node_name") or f"mirror_neuron@{host}")
+        status = state.client.add_node(node_name, token=token)
+        return {
+            "ok": True,
+            "host": host,
+            "node_name": node_name,
+            "status": status,
+            "message": f"{node_name} was added to this box.",
+            "handshake": public_handshake_summary(handshake),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        return handle_grpc_error(exc)
+
+
+@router.post("/system/cluster/nodes:remove")
+@router.post("/system/cluster/nodes:leave")
+def remove_cluster_node(req: ClusterNodeRemoveRequest, _auth=Depends(require_auth)):
+    try:
+        node_name = normalize_node_name(req.node_name)
+        status = state.client.remove_node(node_name)
+        return {
+            "ok": True,
+            "node_name": node_name,
+            "status": status,
+            "message": f"{node_name} was removed from this box.",
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        return handle_grpc_error(exc)
+
+
 def counts(values):
     result = {}
     for value in values:
@@ -165,3 +218,138 @@ def resource_number(value: Any) -> float:
         except ValueError:
             return 0.0
     return 0.0
+
+
+def normalize_node_host(value: str) -> str:
+    host = str(value or "").strip()
+    if (
+        not host
+        or len(host) > 253
+        or host.startswith("-")
+        or re.search(r"\s", host)
+        or re.match(r"^[a-z][a-z0-9+.-]*://", host, flags=re.IGNORECASE)
+    ):
+        raise HTTPException(status_code=422, detail="Remote node host must be a host name or IP address.")
+    return host
+
+
+def normalize_node_token(value: str) -> str:
+    token = str(value or "").strip()
+    if not token or len(token) > 4096 or re.search(r"\s", token):
+        raise HTTPException(status_code=422, detail="Remote node token is required.")
+    return token
+
+
+def normalize_node_name(value: str) -> str:
+    node_name = str(value or "").strip()
+    if (
+        not node_name
+        or len(node_name) > 253
+        or node_name.startswith("-")
+        or re.search(r"\s", node_name)
+        or "@" not in node_name
+    ):
+        raise HTTPException(status_code=422, detail="Remote node name must look like mirror_neuron@host.")
+    return node_name
+
+
+def normalize_grpc_port(value: int | None) -> int:
+    try:
+        port = int(value or 55051)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="Remote gRPC port must be a valid TCP port.")
+    if port < 1 or port > 65535:
+        raise HTTPException(status_code=422, detail="Remote gRPC port must be a valid TCP port.")
+    return port
+
+
+def candidate_grpc_ports(value: int | None) -> list[int]:
+    if value is not None:
+        return [normalize_grpc_port(value)]
+    return list(DEFAULT_NODE_ADD_GRPC_PORTS)
+
+
+def network_handshake_with_fallback(
+    *,
+    host: str,
+    token: str,
+    grpc_ports: list[int],
+    local_host: str,
+) -> dict[str, Any]:
+    last_error: Exception | None = None
+    for grpc_port in grpc_ports:
+        try:
+            remote = Client(target=f"{host}:{grpc_port}", auth_token="", timeout=10)
+            return remote.network_handshake(
+                token,
+                node_name=network_node_name(local_host),
+                node_info=handshake_node_info(local_host),
+            )
+        except Exception as exc:
+            last_error = exc
+            if not is_grpc_unavailable(exc):
+                raise
+    if last_error:
+        raise last_error
+    raise HTTPException(status_code=422, detail="Remote gRPC port must be a valid TCP port.")
+
+
+def is_grpc_unavailable(error: Exception) -> bool:
+    return isinstance(error, grpc.RpcError) and error.code() == grpc.StatusCode.UNAVAILABLE
+
+
+def loopback_host(value: str) -> bool:
+    host = str(value or "").strip().lower()
+    return host in {"", "localhost", "127.0.0.1", "::1"} or host.startswith("127.")
+
+
+def detect_lan_ip() -> str:
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.connect(("10.255.255.255", 1))
+        detected = probe.getsockname()[0]
+        if not loopback_host(detected):
+            return detected
+    except OSError:
+        pass
+    finally:
+        probe.close()
+
+    try:
+        detected = socket.gethostbyname(socket.gethostname())
+        if not loopback_host(detected):
+            return detected
+    except OSError:
+        pass
+
+    return "127.0.0.1"
+
+
+def network_node_name(host: str) -> str:
+    return f"mirror_neuron@{host}"
+
+
+def handshake_node_info(local_host: str) -> dict[str, Any]:
+    try:
+        hostname = socket.gethostname().strip()
+    except OSError:
+        hostname = ""
+
+    return {
+        "node_name": network_node_name(local_host),
+        "display_name": hostname or local_host,
+        "hostname": hostname,
+    }
+
+
+def public_handshake_summary(handshake: dict[str, Any]) -> dict[str, Any]:
+    public_keys = (
+        "node_name",
+        "runtime_mode",
+        "grpc_host",
+        "grpc_port",
+        "dist_port",
+        "cluster_nodes",
+        "network_only",
+    )
+    return {key: handshake[key] for key in public_keys if key in handshake}

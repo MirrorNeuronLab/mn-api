@@ -33,6 +33,16 @@ class ResourceSetRequest(BaseModel):
     disk: Optional[int] = None
 
 
+class ClusterNodeAddRequest(BaseModel):
+    host: str
+    token: str
+    grpc_port: Optional[int] = None
+
+
+class ClusterNodeRemoveRequest(BaseModel):
+    node_name: str
+
+
 class CreateScheduleRequest(BaseModel):
     manifest_json: Optional[str] = None
     payloads: Optional[Dict[str, str]] = Field(default_factory=dict)

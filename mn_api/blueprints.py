@@ -83,7 +83,7 @@ def runtime_path_environment() -> Dict[str, str]:
     }
     python_paths = [
         skills_root / "blueprint_support_skill" / "src",
-        skills_root / "tax_pdf_ocr_skill" / "src",
+        skills_root / "llm_ocr_skill" / "src",
         skills_root / "pdf_extract_skill" / "src",
     ]
     existing_pythonpath = os.getenv("PYTHONPATH")
@@ -97,13 +97,9 @@ def runtime_path_environment() -> Dict[str, str]:
 
 def inject_local_blueprint_support_path() -> None:
     skills_root = Path(runtime_path_environment()["MN_SKILLS_ROOT"]).expanduser()
-    for candidate in (
-        skills_root / "blueprint_support_skill" / "src",
-        skills_root / "blueprint-support-skill" / "src",
-    ):
-        if candidate.is_dir() and str(candidate) not in sys.path:
-            sys.path.insert(0, str(candidate))
-            return
+    candidate = skills_root / "blueprint_support_skill" / "src"
+    if candidate.is_dir() and str(candidate) not in sys.path:
+        sys.path.insert(0, str(candidate))
 
 
 def as_dict(value: Any) -> Dict[str, Any]:

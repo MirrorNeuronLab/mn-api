@@ -210,6 +210,27 @@ def _read_json_file(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _read_jsonl_file(path: Path, *, limit: int = 5000) -> list[dict[str, Any]]:
+    if not path.exists() or limit <= 0:
+        return []
+    events: deque[dict[str, Any]] = deque(maxlen=limit)
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                try:
+                    event = json.loads(stripped)
+                except json.JSONDecodeError:
+                    event = {"type": "unparseable_event", "payload": {"line": stripped[:_MAX_COMPACT_STRING]}}
+                if isinstance(event, dict):
+                    events.append(event)
+    except OSError:
+        return []
+    return list(events)
+
+
 def _run_dir_from_id(run_id: str | None) -> Path | None:
     if not run_id or not _SAFE_RUN_ID.match(run_id):
         return None
@@ -546,13 +567,16 @@ def _full_job_detail(job_id: str) -> dict[str, Any]:
 def _workflow_progress_snapshot_for_job(job_id: str) -> dict[str, Any]:
     details = _full_job_detail(job_id)
     events, stream_error = _stream_job_events(job_id, limit=5000)
+    run_dir = _run_dir_for_details(details, events, job_id=job_id)
+    events = _merge_events(events, _run_store_events(run_dir, limit=5000), limit=5000)
     snapshot = workflow_progress_snapshot(
-        _manifest_from_job_details(details),
+        _manifest_from_job_details(details, run_dir=run_dir),
         events,
         job=_job_from_details(details),
         summary=_summary_from_details(details),
         job_id=job_id,
     )
+    _apply_default_assigned_node(snapshot, details)
     if stream_error:
         snapshot["warning"] = stream_error
     return snapshot
@@ -568,18 +592,23 @@ def _summary_from_details(details: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
-def _manifest_from_job_details(details: dict[str, Any]) -> dict[str, Any]:
-    for candidate in (
+def _manifest_from_job_details(details: dict[str, Any], *, run_dir: Path | None = None) -> dict[str, Any]:
+    direct_manifest = _first_manifest(
         details.get("manifest"),
         _job_from_details(details).get("manifest"),
         _summary_from_details(details).get("manifest"),
-    ):
-        if isinstance(candidate, dict) and candidate:
-            return candidate
+    )
+    if _manifest_has_workflow_flow(direct_manifest):
+        return direct_manifest
+
+    run_manifest = _manifest_from_run_dir(run_dir)
+    if _manifest_has_workflow_flow(run_manifest):
+        return run_manifest
 
     manifest_ref = _job_from_details(details).get("manifest_ref")
     if not isinstance(manifest_ref, dict):
         manifest_ref = _summary_from_details(details).get("manifest_ref")
+    ref_manifest: dict[str, Any] = {}
     if isinstance(manifest_ref, dict):
         for raw_path in (
             manifest_ref.get("manifest_path"),
@@ -594,11 +623,129 @@ def _manifest_from_job_details(details: dict[str, Any]) -> dict[str, Any]:
                 if path.is_file():
                     loaded = json.loads(path.read_text(encoding="utf-8"))
                     if isinstance(loaded, dict):
-                        return loaded
+                        ref_manifest = loaded
+                        break
             except (OSError, json.JSONDecodeError):
                 continue
+    if _manifest_has_workflow_flow(ref_manifest):
+        return ref_manifest
+    if run_manifest:
+        return run_manifest
+    if direct_manifest:
+        return direct_manifest
+    if ref_manifest:
+        return ref_manifest
 
     return _fallback_manifest_from_details(details)
+
+
+def _first_manifest(*candidates: Any) -> dict[str, Any]:
+    for candidate in candidates:
+        if isinstance(candidate, dict) and candidate:
+            return candidate
+    return {}
+
+
+def _manifest_has_workflow_flow(manifest: dict[str, Any]) -> bool:
+    flow = manifest.get("flow") if isinstance(manifest, dict) else None
+    steps = flow.get("steps") if isinstance(flow, dict) else None
+    return isinstance(steps, list) and bool(steps)
+
+
+def _manifest_from_run_dir(run_dir: Path | None) -> dict[str, Any]:
+    if run_dir is None:
+        return {}
+    for filename in ("config.json", "manifest.json"):
+        manifest = _read_json_file(run_dir / filename)
+        if manifest:
+            return manifest
+    return {}
+
+
+def _run_dir_for_details(details: dict[str, Any], events: list[dict[str, Any]], *, job_id: str | None = None) -> Path | None:
+    job = _job_from_details(details)
+    summary = _summary_from_details(details)
+    run_id = _first_string(
+        job.get("run_id"),
+        job.get("runId"),
+        summary.get("run_id"),
+        summary.get("runId"),
+        details.get("run_id"),
+        details.get("runId"),
+        _extract_nested_string(events, "run_id", "runId"),
+    )
+    run_dir = _run_dir_from_id(run_id)
+    if run_dir is not None:
+        return run_dir
+    if job_id:
+        found_run_dir, _stored_job = _find_run_dir_for_job(job_id)
+        return found_run_dir
+    return None
+
+
+def _run_store_events(run_dir: Path | None, *, limit: int = 5000) -> list[dict[str, Any]]:
+    if run_dir is None:
+        return []
+    return _read_jsonl_file(run_dir / "events.jsonl", limit=limit)
+
+
+def _merge_events(*event_groups: list[dict[str, Any]], limit: int = 5000) -> list[dict[str, Any]]:
+    merged: list[tuple[int, dict[str, Any]]] = []
+    seen: set[str] = set()
+    index = 0
+    for events in event_groups:
+        for event in events or []:
+            if not isinstance(event, dict):
+                continue
+            key = _event_key(event)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append((index, event))
+            index += 1
+    merged.sort(key=lambda item: (str(item[1].get("timestamp") or item[1].get("ts") or ""), item[0]))
+    return [event for _index, event in merged[-limit:]]
+
+
+def _apply_default_assigned_node(snapshot: dict[str, Any], details: dict[str, Any]) -> None:
+    assigned_node = _default_assigned_node(details) or "workflow/runtime"
+    for step in snapshot.get("steps") or []:
+        _assign_step_agents(step, assigned_node)
+    current_step = snapshot.get("current_step")
+    if isinstance(current_step, dict):
+        _assign_step_agents(current_step, assigned_node)
+
+
+def _assign_step_agents(step: dict[str, Any], assigned_node: str) -> None:
+    agents = step.get("agents")
+    if not isinstance(agents, list):
+        return
+    for agent in agents:
+        if not isinstance(agent, dict):
+            continue
+        if not _known_assigned_node(agent.get("assigned_node")):
+            agent["assigned_node"] = assigned_node
+
+
+def _default_assigned_node(details: dict[str, Any]) -> str:
+    records: list[dict[str, Any]] = []
+    agents = details.get("agents")
+    if isinstance(agents, list):
+        records.extend(agent for agent in agents if isinstance(agent, dict))
+    topology = _job_from_details(details).get("runtime_topology")
+    if isinstance(topology, dict) and isinstance(topology.get("nodes"), list):
+        records.extend(node for node in topology["nodes"] if isinstance(node, dict))
+    for record in records:
+        value = _first_string(record.get("assigned_node"), record.get("node"))
+        if _known_assigned_node(value):
+            return value
+    return ""
+
+
+def _known_assigned_node(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    return value.strip().lower() not in {"", "unknown", "unassigned"}
 
 
 def _fallback_manifest_from_details(details: dict[str, Any]) -> dict[str, Any]:
@@ -615,6 +762,8 @@ def _fallback_manifest_from_details(details: dict[str, Any]) -> dict[str, Any]:
         nodes.append(
             {
                 "node_id": agent_id,
+                "alias": _first_string(agent.get("alias")),
+                "display_name": _first_string(agent.get("display_name"), agent.get("label")),
                 "agent_type": _first_string(agent.get("agent_type"), agent.get("type"), "worker"),
                 "role": _first_string(agent.get("role"), agent.get("current_task"), agent.get("agent_type"), "worker"),
                 "type": _first_string(agent.get("node_type"), agent.get("type")),
@@ -656,6 +805,8 @@ def get_job_agent_graph(job_id: str, _auth=Depends(require_auth)):
     try:
         details = _full_job_detail(job_id)
         events, _stream_error = _stream_job_events(job_id, limit=5000)
+        run_dir = _run_dir_for_details(details, events, job_id=job_id)
+        events = _merge_events(events, _run_store_events(run_dir, limit=5000), limit=5000)
         return build_agent_graph(job_id, details, events)
     except Exception as exc:
         return handle_grpc_error(exc)
@@ -705,8 +856,10 @@ def stream_job_workflow_progress(
         stop = threading.Event()
         event_queue: queue.Queue[tuple[str, str | None]] = queue.Queue()
         details = _full_job_detail(job_id)
-        manifest = _manifest_from_job_details(details)
         events, stream_error = _stream_job_events(job_id, limit=5000)
+        run_dir = _run_dir_for_details(details, events, job_id=job_id)
+        manifest = _manifest_from_job_details(details, run_dir=run_dir)
+        events = _merge_events(events, _run_store_events(run_dir, limit=5000), limit=5000)
         tracker = BlueprintWorkflowProgress(
             manifest,
             job_id=job_id,
@@ -719,6 +872,7 @@ def stream_job_workflow_progress(
             tracker.update(event)
         tracker.apply_job_status(_job_from_details(details), _summary_from_details(details))
         initial = tracker.snapshot(job=_job_from_details(details), summary=_summary_from_details(details))
+        _apply_default_assigned_node(initial, details)
         if stream_error:
             initial["warning"] = stream_error
         yield _sse_event("snapshot", initial)
@@ -779,9 +933,11 @@ def stream_job_workflow_progress(
                 if event_type in {"job_completed", "job_failed", "job_cancelled"}:
                     details = _full_job_detail(job_id)
                     tracker.apply_job_status(_job_from_details(details), _summary_from_details(details))
+                snapshot = tracker.snapshot(job=_job_from_details(details), summary=_summary_from_details(details))
+                _apply_default_assigned_node(snapshot, details)
                 yield _sse_event(
                     "snapshot",
-                    tracker.snapshot(job=_job_from_details(details), summary=_summary_from_details(details)),
+                    snapshot,
                 )
                 if event_type in {"job_completed", "job_failed", "job_cancelled"}:
                     break

@@ -59,6 +59,53 @@ class TestAgentGraphServices(unittest.TestCase):
         self.assertEqual(event_message_summary(envelope), envelope["message"]["envelope"])
         self.assertIsNone(event_message_summary({"type": "agent_message_received", "payload": "bad"}))
 
+    def test_build_agent_graph_prefers_aliases_and_labels_runtime_infrastructure(self):
+        details = {
+            "job": {
+                "job_id": "video-job",
+                "graph_id": "video_watch_assistant_v1",
+                "status": "running",
+                "topology": {
+                    "nodes": [
+                        {
+                            "node_id": "visual_detector",
+                            "agent_type": "executor",
+                            "type": "stream",
+                        }
+                    ],
+                    "edges": [],
+                    "metadata": {
+                        "agent_templates": {
+                            "nodes": [
+                                {
+                                    "node_id": "visual_detector",
+                                    "alias": "quality_controller",
+                                    "display_name": "Quality Controller",
+                                }
+                            ]
+                        }
+                    },
+                },
+            },
+            "agents": [],
+        }
+        events = [
+            {
+                "type": "agent_message_received",
+                "timestamp": "2026-06-01T10:00:00Z",
+                "payload": {"from": "runtime", "to": "visual_detector", "type": "video_watch_detection"},
+            }
+        ]
+
+        graph = build_agent_graph("video-job", details, events)
+        nodes = {node["id"]: node for node in graph["nodes"]}
+
+        self.assertEqual(nodes["visual_detector"]["label"], "quality_controller")
+        self.assertEqual(nodes["visual_detector"]["alias"], "quality_controller")
+        self.assertEqual(nodes["runtime"]["label"], "System Runtime")
+        self.assertEqual(nodes["runtime"]["agent_type"], "system")
+        self.assertEqual(nodes["runtime"]["assigned_node"], "system/runtime")
+
     def test_load_manifest_for_job_returns_empty_dict_for_missing_or_invalid_manifest(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             missing = Path(tmpdir) / "missing.json"

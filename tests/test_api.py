@@ -596,6 +596,51 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.json()["limits"]["gpu"], 75)
         mock_client.set_resource.assert_called_once_with({"cpu": 50, "gpu": 75, "memory": 100})
 
+    @patch('mn_api.routes.system.Client')
+    @patch('mn_api.state.client')
+    def test_add_cluster_node_success(self, mock_client, mock_remote_client_class):
+        remote_client = mock_remote_client_class.return_value
+        remote_client.network_handshake.return_value = {
+            "node_name": "mirror_neuron@10.0.0.42",
+            "runtime_mode": "network_only",
+            "grpc_host": "10.0.0.42",
+            "grpc_port": 55051,
+            "redis_url": "redis://:join-token@10.0.0.42:6379/0",
+        }
+        mock_client.add_node.return_value = "connected"
+
+        response = self.client.post(
+            "/api/v1/system/cluster/nodes:add",
+            json={"host": "10.0.0.42", "token": "join-token"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["host"], "10.0.0.42")
+        self.assertEqual(body["node_name"], "mirror_neuron@10.0.0.42")
+        self.assertEqual(body["status"], "connected")
+        self.assertNotIn("redis_url", body["handshake"])
+        self.assertNotIn("join-token", json.dumps(body))
+        mock_remote_client_class.assert_called_once_with(target="10.0.0.42:55051", auth_token="", timeout=10)
+        remote_client.network_handshake.assert_called_once()
+        self.assertEqual(remote_client.network_handshake.call_args.args[0], "join-token")
+        self.assertIn("node_name", remote_client.network_handshake.call_args.kwargs)
+        self.assertIn("node_info", remote_client.network_handshake.call_args.kwargs)
+        mock_client.add_node.assert_called_once_with("mirror_neuron@10.0.0.42", token="join-token")
+
+    @patch('mn_api.state.client')
+    def test_remove_cluster_node_success(self, mock_client):
+        mock_client.remove_node.return_value = "disconnected"
+
+        response = self.client.post(
+            "/api/v1/system/cluster/nodes:remove",
+            json={"node_name": "mirror_neuron@10.0.0.42"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "disconnected")
+        mock_client.remove_node.assert_called_once_with("mirror_neuron@10.0.0.42")
+
     @patch('mn_api.state.client')
     def test_submit_job_success(self, mock_client):
         mock_client.submit_job.return_value = "job-123"
@@ -1120,6 +1165,91 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(body["current_step_id"], "research")
         self.assertEqual(body["steps"][0]["agents"][0]["tokens"], 1200)
         mock_client.stream_events.assert_called_once_with("job-progress", follow=False)
+
+    @patch('mn_api.state.client')
+    def test_get_job_workflow_progress_prefers_run_store_workflow_manifest(self, mock_client):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "video-run"
+            run_dir.mkdir()
+            (run_dir / "config.json").write_text(json.dumps({
+                "id": "video_watch_assistant",
+                "type": "service",
+                "flow": {
+                    "entrypoint": "start_video_monitor",
+                    "steps": [
+                        {
+                            "id": "start_video_monitor",
+                            "label": "Start Video Monitor",
+                            "run": "start_video_monitor",
+                        }
+                    ],
+                },
+                "runtime": {
+                    "bindings": {
+                        "start_video_monitor": {
+                            "workers": [
+                                {
+                                    "id": "video_monitor",
+                                    "alias": "video_monitor",
+                                    "display_name": "Video Monitor",
+                                    "role": "Coordinate video monitoring",
+                                }
+                            ]
+                        }
+                    }
+                },
+            }))
+            (run_dir / "events.jsonl").write_text("\n".join([
+                json.dumps({
+                    "type": "workflow_step_started",
+                    "timestamp": "2026-06-01T10:00:01Z",
+                    "payload": {"step": "start_video_monitor"},
+                }),
+                json.dumps({
+                    "type": "workflow_worker_completed",
+                    "timestamp": "2026-06-01T10:00:02Z",
+                    "payload": {"step": "start_video_monitor", "worker": "video_monitor"},
+                }),
+            ]))
+            mock_client.get_job.return_value = json.dumps({
+                "job": {
+                    "job_id": "job-progress",
+                    "run_id": "video-run",
+                    "job_type": "service",
+                    "status": "running",
+                    "submitted_at": "2026-06-01T10:00:00Z",
+                    "manifest": {
+                        "graph_id": "runtime-wrapper",
+                        "nodes": [{"node_id": "workflow_manifest_executor", "role": "root_coordinator"}],
+                    },
+                },
+                "summary": {"status": "running"},
+                "agents": [
+                    {
+                        "agent_id": "workflow_manifest_executor",
+                        "agent_type": "executor",
+                        "type": "worker",
+                        "status": "paused",
+                        "assigned_node": "mirror_neuron@192.168.4.34",
+                    }
+                ],
+            })
+            mock_client.stream_events.return_value = [
+                json.dumps({"type": "job_running", "timestamp": "2026-06-01T10:00:00Z"}),
+            ]
+
+            with patch.dict(os.environ, {"MN_RUNS_ROOT": tmp}):
+                response = self.client.get("/api/v1/jobs/job-progress/workflow-progress")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["workflow_id"], "video_watch_assistant")
+        self.assertEqual(body["steps"][0]["id"], "start_video_monitor")
+        self.assertEqual(body["steps"][0]["label"], "Start Video Monitor")
+        self.assertEqual(body["steps"][0]["agents"][0]["id"], "video_monitor")
+        self.assertEqual(body["steps"][0]["agents"][0]["alias"], "video_monitor")
+        self.assertEqual(body["steps"][0]["agents"][0]["display_name"], "Video Monitor")
+        self.assertEqual(body["steps"][0]["agents"][0]["assigned_node"], "mirror_neuron@192.168.4.34")
 
     @patch('mn_api.state.client')
     def test_get_job_workflow_progress_marks_service_workers_idle_from_runtime_topology(self, mock_client):
