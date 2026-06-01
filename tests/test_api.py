@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from mn_api.config import ApiConfig
 from mn_api import state
 from mn_api.main import app
-from mn_api.blueprints import scheduler_allocated_ports_from_jobs_payload
+from mn_api.blueprints import parse_cli_field, scheduler_allocated_ports_from_jobs_payload
 from mn_api.routes.blueprints import runtime_blueprint_web_ui_reserved_ports, service_ports_from_payload
 from unittest.mock import patch
 import grpc
@@ -1860,6 +1860,116 @@ class TestAPI(unittest.TestCase):
         self.assertIn("model_url", body["validation"]["errors"][0])
         self.assertEqual(body["validation"]["issues"][0]["location"]["path"], "llm.api_base")
         self.assertEqual(body["validation"]["issues"][0]["rule"]["name"], "model_url")
+
+    @patch("mn_api.routes.blueprints.run_mn_blueprint_validate")
+    def test_blueprint_launch_validate_uses_mn_cli_for_catalog_blueprint(self, mock_validate):
+        mock_validate.return_value = {"ok": True, "status": "passed", "issues": [], "errors": []}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            self._write_blueprint_repo(repo)
+            original = self._set_blueprint_config(repo)
+            try:
+                response = self.client.post(
+                    "/api/v1/blueprints/launch/validate",
+                    json={"source": "catalog", "blueprint_id": "worker_one"},
+                )
+            finally:
+                self._restore_config(original)
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["source"], "catalog")
+        self.assertEqual(body["blueprint"]["id"], "worker_one")
+        self.assertTrue(body["validation"]["ok"])
+        mock_validate.assert_called_once()
+        self.assertEqual(mock_validate.call_args.args[0].name, "worker_one")
+
+    @patch("mn_api.routes.blueprints.run_mn_blueprint_run")
+    @patch("mn_api.routes.blueprints.run_mn_blueprint_validate")
+    def test_blueprint_launch_run_uses_mn_cli_for_catalog_blueprint(self, mock_validate, mock_run):
+        mock_validate.return_value = {"ok": True, "status": "passed", "issues": [], "errors": []}
+        mock_run.return_value = {"ok": True, "job_id": "job-from-cli", "run_id": "run-from-cli", "command": "mn blueprint run"}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            self._write_blueprint_repo(repo)
+            original = self._set_blueprint_config(repo)
+            try:
+                response = self.client.post(
+                    "/api/v1/blueprints/launch/runs",
+                    json={"source": "catalog", "blueprint_id": "worker_one"},
+                )
+            finally:
+                self._restore_config(original)
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["job_id"], "job-from-cli")
+        self.assertEqual(body["id"], "job-from-cli")
+        self.assertEqual(body["run_id"], "run-from-cli")
+        self.assertEqual(mock_run.call_args.args[0], ["worker_one", "--detached"])
+
+    @patch("mn_api.routes.blueprints.run_mn_blueprint_run")
+    @patch("mn_api.routes.blueprints.run_mn_blueprint_validate")
+    def test_blueprint_launch_run_uses_mn_cli_for_filesystem_path(self, mock_validate, mock_run):
+        mock_validate.return_value = {"ok": True, "status": "passed", "issues": [], "errors": []}
+        mock_run.return_value = {"ok": True, "job_id": "job-path-cli", "command": "mn blueprint run --folder"}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            bundle_dir = Path(tmpdir) / "local_worker"
+            (bundle_dir / "payloads").mkdir(parents=True)
+            (bundle_dir / "manifest.json").write_text(json.dumps({
+                "graph_id": "local_worker_graph",
+                "job_name": "Local Worker",
+                "nodes": [],
+                "edges": [],
+            }))
+            response = self.client.post(
+                "/api/v1/blueprints/launch/runs",
+                json={"source": "path", "path": str(bundle_dir)},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["job_id"], "job-path-cli")
+        self.assertEqual(mock_run.call_args.args[0], ["--folder", str(bundle_dir.resolve()), "--detached"])
+
+    @patch("mn_api.routes.blueprints.run_mn_blueprint_run")
+    @patch("mn_api.routes.blueprints.run_mn_blueprint_validate")
+    def test_blueprint_launch_validation_failure_blocks_cli_run(self, mock_validate, mock_run):
+        mock_validate.return_value = {
+            "ok": False,
+            "status": "failed",
+            "errors": ["bad input"],
+            "issues": [{"message": "bad input"}],
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            self._write_blueprint_repo(repo)
+            original = self._set_blueprint_config(repo)
+            try:
+                response = self.client.post(
+                    "/api/v1/blueprints/launch/runs",
+                    json={"source": "catalog", "blueprint_id": "worker_one"},
+                )
+            finally:
+                self._restore_config(original)
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["error"], "blueprint_validation_failed")
+        mock_run.assert_not_called()
+
+    def test_blueprint_launch_cli_field_parser_reads_rich_output(self):
+        output = """
+        ╭──────────────────── Job submitted successfully ────────────────────╮
+        │ Bundle           video_watch_assistant                             │
+        │ Job ID           vwav-755a88af                                     │
+        │ Blueprint Run ID video_watch_assistant-20260531T224413Z-412c9cb2f1 │
+        ╰────────────────────────────────────────────────────────────────────╯
+        """
+
+        self.assertEqual(parse_cli_field(output, "Job ID"), "vwav-755a88af")
+        self.assertEqual(
+            parse_cli_field(output, "Blueprint Run ID"),
+            "video_watch_assistant-20260531T224413Z-412c9cb2f1",
+        )
 
     @patch('mn_api.state.client')
     def test_blueprint_run_validation_failure_blocks_submit_unless_forced(self, mock_client):

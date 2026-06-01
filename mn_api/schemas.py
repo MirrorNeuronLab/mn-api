@@ -19,6 +19,13 @@ class BlueprintRunRequest(BaseModel):
     force: bool = False
 
 
+class BlueprintLaunchRequest(BlueprintRunRequest):
+    source: str
+    blueprint_id: Optional[str] = None
+    path: Optional[str] = None
+    bundle_path: Optional[str] = Field(default=None, alias="_bundle_path")
+
+
 class ResourceSetRequest(BaseModel):
     cpu: Optional[int] = None
     gpu: Optional[int] = None

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -20,14 +21,19 @@ from mn_api.blueprints import (
     scheduler_allocated_ports_from_jobs_payload,
     start_background_event_relay_if_needed,
     start_blueprint_pre_launch_hook,
+    local_blueprint_from_path,
+    run_mn_blueprint_run,
+    run_mn_blueprint_validate,
+    sanitize_blueprint_id,
     validate_blueprint_inputs,
     validate_blueprint_bundle,
     validate_run_id,
     write_blueprint_job_mapping,
 )
+from mn_api.bundles import load_uploaded_bundle
 from mn_api.dependencies import require_auth
 from mn_api.errors import handle_grpc_error, validation_problem_response
-from mn_api.schemas import BlueprintRunRequest
+from mn_api.schemas import BlueprintLaunchRequest, BlueprintRunRequest
 
 
 router = APIRouter(prefix="/api/v1")
@@ -60,6 +66,20 @@ def install_blueprint(blueprint_id: str, _auth=Depends(require_auth)):
     return {"installed": True, "blueprint": blueprint}
 
 
+@router.post("/blueprints/launch/validate")
+def validate_blueprint_launch(req: BlueprintLaunchRequest, _auth=Depends(require_auth)):
+    launch = resolve_launch_source(req)
+    state.close_client()
+    validation = run_mn_blueprint_validate(launch["bundle_root"])
+    response = {
+        "source": launch["source"],
+        "blueprint": launch["blueprint"],
+        "validation": validation,
+        "manifest": launch.get("manifest") or {},
+    }
+    return response
+
+
 @router.post("/blueprints/{blueprint_id}/validate")
 def validate_blueprint(
     blueprint_id: str,
@@ -79,6 +99,42 @@ def validate_blueprint(
     return {"blueprint": blueprint, "validation": result}
 
 
+@router.post("/blueprints/launch/runs")
+def run_blueprint_launch(req: BlueprintLaunchRequest, _auth=Depends(require_auth)):
+    launch = resolve_launch_source(req)
+    force = bool(req.force)
+    state.close_client()
+    validation = {"ok": True, "status": "skipped" if force else "passed", "issues": [], "errors": []}
+    if not force:
+        validation = run_mn_blueprint_validate(launch["bundle_root"])
+        if not validation.get("ok"):
+            return validation_problem_response(
+                validation,
+                status_code=422,
+                error="blueprint_validation_failed",
+                title="Blueprint validation failed",
+                detail="Fix the highlighted blueprint validation issues and launch again.",
+                extra={"blueprint": launch["blueprint"], "source": launch["source"]},
+            )
+
+    run_result = run_launch_with_mn_cli(launch, req)
+    if not run_result.get("ok"):
+        raise HTTPException(status_code=500, detail=run_result.get("error") or "mn blueprint run failed")
+    job_id = run_result.get("job_id")
+    if not job_id:
+        raise HTTPException(status_code=500, detail="mn blueprint run did not report a Job ID")
+    return {
+        "job_id": job_id,
+        "id": job_id,
+        "run_id": run_result.get("run_id"),
+        "status": "pending",
+        "source": launch["source"],
+        "blueprint": launch["blueprint"],
+        "validation": validation,
+        "command": run_result.get("command"),
+    }
+
+
 @router.post("/blueprints/{blueprint_id}/runs")
 def run_blueprint(
     blueprint_id: str,
@@ -86,6 +142,17 @@ def run_blueprint(
     _auth=Depends(require_auth),
 ):
     repo_root, blueprint = find_blueprint(state.config, blueprint_id)
+    return run_blueprint_record(repo_root, blueprint, req)
+
+
+def run_blueprint_record(
+    repo_root,
+    blueprint: dict,
+    req: BlueprintRunRequest | None = None,
+    *,
+    validation: dict | None = None,
+):
+    blueprint_id = blueprint["id"]
     run_id = req.run_id if req and req.run_id else create_blueprint_run_id(blueprint_id)
     validate_run_id(run_id)
     config_overrides = {}
@@ -167,14 +234,107 @@ def run_blueprint(
         )
         return {
             "job_id": job_id,
+            "id": job_id,
             "run_id": run_id,
             "status": "pending",
             "blueprint": blueprint,
+            "validation": validation,
             "web_ui_service": web_ui_service or None,
         }
     except Exception as exc:
         cleanup_blueprint_run_processes(run_id, reason="launch_failed")
         return handle_grpc_error(exc)
+
+
+def resolve_launch_source(req: BlueprintLaunchRequest) -> dict:
+    source = str(req.source or "").strip().lower().replace("_", "-")
+    if source in {"catalog", "blueprint"}:
+        if not req.blueprint_id:
+            raise HTTPException(status_code=422, detail="blueprint_id is required")
+        repo_root, blueprint = find_blueprint(state.config, req.blueprint_id)
+        bundle_root = validate_blueprint_bundle(repo_root, blueprint)
+        return {
+            "source": "catalog",
+            "repo_root": repo_root,
+            "blueprint": blueprint,
+            "bundle_root": bundle_root,
+            "manifest": read_manifest_for_launch(bundle_root),
+        }
+
+    if source in {"path", "filesystem", "filesystem-path", "local"}:
+        if not req.path:
+            raise HTTPException(status_code=422, detail="path is required")
+        repo_root, blueprint = local_blueprint_from_path(req.path)
+        bundle_root = validate_blueprint_bundle(repo_root, blueprint)
+        return {
+            "source": "path",
+            "repo_root": repo_root,
+            "blueprint": blueprint,
+            "bundle_root": bundle_root,
+            "manifest": read_manifest_for_launch(bundle_root),
+        }
+
+    if source in {"bundle", "zip", "upload", "uploaded"}:
+        if not req.bundle_path:
+            raise HTTPException(status_code=422, detail="_bundle_path is required")
+        manifest_json, payloads = load_uploaded_bundle(req.bundle_path, state.BUNDLE_UPLOAD_ROOT)
+        manifest = json.loads(manifest_json)
+        bundle_root = Path(req.bundle_path).expanduser().resolve()
+        blueprint_id = sanitize_blueprint_id(manifest.get("graph_id") or bundle_root.name, "uploaded_bundle")
+        blueprint = {
+            "id": blueprint_id,
+            "name": manifest.get("job_name") or blueprint_id,
+            "path": str(bundle_root),
+            "source": "uploaded_bundle",
+        }
+        return {
+            "source": "bundle",
+            "repo_root": bundle_root.parent,
+            "blueprint": blueprint,
+            "bundle_root": bundle_root,
+            "manifest": manifest,
+            "manifest_json": manifest_json,
+            "payloads": payloads,
+        }
+
+    raise HTTPException(status_code=422, detail="source must be catalog, path, or bundle")
+
+
+def read_manifest_for_launch(bundle_root: Path) -> dict:
+    try:
+        manifest = json.loads((bundle_root / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return manifest if isinstance(manifest, dict) else {}
+
+
+def submit_uploaded_bundle_launch(launch: dict, req: BlueprintLaunchRequest, validation: dict):
+    run_result = run_launch_with_mn_cli(launch, req)
+    if not run_result.get("ok"):
+        raise HTTPException(status_code=500, detail=run_result.get("error") or "mn blueprint run failed")
+    return {
+        "job_id": run_result.get("job_id"),
+        "id": run_result.get("job_id"),
+        "run_id": run_result.get("run_id"),
+        "status": "pending",
+        "blueprint": launch["blueprint"],
+        "validation": validation,
+        "command": run_result.get("command"),
+    }
+
+
+def run_launch_with_mn_cli(launch: dict, req: BlueprintLaunchRequest) -> dict:
+    source = launch["source"]
+    run_args: list[str]
+    if source == "catalog":
+        run_args = [launch["blueprint"]["id"], "--detached"]
+    else:
+        run_args = ["--folder", str(launch["bundle_root"]), "--detached"]
+    if req.run_id:
+        run_args.extend(["--run-id", req.run_id])
+    if req.force:
+        run_args.append("--force")
+    return run_mn_blueprint_run(run_args, cwd=launch["bundle_root"])
 
 
 def runtime_active_jobs_payload() -> object | None:

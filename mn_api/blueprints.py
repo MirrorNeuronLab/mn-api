@@ -151,6 +151,12 @@ def validate_run_id(run_id: str) -> None:
         raise HTTPException(status_code=400, detail="invalid run id")
 
 
+def sanitize_blueprint_id(value: Any, fallback: str = "local_blueprint") -> str:
+    raw = str(value or "").strip() or fallback
+    sanitized = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw).strip("_.-")
+    return (sanitized or fallback)[:160]
+
+
 def create_blueprint_run_id(blueprint_id: str) -> str:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     return f"{blueprint_id}-{stamp}"
@@ -446,6 +452,212 @@ def validate_blueprint_bundle(repo_root: Path, blueprint: Dict[str, Any]) -> Pat
     if not (bundle_root / "manifest.json").is_file():
         raise HTTPException(status_code=500, detail="blueprint bundle manifest.json was not found")
     return bundle_root
+
+
+def local_blueprint_from_path(path: str) -> tuple[Path, Dict[str, Any]]:
+    bundle_root = Path(path).expanduser().resolve()
+    if not bundle_root.is_dir():
+        raise HTTPException(status_code=400, detail="blueprint path is not a directory")
+    manifest_path = bundle_root / "manifest.json"
+    if not manifest_path.is_file():
+        raise HTTPException(status_code=400, detail="blueprint path must contain manifest.json")
+
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="blueprint manifest.json is malformed") from exc
+    if not isinstance(manifest, dict):
+        raise HTTPException(status_code=400, detail="blueprint manifest.json must be an object")
+
+    metadata = as_dict(manifest.get("metadata"))
+    identity = as_dict(manifest.get("identity"))
+    raw_id = (
+        metadata.get("blueprint_id")
+        or identity.get("blueprint_id")
+        or manifest.get("blueprint_id")
+        or manifest.get("graph_id")
+        or bundle_root.name
+    )
+    blueprint_id = sanitize_blueprint_id(raw_id)
+    blueprint = {
+        "id": blueprint_id,
+        "name": manifest.get("job_name") or identity.get("name") or blueprint_id,
+        "path": bundle_root.name,
+        "description": manifest.get("description") or "",
+        "category": DEFAULT_CATEGORY,
+        "category_slug": category_slug(DEFAULT_CATEGORY),
+        "source": "local_path",
+        "local_path": str(bundle_root),
+    }
+    return bundle_root.parent, blueprint
+
+
+def run_mn_blueprint_validate(bundle_root: Path, *, timeout_seconds: int = 120) -> Dict[str, Any]:
+    bundle_root = bundle_root.expanduser().resolve()
+    if not bundle_root.is_dir():
+        return validation_failure_report(f"blueprint path is not a directory: {bundle_root}")
+
+    command = mn_validate_command(bundle_root)
+    env = os.environ.copy()
+    env.update(runtime_path_environment())
+    try:
+        result = subprocess.run(
+            command,
+            cwd=bundle_root,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=timeout_seconds,
+        )
+    except FileNotFoundError:
+        return validation_failure_report("mn CLI was not found. Install mn or run the API from the monorepo environment.")
+    except subprocess.TimeoutExpired:
+        return validation_failure_report(f"mn blueprint validate timed out after {timeout_seconds}s.")
+
+    output = clean_validation_output(result.stdout)
+    error_output = clean_validation_output(result.stderr)
+    report = parse_validation_json(output)
+    if report is None:
+        combined = "\n".join(part for part in [output, error_output] if part).strip()
+        if result.returncode == 0:
+            report = {
+                "version": "validation.report/v1",
+                "ok": True,
+                "status": "passed",
+                "errors": [],
+                "issues": [],
+                "results": [],
+                "message": combined or "mn blueprint validate passed",
+            }
+        else:
+            report = validation_failure_report(combined or "mn blueprint validate failed")
+    else:
+        report.setdefault("ok", result.returncode == 0 and report.get("ok") is not False)
+        report.setdefault("status", "passed" if report.get("ok") else "failed")
+        report.setdefault("errors", [])
+        report.setdefault("issues", [])
+        report.setdefault("results", [])
+        if result.returncode != 0:
+            report["ok"] = False
+            report["status"] = "failed"
+
+    report["command"] = " ".join(command)
+    report["exit_code"] = result.returncode
+    if error_output:
+        report["stderr"] = error_output[-4000:]
+    return report
+
+
+def run_mn_blueprint_run(args: list[str], *, cwd: Path, timeout_seconds: int = 300) -> Dict[str, Any]:
+    command = mn_base_command() + ["blueprint", "run", *args]
+    env = os.environ.copy()
+    env.update(runtime_path_environment())
+    try:
+        result = subprocess.run(
+            command,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=timeout_seconds,
+        )
+    except FileNotFoundError:
+        return {
+            "ok": False,
+            "exit_code": 127,
+            "command": " ".join(command),
+            "error": "mn CLI was not found. Install mn or run the API from the monorepo environment.",
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "ok": False,
+            "exit_code": 124,
+            "command": " ".join(command),
+            "error": f"mn blueprint run timed out after {timeout_seconds}s.",
+        }
+
+    stdout = clean_validation_output(result.stdout)
+    stderr = clean_validation_output(result.stderr)
+    job_id = parse_cli_field(stdout, "Job ID") or parse_json_field(stdout, "job_id") or parse_json_field(stdout, "id")
+    run_id = parse_cli_field(stdout, "Blueprint Run ID") or parse_json_field(stdout, "run_id")
+    return {
+        "ok": result.returncode == 0,
+        "exit_code": result.returncode,
+        "command": " ".join(command),
+        "job_id": job_id,
+        "run_id": run_id,
+        "stdout": stdout[-8000:],
+        "stderr": stderr[-8000:],
+        "error": stderr or stdout or "mn blueprint run failed",
+    }
+
+
+def mn_base_command() -> list[str]:
+    mn_binary = shutil.which("mn")
+    if mn_binary:
+        return [mn_binary]
+    return [sys.executable, "-m", "mn_cli.main"]
+
+
+def mn_validate_command(bundle_root: Path) -> list[str]:
+    return mn_base_command() + ["blueprint", "validate", str(bundle_root), "--output", "json"]
+
+
+def clean_validation_output(value: str | None) -> str:
+    return ANSI_ESCAPE_PATTERN.sub("", value or "").strip()
+
+
+def parse_validation_json(output: str) -> Dict[str, Any] | None:
+    if not output:
+        return None
+    try:
+        decoded = json.loads(output)
+        return decoded if isinstance(decoded, dict) else None
+    except json.JSONDecodeError:
+        pass
+
+    start = output.find("{")
+    end = output.rfind("}")
+    if start < 0 or end <= start:
+        return None
+    try:
+        decoded = json.loads(output[start : end + 1])
+    except json.JSONDecodeError:
+        return None
+    return decoded if isinstance(decoded, dict) else None
+
+
+def parse_json_field(output: str, field: str) -> str | None:
+    decoded = parse_validation_json(output)
+    if not decoded:
+        return None
+    value = decoded.get(field)
+    return str(value) if value else None
+
+
+def parse_cli_field(output: str, label: str) -> str | None:
+    match = re.search(rf"{re.escape(label)}\s+([A-Za-z0-9_.:-]+)", output)
+    return match.group(1) if match else None
+
+
+def validation_failure_report(message: str) -> Dict[str, Any]:
+    message = message.strip() or "mn blueprint validate failed"
+    return {
+        "version": "validation.report/v1",
+        "ok": False,
+        "status": "failed",
+        "error_count": 1,
+        "errors": [message],
+        "issues": [
+            {
+                "code": "blueprint_validation_failed",
+                "message": message,
+                "help": "Fix the blueprint folder and try again.",
+                "severity": "error",
+            }
+        ],
+        "results": [],
+    }
 
 
 def load_blueprint_bundle(
