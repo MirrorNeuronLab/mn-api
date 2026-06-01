@@ -114,7 +114,6 @@ jobs:
 
           if [[ "$GITHUB_REPOSITORY" == "MirrorNeuronLab/mn-api" || "$GITHUB_REPOSITORY" == "MirrorNeuronLab/mn-cli" ]]; then
             python -m pip install "mirrorneuron-python-sdk @ git+https://github.com/MirrorNeuronLab/mn-python-sdk.git"
-            python -m pip install "mirrorneuron-blueprint-support-skill @ git+https://github.com/MirrorNeuronLab/mn-skills.git#subdirectory=blueprint_support_skill"
           fi
 
           if [[ "$GITHUB_REPOSITORY" == "MirrorNeuronLab/mn-blueprints" ]]; then

@@ -1,4 +1,5 @@
 import unittest
+import importlib.util
 import io
 import json
 import os
@@ -345,6 +346,10 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(runtime_blueprint_web_ui_reserved_ports(), {61000})
         mock_client.get_job.assert_not_called()
 
+    @unittest.skipIf(
+        importlib.util.find_spec("mn_blueprint_support") is None,
+        "mn_blueprint_support is not installed",
+    )
     @patch('mn_api.state.client')
     def test_blueprint_run_persists_runtime_web_ui_service_contract(self, mock_client):
         mock_client.list_jobs.return_value = json.dumps({"data": []})

@@ -102,6 +102,18 @@ def inject_local_blueprint_support_path() -> None:
         sys.path.insert(0, str(candidate))
 
 
+def blueprint_web_ui_enabled(config: Dict[str, Any] | None) -> bool:
+    web_ui = config.get("web_ui") if isinstance(config, dict) else None
+    return isinstance(web_ui, dict) and web_ui.get("enabled") is True
+
+
+def blueprint_local_inputs_enabled(config: Dict[str, Any] | None) -> bool:
+    local_inputs = config.get("local_inputs") if isinstance(config, dict) else None
+    if not isinstance(local_inputs, dict):
+        return False
+    return bool(local_inputs.get("folders") or local_inputs.get("files"))
+
+
 def as_dict(value: Any) -> Dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
@@ -704,15 +716,16 @@ def load_blueprint_bundle(
     )
     if config is not None:
         apply_manifest_config_bindings(manifest, config)
-        inject_runtime_web_ui_service_for_submission(
-            manifest,
-            bundle_dir=bundle_root,
-            config=config,
-            run_id=run_id,
-            runs_root=runs_root,
-            env_overrides=env_overrides,
-            reserved_ports=web_ui_reserved_ports,
-        )
+        if blueprint_web_ui_enabled(config):
+            inject_runtime_web_ui_service_for_submission(
+                manifest,
+                bundle_dir=bundle_root,
+                config=config,
+                run_id=run_id,
+                runs_root=runs_root,
+                env_overrides=env_overrides,
+                reserved_ports=web_ui_reserved_ports,
+            )
     runtime_env = blueprint_runtime_environment(
         bundle_root,
         config=config,
@@ -730,7 +743,8 @@ def load_blueprint_bundle(
             if payload_path.is_file():
                 payloads[payload_path.relative_to(payloads_path).as_posix()] = payload_path.read_bytes()
     payloads.update(runtime_web_ui_support_payloads_for_manifest(manifest))
-    stage_local_input_payloads_for_manifest(manifest, payloads, bundle_dir=bundle_root)
+    if blueprint_local_inputs_enabled(config):
+        stage_local_input_payloads_for_manifest(manifest, payloads, bundle_dir=bundle_root)
 
     return json.dumps(manifest), payloads
 
