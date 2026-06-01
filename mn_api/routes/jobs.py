@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import re
+import threading
+import time
 import urllib.parse
 import hashlib
 from collections import Counter, deque
@@ -10,11 +13,14 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from mn_sdk import (
+    BlueprintWorkflowProgress,
     make_validation_report,
     run_input_validation,
     validate_input_validation_spec_issues,
     validate_requirements_spec_issues,
+    workflow_progress_snapshot,
 )
 
 from mn_api import state
@@ -247,7 +253,7 @@ def _find_run_dir_for_job(job_id: str) -> tuple[Path | None, dict[str, Any]]:
 def _stream_job_events(job_id: str, *, limit: int = 200) -> tuple[list[dict[str, Any]], str | None]:
     events: deque[dict[str, Any]] = deque(maxlen=limit)
     try:
-        for event_json in state.client.stream_events(job_id):
+        for event_json in state.client.stream_events(job_id, follow=False):
             try:
                 event = json.loads(event_json)
             except json.JSONDecodeError:
@@ -537,6 +543,114 @@ def _full_job_detail(job_id: str) -> dict[str, Any]:
         return _compact_job_detail(job_id)
 
 
+def _workflow_progress_snapshot_for_job(job_id: str) -> dict[str, Any]:
+    details = _full_job_detail(job_id)
+    events, stream_error = _stream_job_events(job_id, limit=5000)
+    snapshot = workflow_progress_snapshot(
+        _manifest_from_job_details(details),
+        events,
+        job=_job_from_details(details),
+        summary=_summary_from_details(details),
+        job_id=job_id,
+    )
+    if stream_error:
+        snapshot["warning"] = stream_error
+    return snapshot
+
+
+def _job_from_details(details: dict[str, Any]) -> dict[str, Any]:
+    job = details.get("job") if isinstance(details.get("job"), dict) else {}
+    return job
+
+
+def _summary_from_details(details: dict[str, Any]) -> dict[str, Any]:
+    summary = details.get("summary") if isinstance(details.get("summary"), dict) else {}
+    return summary
+
+
+def _manifest_from_job_details(details: dict[str, Any]) -> dict[str, Any]:
+    for candidate in (
+        details.get("manifest"),
+        _job_from_details(details).get("manifest"),
+        _summary_from_details(details).get("manifest"),
+    ):
+        if isinstance(candidate, dict) and candidate:
+            return candidate
+
+    manifest_ref = _job_from_details(details).get("manifest_ref")
+    if not isinstance(manifest_ref, dict):
+        manifest_ref = _summary_from_details(details).get("manifest_ref")
+    if isinstance(manifest_ref, dict):
+        for raw_path in (
+            manifest_ref.get("manifest_path"),
+            Path(str(manifest_ref.get("job_path") or "")) / "manifest.json"
+            if manifest_ref.get("job_path")
+            else None,
+        ):
+            if not raw_path:
+                continue
+            try:
+                path = Path(str(raw_path)).expanduser()
+                if path.is_file():
+                    loaded = json.loads(path.read_text(encoding="utf-8"))
+                    if isinstance(loaded, dict):
+                        return loaded
+            except (OSError, json.JSONDecodeError):
+                continue
+
+    return _fallback_manifest_from_details(details)
+
+
+def _fallback_manifest_from_details(details: dict[str, Any]) -> dict[str, Any]:
+    job = _job_from_details(details)
+    summary = _summary_from_details(details)
+    topology = job.get("runtime_topology") if isinstance(job.get("runtime_topology"), dict) else {}
+    topology_nodes = topology.get("nodes") if isinstance(topology.get("nodes"), list) else []
+    agents = topology_nodes or (details.get("agents") if isinstance(details.get("agents"), list) else [])
+    nodes = []
+    for index, agent in enumerate(agents):
+        if not isinstance(agent, dict):
+            continue
+        agent_id = _first_string(agent.get("agent_id"), agent.get("id"), agent.get("node_id")) or f"agent_{index + 1}"
+        nodes.append(
+            {
+                "node_id": agent_id,
+                "agent_type": _first_string(agent.get("agent_type"), agent.get("type"), "worker"),
+                "role": _first_string(agent.get("role"), agent.get("current_task"), agent.get("agent_type"), "worker"),
+                "type": _first_string(agent.get("node_type"), agent.get("type")),
+                "live": agent.get("live?") if "live?" in agent else agent.get("live"),
+                "config": {
+                    "llm_config": _first_string(agent.get("model"), agent.get("llm_config"), "runtime"),
+                },
+            }
+        )
+    job_type = _first_string(job.get("job_type"), job.get("type"), summary.get("job_type"), summary.get("type"))
+    policies: dict[str, Any] = {}
+    if str(job_type or "").lower() == "service":
+        policies["stream_mode"] = "live"
+    return {
+        "id": _first_string(job.get("graph_id"), summary.get("graph_id"), job.get("job_id"), "job"),
+        "name": _first_string(job.get("job_name"), summary.get("job_name"), job.get("job_id"), "Job"),
+        "description": _first_string(summary.get("description"), job.get("description")),
+        "graph_id": _first_string(job.get("graph_id"), summary.get("graph_id")),
+        "type": job_type,
+        "job_type": job_type,
+        "policies": policies,
+        "nodes": nodes,
+    }
+
+
+def _event_key(event: dict[str, Any]) -> str:
+    try:
+        return json.dumps(event, sort_keys=True, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return str(event)
+
+
+def _sse_event(event_name: str, payload: dict[str, Any]) -> str:
+    return f"event: {event_name}\ndata: {json.dumps(payload, sort_keys=True)}\n\n"
+
+
 @router.get("/jobs/{job_id}/agent-graph")
 def get_job_agent_graph(job_id: str, _auth=Depends(require_auth)):
     try:
@@ -564,7 +678,7 @@ def get_job_events(
         if include != "full":
             raise HTTPException(status_code=400, detail="include must be 'full', 'compact', or 'summary'")
         events = []
-        for event_json in state.client.stream_events(job_id):
+        for event_json in state.client.stream_events(job_id, follow=False):
             events.append(json.loads(event_json))
         return {"data": events}
     except HTTPException:
@@ -573,11 +687,115 @@ def get_job_events(
         return handle_grpc_error(exc)
 
 
+@router.get("/jobs/{job_id}/workflow-progress")
+def get_job_workflow_progress(job_id: str, _auth=Depends(require_auth)):
+    try:
+        return _workflow_progress_snapshot_for_job(job_id)
+    except Exception as exc:
+        return handle_grpc_error(exc)
+
+
+@router.get("/jobs/{job_id}/workflow-progress/stream")
+def stream_job_workflow_progress(
+    job_id: str,
+    interval: float = Query(1.0, ge=0.25, le=30.0),
+    _auth=Depends(require_auth),
+):
+    def event_source():
+        stop = threading.Event()
+        event_queue: queue.Queue[tuple[str, str | None]] = queue.Queue()
+        details = _full_job_detail(job_id)
+        manifest = _manifest_from_job_details(details)
+        events, stream_error = _stream_job_events(job_id, limit=5000)
+        tracker = BlueprintWorkflowProgress(
+            manifest,
+            job_id=job_id,
+            job=_job_from_details(details),
+            summary=_summary_from_details(details),
+        )
+        seen = set()
+        for event in events:
+            seen.add(_event_key(event))
+            tracker.update(event)
+        tracker.apply_job_status(_job_from_details(details), _summary_from_details(details))
+        initial = tracker.snapshot(job=_job_from_details(details), summary=_summary_from_details(details))
+        if stream_error:
+            initial["warning"] = stream_error
+        yield _sse_event("snapshot", initial)
+
+        def pump_events() -> None:
+            try:
+                for event_json in state.client.stream_events(
+                    job_id,
+                    follow=True,
+                    timeout=None,
+                    heartbeat_interval_ms=max(int(interval * 1000), 250),
+                ):
+                    if stop.is_set():
+                        break
+                    event_queue.put(("event", event_json))
+            except Exception as exc:  # pragma: no cover - exercised through API-level fallback behavior.
+                event_queue.put(("error", str(exc)))
+            finally:
+                event_queue.put(("done", None))
+
+        worker = threading.Thread(target=pump_events, daemon=True)
+        worker.start()
+        try:
+            while True:
+                try:
+                    kind, payload = event_queue.get(timeout=interval)
+                except queue.Empty:
+                    yield ": heartbeat\n\n"
+                    continue
+
+                if kind == "done":
+                    break
+                if kind == "error":
+                    yield _sse_event("error", {"job_id": job_id, "error": payload or "event stream failed"})
+                    break
+                if not payload:
+                    continue
+
+                try:
+                    event = json.loads(payload)
+                except json.JSONDecodeError:
+                    event = {"type": "unparseable_event", "message": payload[:_MAX_COMPACT_STRING]}
+                if not isinstance(event, dict):
+                    continue
+
+                event_type = str(event.get("type") or "")
+                if event_type == "stream_heartbeat":
+                    yield ": heartbeat\n\n"
+                    continue
+                event_key = _event_key(event)
+                if event_key in seen:
+                    continue
+                seen.add(event_key)
+                if len(seen) > 10_000:
+                    seen.clear()
+
+                tracker.update(event)
+                if event_type in {"job_completed", "job_failed", "job_cancelled"}:
+                    details = _full_job_detail(job_id)
+                    tracker.apply_job_status(_job_from_details(details), _summary_from_details(details))
+                yield _sse_event(
+                    "snapshot",
+                    tracker.snapshot(job=_job_from_details(details), summary=_summary_from_details(details)),
+                )
+                if event_type in {"job_completed", "job_failed", "job_cancelled"}:
+                    break
+        finally:
+            stop.set()
+
+    return StreamingResponse(event_source(), media_type="text/event-stream")
+
+
 @router.get("/jobs/{job_id}/dead-letters")
 def get_job_dead_letters(job_id: str, _auth=Depends(require_auth)):
     try:
         dead_letters = []
-        for event_index, event_json in enumerate(state.client.stream_events(job_id)):
+        for event_index, event_json in enumerate(state.client.stream_events(job_id, follow=False)):
             event = json.loads(event_json)
             if event.get("type") == "dead_letter":
                 dead_letters.append(

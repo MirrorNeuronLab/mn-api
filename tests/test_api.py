@@ -1077,6 +1077,136 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.json(), {"data": [{"id": "e1"}, {"id": "e2"}]})
 
     @patch('mn_api.state.client')
+    def test_get_job_workflow_progress_uses_grpc_job_and_events(self, mock_client):
+        mock_client.get_job.return_value = json.dumps({
+            "job": {
+                "job_id": "job-progress",
+                "status": "running",
+                "submitted_at": "2026-05-31T10:00:00Z",
+                "manifest": {
+                    "id": "workflow-blueprint",
+                    "flow": {
+                        "entrypoint": "research",
+                        "steps": [{"id": "research", "label": "Research", "run": "research_team"}],
+                    },
+                    "runtime": {
+                        "bindings": {
+                            "research_team": {
+                                "workers": [{"id": "research:docs", "role": "Analyze docs"}]
+                            }
+                        }
+                    },
+                },
+            },
+            "summary": {"status": "running"},
+            "agents": [],
+        })
+        mock_client.stream_events.return_value = [
+            json.dumps({"type": "job_running", "timestamp": "2026-05-31T10:00:01Z"}),
+            json.dumps({
+                "type": "workflow_worker_completed",
+                "timestamp": "2026-05-31T10:00:02Z",
+                "payload": {"step": "research", "worker": "research:docs", "tokens": 1200, "tools": 3},
+            }),
+        ]
+
+        response = self.client.get("/api/v1/jobs/job-progress/workflow-progress")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["workflow_id"], "workflow-blueprint")
+        self.assertEqual(body["agent_count"]["done"], 1)
+        self.assertEqual(body["agent_count"]["total"], 1)
+        self.assertEqual(body["current_step_id"], "research")
+        self.assertEqual(body["steps"][0]["agents"][0]["tokens"], 1200)
+        mock_client.stream_events.assert_called_once_with("job-progress", follow=False)
+
+    @patch('mn_api.state.client')
+    def test_get_job_workflow_progress_marks_service_workers_idle_from_runtime_topology(self, mock_client):
+        mock_client.get_job.return_value = json.dumps({
+            "job": {
+                "job_id": "job-progress",
+                "job_type": "service",
+                "graph_id": "video_watch_assistant_v1",
+                "status": "running",
+                "submitted_at": "2026-05-31T10:00:00Z",
+                "runtime_topology": {
+                    "nodes": [
+                        {"node_id": "ingress", "agent_type": "router", "type": "map", "role": "root_coordinator"},
+                        {"node_id": "visual_detector", "agent_type": "executor", "type": "stream", "role": "visual_detector"},
+                    ]
+                },
+            },
+            "summary": {"status": "running"},
+            "agents": [],
+        })
+        mock_client.stream_events.return_value = [
+            json.dumps({"type": "job_running", "timestamp": "2026-05-31T10:00:00Z"}),
+            json.dumps({"type": "route_selected", "timestamp": "2026-05-31T10:00:01Z", "agent_id": "ingress"}),
+            json.dumps({"type": "executor_lease_acquired", "timestamp": "2026-05-31T10:00:02Z", "agent_id": "visual_detector"}),
+            json.dumps({"type": "sandbox_job_completed", "timestamp": "2026-05-31T10:00:05Z", "agent_id": "visual_detector"}),
+        ]
+
+        response = self.client.get("/api/v1/jobs/job-progress/workflow-progress")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["workflow_kind"], "service")
+        self.assertEqual(body["current_step_id"], "visual_detector")
+        self.assertEqual(body["current_step"]["status"], "idle")
+        self.assertEqual(body["steps"][0]["status"], "done")
+        self.assertEqual(body["agent_count"]["ready"], 2)
+
+    @patch('mn_api.state.client')
+    def test_stream_job_workflow_progress_emits_snapshots(self, mock_client):
+        mock_client.get_job.return_value = json.dumps({
+            "job": {
+                "job_id": "job-progress",
+                "status": "running",
+                "submitted_at": "2026-05-31T10:00:00Z",
+                "manifest": {
+                    "id": "workflow-blueprint",
+                    "flow": {
+                        "entrypoint": "research",
+                        "steps": [{"id": "research", "label": "Research", "run": "research_team"}],
+                    },
+                    "runtime": {
+                        "bindings": {
+                            "research_team": {"workers": [{"id": "research:docs", "role": "Analyze docs"}]}
+                        }
+                    },
+                },
+            },
+            "summary": {"status": "running"},
+            "agents": [],
+        })
+        history_event = json.dumps({
+            "type": "workflow_step_started",
+            "timestamp": "2026-05-31T10:00:01Z",
+            "payload": {"step": "research"},
+        })
+        mock_client.stream_events.side_effect = [
+            [history_event],
+            [
+                history_event,
+                json.dumps({
+                    "type": "workflow_worker_completed",
+                    "timestamp": "2026-05-31T10:00:02Z",
+                    "payload": {"step": "research", "worker": "research:docs"},
+                }),
+                json.dumps({"type": "job_completed", "timestamp": "2026-05-31T10:00:03Z"}),
+            ],
+        ]
+
+        with self.client.stream("GET", "/api/v1/jobs/job-progress/workflow-progress/stream") as response:
+            body = "".join(response.iter_text())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("event: snapshot", body)
+        self.assertIn('"status": "completed"', body)
+        self.assertIn('"done": 1', body)
+
+    @patch('mn_api.state.client')
     def test_get_job_defaults_to_compact_artifact_refs_for_large_runs(self, mock_client):
         with tempfile.TemporaryDirectory() as tmp:
             runs_root = Path(tmp)
