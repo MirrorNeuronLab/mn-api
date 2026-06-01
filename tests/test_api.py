@@ -756,6 +756,10 @@ class TestAPI(unittest.TestCase):
         response = self.client.get("/api/v1/runs/bad$id/ui")
         self.assertEqual(response.status_code, 400)
 
+    @unittest.skipIf(
+        importlib.util.find_spec("mn_blueprint_support") is None,
+        "mn_blueprint_support is not installed",
+    )
     def test_run_observability_endpoints_read_shared_artifacts(self):
         with tempfile.TemporaryDirectory() as tmp:
             runs_root = Path(tmp)

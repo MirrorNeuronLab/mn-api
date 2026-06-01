@@ -1,4 +1,5 @@
 import json
+import importlib.util
 import os
 import shutil
 import socket
@@ -27,6 +28,11 @@ from mn_api.blueprints import (
     load_blueprint_catalog,
     runtime_blueprint_environment_overrides,
     validate_run_id,
+)
+
+requires_blueprint_support = unittest.skipIf(
+    importlib.util.find_spec("mn_blueprint_support") is None,
+    "mn_blueprint_support is not installed",
 )
 
 
@@ -265,6 +271,7 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertEqual(env["MN_LLM_MODEL"], "ollama/test")
         self.assertEqual(payload_bytes, {"nested/input.txt": b"hello"})
 
+    @requires_blueprint_support
     def test_load_blueprint_bundle_stages_configured_local_input_folder(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
@@ -329,6 +336,7 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertNotIn("tax_workflow/mn_local_inputs/tax_documents/ignore.csv", payload_bytes)
         self.assertEqual(manifest["metadata"]["mn_local_inputs"]["folders"][0]["file_count"], 1)
 
+    @requires_blueprint_support
     def test_load_blueprint_bundle_injects_runtime_web_ui_service(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
