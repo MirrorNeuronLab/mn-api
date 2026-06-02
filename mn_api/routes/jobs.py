@@ -166,7 +166,7 @@ def _decode_manifest(manifest_json: str) -> dict:
 def list_jobs(limit: int = 20, include_terminal: bool = True, _auth=Depends(require_auth)):
     try:
         jobs_json = state.client.list_jobs(limit, include_terminal)
-        return json.loads(jobs_json)
+        return _reconcile_job_list_statuses(json.loads(jobs_json))
     except Exception as exc:
         return handle_grpc_error(exc)
 
@@ -198,6 +198,48 @@ def get_job(job_id: str, include: str = Query("compact"), _auth=Depends(require_
 
 def _runs_root() -> Path:
     return Path(os.getenv("MN_RUNS_ROOT") or "~/.mn/runs").expanduser().resolve()
+
+
+def _normalized_status(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _should_reconcile_job_list_status(job: dict[str, Any]) -> bool:
+    job_id = _first_string(job.get("job_id"), job.get("id"))
+    return bool(job_id and job_id != "unknown")
+
+
+def _status_from_workflow_progress(snapshot: dict[str, Any]) -> str:
+    status = _normalized_status(snapshot.get("status"))
+    return status if status and status != "unknown" else ""
+
+
+def _reconciled_job_list_row(job: dict[str, Any]) -> dict[str, Any]:
+    if not _should_reconcile_job_list_status(job):
+        return job
+    job_id = _first_string(job.get("job_id"), job.get("id"))
+    if not job_id:
+        return job
+    try:
+        status = _status_from_workflow_progress(_workflow_progress_snapshot_for_job(job_id))
+    except Exception:
+        return job
+    return {**job, "status": status} if status else job
+
+
+def _reconcile_job_list_statuses(payload: Any) -> Any:
+    if not isinstance(payload, dict):
+        return payload
+    jobs = payload.get("data")
+    if not isinstance(jobs, list):
+        return payload
+    return {
+        **payload,
+        "data": [
+            _reconciled_job_list_row(job) if isinstance(job, dict) else job
+            for job in jobs
+        ],
+    }
 
 
 def _read_json_file(path: Path) -> dict[str, Any]:

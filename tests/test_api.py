@@ -548,6 +548,45 @@ class TestAPI(unittest.TestCase):
         mock_client.list_jobs.assert_called_once_with(5, False)
 
     @patch('mn_api.state.client')
+    def test_list_jobs_reconciles_stale_paused_status_from_workflow_progress(self, mock_client):
+        mock_client.list_jobs.return_value = json.dumps({
+            "data": [
+                {
+                    "job_id": "job-progress",
+                    "status": "paused",
+                    "job_type": "batch",
+                    "recovery_status": "paused_for_review",
+                }
+            ]
+        })
+
+        with patch(
+            "mn_api.routes.jobs._workflow_progress_snapshot_for_job",
+            return_value={"job_id": "job-progress", "status": "running"},
+        ) as mock_progress:
+            response = self.client.get("/api/v1/jobs")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["data"][0]["status"], "running")
+        mock_progress.assert_called_once_with("job-progress")
+
+    @patch('mn_api.state.client')
+    def test_list_jobs_refreshes_active_rows_from_workflow_progress(self, mock_client):
+        mock_client.list_jobs.return_value = json.dumps({
+            "data": [{"job_id": "job-progress", "status": "running"}]
+        })
+
+        with patch(
+            "mn_api.routes.jobs._workflow_progress_snapshot_for_job",
+            return_value={"job_id": "job-progress", "status": "completed"},
+        ) as mock_progress:
+            response = self.client.get("/api/v1/jobs")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["data"][0]["status"], "completed")
+        mock_progress.assert_called_once_with("job-progress")
+
+    @patch('mn_api.state.client')
     def test_cleanup_jobs_success(self, mock_client):
         mock_client.clear_jobs.return_value = 3
         response = self.client.post("/api/v1/jobs:cleanup")
@@ -1158,7 +1197,7 @@ class TestAPI(unittest.TestCase):
         mock_client.stream_events.return_value = [
             json.dumps({"type": "job_running", "timestamp": "2026-05-31T10:00:01Z"}),
             json.dumps({
-                "type": "workflow_worker_completed",
+                "type": "workflow_step_attempt_completed",
                 "timestamp": "2026-05-31T10:00:02Z",
                 "payload": {"step": "research", "worker": "research:docs", "tokens": 1200, "tools": 3},
             }),
@@ -1215,7 +1254,7 @@ class TestAPI(unittest.TestCase):
                     "payload": {"step": "start_video_monitor"},
                 }),
                 json.dumps({
-                    "type": "workflow_worker_completed",
+                    "type": "workflow_step_attempt_completed",
                     "timestamp": "2026-06-01T10:00:02Z",
                     "payload": {"step": "start_video_monitor", "worker": "video_monitor"},
                 }),
@@ -1329,7 +1368,7 @@ class TestAPI(unittest.TestCase):
             [
                 history_event,
                 json.dumps({
-                    "type": "workflow_worker_completed",
+                    "type": "workflow_step_attempt_completed",
                     "timestamp": "2026-05-31T10:00:02Z",
                     "payload": {"step": "research", "worker": "research:docs"},
                 }),
