@@ -22,6 +22,7 @@ from mn_api.blueprints import (
     ensure_git_blueprint_repo,
     filter_blueprints_by_category,
     inject_local_blueprint_support_path,
+    install_blueprint_runtime_models,
     is_git_repo_url,
     load_blueprint_categories,
     load_blueprint_bundle,
@@ -150,6 +151,47 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertEqual(blueprints[0]["capabilities"], [])
         self.assertEqual(blueprints[0]["init_config_review"]["fields"][0]["path"], "vl_model.model")
 
+    @patch("mn_api.blueprints.record_model_owner")
+    @patch("mn_api.blueprints.load_model_ownership")
+    @patch("mn_api.blueprints.docker_model_installed")
+    @patch("mn_api.blueprints.subprocess.run")
+    def test_install_blueprint_runtime_models_passes_backend_and_context(self, mock_run, mock_installed, mock_ledger, mock_record):
+        mock_run.return_value = SimpleNamespace(returncode=0, stdout="", stderr="")
+        mock_installed.return_value = False
+        mock_ledger.return_value = {"version": 1, "models": {}}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            bundle = repo / "worker_one"
+            bundle.mkdir()
+            (bundle / "manifest.json").write_text(json.dumps({
+                "metadata": {"blueprint_id": "worker_one"},
+                "nodes": [],
+                "edges": [],
+                "runtime": {
+                    "models": {
+                        "primary": {
+                            "provider": "docker_model_runner",
+                            "model": "gemma4:e2b",
+                            "backend": "llama.cpp",
+                            "context_size": 2048,
+                        }
+                    }
+                },
+            }))
+
+            summary = install_blueprint_runtime_models(repo.resolve(), {"id": "worker_one", "path": "worker_one"})
+
+        self.assertTrue(summary["ok"])
+        command = mock_run.call_args.args[0]
+        self.assertIn("model", command)
+        self.assertIn("install", command)
+        self.assertIn("gemma4:e2b", command)
+        self.assertIn("--backend", command)
+        self.assertIn("llama.cpp", command)
+        self.assertIn("--context-size", command)
+        self.assertIn("2048", command)
+        mock_record.assert_called_once()
+
     def test_catalog_loads_category_facets_and_filters_by_slug_or_name(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
@@ -270,6 +312,60 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertEqual(env["CUSTOM_MODEL"], "overwrite")
         self.assertEqual(env["MN_LLM_MODEL"], "ollama/test")
         self.assertEqual(payload_bytes, {"nested/input.txt": b"hello"})
+
+    def test_load_blueprint_bundle_injects_docker_model_runner_env(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            bundle = repo / "worker_one"
+            config_dir = bundle / "config"
+            config_dir.mkdir(parents=True)
+            (config_dir / "default.json").write_text(
+                json.dumps(
+                    {
+                        "llm": {
+                            "enabled": True,
+                            "default_config": "primary",
+                            "configs": {
+                                "primary": {
+                                    "provider": "docker_model_runner",
+                                    "runtime_model": "gemma4:e2b",
+                                    "api_base": "auto",
+                                    "backend": "llama.cpp",
+                                    "context_size": 4096,
+                                }
+                            },
+                        }
+                    }
+                )
+            )
+            (bundle / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "graph_id": "worker_graph",
+                        "nodes": [
+                            {
+                                "node_id": "worker",
+                                "config": {
+                                    "runner_module": "MirrorNeuron.Runner.HostLocal",
+                                    "environment": {},
+                                },
+                            }
+                        ],
+                    }
+                )
+            )
+
+            manifest_json, _payload_bytes = load_blueprint_bundle(
+                repo.resolve(),
+                {"id": "worker_one", "path": "worker_one"},
+                "run-7",
+            )
+
+        manifest = json.loads(manifest_json)
+        env = manifest["nodes"][0]["config"]["environment"]
+        self.assertEqual(env["MN_LLM_PROVIDER"], "docker_model_runner")
+        self.assertEqual(env["MN_LLM_MODEL"], "ai/gemma4:E2B")
+        self.assertEqual(env["MN_LLM_API_BASE"], "http://localhost:12434/engines/v1")
 
     @requires_blueprint_support
     def test_load_blueprint_bundle_stages_configured_local_input_folder(self):

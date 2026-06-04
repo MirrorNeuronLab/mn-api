@@ -17,6 +17,7 @@ class BlueprintRunRequest(BaseModel):
     config_overwrite: Optional[Dict[str, Any]] = None
     config_overrides: Optional[Dict[str, Any]] = None
     force: bool = False
+    progress_id: Optional[str] = None
 
 
 class BlueprintLaunchRequest(BlueprintRunRequest):

@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
+import re
+import time
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse
 
 from mn_api import state
 from mn_api.blueprints import (
@@ -11,6 +16,7 @@ from mn_api.blueprints import (
     create_blueprint_run_id,
     filter_blueprints_by_category,
     find_blueprint,
+    install_blueprint_runtime_models,
     load_blueprint_categories,
     load_blueprint_bundle,
     load_blueprint_catalog,
@@ -37,6 +43,8 @@ from mn_api.schemas import BlueprintLaunchRequest, BlueprintRunRequest
 
 
 router = APIRouter(prefix="/api/v1")
+PROGRESS_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,220}$")
+TERMINAL_LAUNCH_PROGRESS_STATUSES = {"completed", "failed"}
 
 
 @router.get("/blueprints")
@@ -60,10 +68,24 @@ def get_blueprint(blueprint_id: str, _auth=Depends(require_auth)):
 
 
 @router.post("/blueprints/{blueprint_id}/install")
-def install_blueprint(blueprint_id: str, _auth=Depends(require_auth)):
+def install_blueprint(
+    blueprint_id: str,
+    force: bool = Query(False, description="Force model install when hardware compatibility checks fail."),
+    _auth=Depends(require_auth),
+):
     repo_root, blueprint = find_blueprint(state.config, blueprint_id)
     validate_blueprint_bundle(repo_root, blueprint)
-    return {"installed": True, "blueprint": blueprint}
+    model_install = install_blueprint_runtime_models(repo_root, blueprint, force=force)
+    if not model_install.get("ok", True):
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "blueprint_model_install_failed",
+                "models": model_install.get("models") or [],
+                "errors": model_install.get("errors") or [],
+            },
+        )
+    return {"installed": True, "blueprint": blueprint, "model_install": model_install}
 
 
 @router.post("/blueprints/launch/validate")
@@ -101,28 +123,76 @@ def validate_blueprint(
 
 @router.post("/blueprints/launch/runs")
 def run_blueprint_launch(req: BlueprintLaunchRequest, _auth=Depends(require_auth)):
-    launch = resolve_launch_source(req)
+    progress_id = validate_progress_id(req.progress_id)
+    record_launch_progress(progress_id, "resolve_source", "running", "Resolving blueprint source.")
+    try:
+        launch = resolve_launch_source(req)
+    except HTTPException:
+        record_launch_progress(progress_id, "resolve_source", "failed", "Blueprint source could not be resolved.")
+        record_launch_progress(progress_id, "launch", "failed", "Blueprint launch stopped before model checks.")
+        raise
+    record_launch_progress(progress_id, "resolve_source", "completed", "Blueprint source resolved.", {"source": launch["source"]})
     force = bool(req.force)
     state.close_client()
+    config_overrides = dict(req.config_overwrite or req.config_overrides or {})
+    record_launch_progress(progress_id, "model_install", "running", "Ensuring required runtime models are installed.")
+    try:
+        model_install = install_blueprint_runtime_models(
+            launch["repo_root"],
+            launch["blueprint"],
+            force=force,
+            config_overrides=config_overrides,
+        )
+    except HTTPException:
+        record_launch_progress(progress_id, "model_install", "failed", "Runtime model install failed.")
+        record_launch_progress(progress_id, "launch", "failed", "Blueprint launch failed before validation.")
+        raise
+    except Exception as exc:
+        record_launch_progress(progress_id, "model_install", "failed", str(exc))
+        record_launch_progress(progress_id, "launch", "failed", "Blueprint launch failed before validation.")
+        raise
+    if not model_install.get("ok", True):
+        record_launch_progress(progress_id, "model_install", "failed", "Runtime model install failed.", {"model_install": model_install})
+        record_launch_progress(progress_id, "launch", "failed", "Blueprint launch failed before validation.")
+        return model_install_problem_response(
+            model_install,
+            blueprint=launch["blueprint"],
+            source=launch["source"],
+            progress_id=progress_id,
+        )
+    record_launch_progress(progress_id, "model_install", "completed", model_install_progress_message(model_install), {"model_install": model_install})
     validation = {"ok": True, "status": "skipped" if force else "passed", "issues": [], "errors": []}
     if not force:
+        record_launch_progress(progress_id, "validation", "running", "Validating blueprint.")
         validation = run_mn_blueprint_validate(launch["bundle_root"])
         if not validation.get("ok"):
+            record_launch_progress(progress_id, "validation", "failed", "Blueprint validation failed.", {"validation": validation})
+            record_launch_progress(progress_id, "launch", "failed", "Blueprint launch stopped during validation.")
             return validation_problem_response(
                 validation,
                 status_code=422,
                 error="blueprint_validation_failed",
                 title="Blueprint validation failed",
                 detail="Fix the highlighted blueprint validation issues and launch again.",
-                extra={"blueprint": launch["blueprint"], "source": launch["source"]},
+                extra={"blueprint": launch["blueprint"], "source": launch["source"], "progress_id": progress_id},
             )
+        record_launch_progress(progress_id, "validation", "completed", "Blueprint validation passed.", {"validation": validation})
+    else:
+        record_launch_progress(progress_id, "validation", "skipped", "Validation skipped because force=true.")
 
+    record_launch_progress(progress_id, "submit", "running", "Submitting blueprint run.")
     run_result = run_launch_with_mn_cli(launch, req)
     if not run_result.get("ok"):
+        record_launch_progress(progress_id, "submit", "failed", str(run_result.get("error") or "mn blueprint run failed"))
+        record_launch_progress(progress_id, "launch", "failed", "Blueprint launch failed during submit.")
         raise HTTPException(status_code=500, detail=run_result.get("error") or "mn blueprint run failed")
     job_id = run_result.get("job_id")
     if not job_id:
+        record_launch_progress(progress_id, "submit", "failed", "mn blueprint run did not report a Job ID.")
+        record_launch_progress(progress_id, "launch", "failed", "Blueprint launch did not return a job id.")
         raise HTTPException(status_code=500, detail="mn blueprint run did not report a Job ID")
+    record_launch_progress(progress_id, "submit", "completed", "Blueprint run submitted.", {"job_id": job_id, "run_id": run_result.get("run_id")})
+    record_launch_progress(progress_id, "launch", "completed", "Launch complete.", {"job_id": job_id, "run_id": run_result.get("run_id")})
     return {
         "job_id": job_id,
         "id": job_id,
@@ -131,6 +201,8 @@ def run_blueprint_launch(req: BlueprintLaunchRequest, _auth=Depends(require_auth
         "source": launch["source"],
         "blueprint": launch["blueprint"],
         "validation": validation,
+        "model_install": model_install,
+        "progress_id": progress_id,
         "command": run_result.get("command"),
     }
 
@@ -145,6 +217,24 @@ def run_blueprint(
     return run_blueprint_record(repo_root, blueprint, req)
 
 
+@router.get("/blueprints/launch/progress/{progress_id}")
+def get_launch_progress(progress_id: str, _auth=Depends(require_auth)):
+    resolved_progress_id = validate_progress_id(progress_id)
+    events = read_launch_progress(resolved_progress_id)
+    latest = events[-1] if events else None
+    completed = any(
+        event.get("phase") == "launch"
+        and str(event.get("status") or "").lower() in TERMINAL_LAUNCH_PROGRESS_STATUSES
+        for event in events
+    )
+    return {
+        "progress_id": resolved_progress_id,
+        "events": events,
+        "latest": latest,
+        "completed": completed,
+    }
+
+
 def run_blueprint_record(
     repo_root,
     blueprint: dict,
@@ -153,6 +243,8 @@ def run_blueprint_record(
     validation: dict | None = None,
 ):
     blueprint_id = blueprint["id"]
+    progress_id = validate_progress_id(req.progress_id if req else None)
+    record_launch_progress(progress_id, "resolve_source", "completed", "Blueprint source resolved.", {"source": "catalog", "blueprint_id": blueprint_id})
     run_id = req.run_id if req and req.run_id else create_blueprint_run_id(blueprint_id)
     validate_run_id(run_id)
     config_overrides = {}
@@ -161,6 +253,28 @@ def run_blueprint_record(
     env_overrides = runtime_blueprint_environment_overrides()
     force = bool(req.force) if req else False
     state.close_client()
+    record_launch_progress(progress_id, "model_install", "running", "Ensuring required runtime models are installed.")
+    try:
+        model_install = install_blueprint_runtime_models(
+            repo_root,
+            blueprint,
+            force=force,
+            config_overrides=config_overrides,
+        )
+    except HTTPException:
+        record_launch_progress(progress_id, "model_install", "failed", "Runtime model install failed.")
+        record_launch_progress(progress_id, "launch", "failed", "Blueprint launch failed before validation.", {"run_id": run_id})
+        raise
+    except Exception as exc:
+        record_launch_progress(progress_id, "model_install", "failed", str(exc))
+        record_launch_progress(progress_id, "launch", "failed", "Blueprint launch failed before validation.", {"run_id": run_id})
+        raise
+    if not model_install.get("ok", True):
+        record_launch_progress(progress_id, "model_install", "failed", "Runtime model install failed.", {"model_install": model_install})
+        record_launch_progress(progress_id, "launch", "failed", "Blueprint launch failed before validation.", {"run_id": run_id})
+        return model_install_problem_response(model_install, blueprint=blueprint, run_id=run_id, progress_id=progress_id)
+    record_launch_progress(progress_id, "model_install", "completed", model_install_progress_message(model_install), {"model_install": model_install})
+    record_launch_progress(progress_id, "cleanup", "running", "Cleaning up stale blueprint run resources.")
     cleanup_stale_blueprint_run_processes(
         repo_root,
         blueprint,
@@ -168,14 +282,24 @@ def run_blueprint_record(
         active_job_ids=runtime_active_job_ids(),
         reason="stale_blueprint_start",
     )
-    start_blueprint_pre_launch_hook(
-        repo_root,
-        blueprint,
-        run_id,
-        config_overrides=config_overrides,
-        env_overrides=env_overrides,
-    )
+    record_launch_progress(progress_id, "cleanup", "completed", "Stale run cleanup complete.")
+    record_launch_progress(progress_id, "pre_launch", "running", "Starting blueprint pre-launch hooks.")
+    try:
+        start_blueprint_pre_launch_hook(
+            repo_root,
+            blueprint,
+            run_id,
+            config_overrides=config_overrides,
+            env_overrides=env_overrides,
+        )
+    except Exception as exc:
+        cleanup_blueprint_run_processes(run_id, reason="pre_launch_failed")
+        record_launch_progress(progress_id, "pre_launch", "failed", str(exc), {"run_id": run_id})
+        record_launch_progress(progress_id, "launch", "failed", "Blueprint launch failed during pre-launch.", {"run_id": run_id})
+        raise
+    record_launch_progress(progress_id, "pre_launch", "completed", "Pre-launch hooks are ready.")
     if not force:
+        record_launch_progress(progress_id, "validation", "running", "Validating blueprint runtime and inputs.")
         validation = validate_blueprint_inputs(
             repo_root,
             blueprint,
@@ -184,15 +308,21 @@ def run_blueprint_record(
         )
         if not validation.get("ok"):
             cleanup_blueprint_run_processes(run_id, reason="validation_failed")
+            record_launch_progress(progress_id, "validation", "failed", "Blueprint validation failed.", {"validation": validation})
+            record_launch_progress(progress_id, "launch", "failed", "Blueprint launch stopped during validation.", {"run_id": run_id})
             return validation_problem_response(
                 validation,
                 status_code=422,
-                error="input_validation_failed",
-                title="Blueprint input validation failed",
-                detail="Fix the highlighted blueprint input fields, or pass force=true to run anyway.",
-                extra={"run_id": run_id, "blueprint": blueprint},
+                error="blueprint_validation_failed",
+                title="Blueprint validation failed",
+                detail="Fix the highlighted blueprint runtime or input issue, or pass force=true to run anyway.",
+                extra={"run_id": run_id, "blueprint": blueprint, "progress_id": progress_id},
             )
+        record_launch_progress(progress_id, "validation", "completed", "Blueprint validation passed.", {"validation": validation})
+    else:
+        record_launch_progress(progress_id, "validation", "skipped", "Validation skipped because force=true.")
     try:
+        record_launch_progress(progress_id, "prepare_bundle", "running", "Preparing the job bundle.")
         manifest_json, payloads = load_blueprint_bundle(
             repo_root,
             blueprint,
@@ -204,9 +334,13 @@ def run_blueprint_record(
         )
     except HTTPException:
         cleanup_blueprint_run_processes(run_id, reason="manifest_prepare_failed")
+        record_launch_progress(progress_id, "prepare_bundle", "failed", "Job bundle preparation failed.", {"run_id": run_id})
+        record_launch_progress(progress_id, "launch", "failed", "Blueprint launch failed while preparing the bundle.", {"run_id": run_id})
         raise
+    record_launch_progress(progress_id, "prepare_bundle", "completed", "Job bundle prepared.", {"run_id": run_id})
 
     try:
+        record_launch_progress(progress_id, "submit", "running", "Submitting job to the runtime.", {"run_id": run_id})
         if force:
             job_id = state.client.submit_job(manifest_json, payloads, force=True)
         else:
@@ -232,6 +366,8 @@ def run_blueprint_record(
             grpc_auth_token=getattr(state.config, "grpc_auth_token", None),
             grpc_timeout_seconds=getattr(state.config, "grpc_timeout_seconds", None),
         )
+        record_launch_progress(progress_id, "submit", "completed", "Job submitted to the runtime.", {"run_id": run_id, "job_id": job_id})
+        record_launch_progress(progress_id, "launch", "completed", "Launch complete.", {"run_id": run_id, "job_id": job_id})
         return {
             "job_id": job_id,
             "id": job_id,
@@ -239,10 +375,14 @@ def run_blueprint_record(
             "status": "pending",
             "blueprint": blueprint,
             "validation": validation,
+            "model_install": model_install,
+            "progress_id": progress_id,
             "web_ui_service": web_ui_service or None,
         }
     except Exception as exc:
         cleanup_blueprint_run_processes(run_id, reason="launch_failed")
+        record_launch_progress(progress_id, "submit", "failed", str(exc), {"run_id": run_id})
+        record_launch_progress(progress_id, "launch", "failed", "Blueprint launch failed during submit.", {"run_id": run_id})
         return handle_grpc_error(exc)
 
 
@@ -308,6 +448,104 @@ def read_manifest_for_launch(bundle_root: Path) -> dict:
     return manifest if isinstance(manifest, dict) else {}
 
 
+def validate_progress_id(progress_id: str | None) -> str | None:
+    if progress_id is None:
+        return None
+    value = str(progress_id).strip()
+    if not value:
+        return None
+    if not PROGRESS_ID_PATTERN.fullmatch(value):
+        raise HTTPException(status_code=400, detail="invalid progress id")
+    return value
+
+
+def launch_progress_root() -> Path:
+    configured = os.getenv("MN_LAUNCH_PROGRESS_DIR")
+    if configured:
+        return Path(configured).expanduser()
+    return Path.home() / ".mn" / "launch_progress"
+
+
+def launch_progress_path(progress_id: str) -> Path:
+    return launch_progress_root() / f"{progress_id}.jsonl"
+
+
+def record_launch_progress(
+    progress_id: str | None,
+    phase: str,
+    status: str,
+    message: str,
+    details: dict[str, Any] | None = None,
+) -> None:
+    if not progress_id:
+        return
+    event: dict[str, Any] = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "phase": phase,
+        "status": status,
+        "message": message,
+    }
+    if details is not None:
+        event["details"] = details
+    try:
+        path = launch_progress_path(progress_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(event, default=str, separators=(",", ":")) + "\n")
+    except OSError:
+        state.logger.exception("Failed to record blueprint launch progress")
+
+
+def read_launch_progress(progress_id: str | None) -> list[dict[str, Any]]:
+    if not progress_id:
+        return []
+    path = launch_progress_path(progress_id)
+    events: list[dict[str, Any]] = []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return []
+    except OSError:
+        state.logger.exception("Failed to read blueprint launch progress")
+        return []
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict):
+            events.append(event)
+    return events
+
+
+def model_install_progress_message(model_install: dict[str, Any]) -> str:
+    models = model_install.get("models") or []
+    if not models:
+        return "No runtime model dependencies declared."
+    counts: dict[str, int] = {}
+    for item in models:
+        status = str(item.get("status") or "unknown")
+        counts[status] = counts.get(status, 0) + 1
+    parts = []
+    labels = {
+        "installed": "installed",
+        "already_installed": "already present",
+        "service_required": "service model noted",
+        "failed": "failed",
+    }
+    for status in ("installed", "already_installed", "service_required", "failed"):
+        count = counts.get(status, 0)
+        if count:
+            noun = labels[status]
+            parts.append(f"{count} {noun}")
+    remaining = sum(count for status, count in counts.items() if status not in labels)
+    if remaining:
+        parts.append(f"{remaining} checked")
+    return "Runtime models ready: " + ", ".join(parts) + "."
+
+
 def submit_uploaded_bundle_launch(launch: dict, req: BlueprintLaunchRequest, validation: dict):
     run_result = run_launch_with_mn_cli(launch, req)
     if not run_result.get("ok"):
@@ -321,6 +559,67 @@ def submit_uploaded_bundle_launch(launch: dict, req: BlueprintLaunchRequest, val
         "validation": validation,
         "command": run_result.get("command"),
     }
+
+
+def model_install_problem_response(
+    model_install: dict,
+    *,
+    blueprint: dict,
+    source: str | None = None,
+    run_id: str | None = None,
+    progress_id: str | None = None,
+) -> JSONResponse:
+    issues = []
+    for item in model_install.get("models") or []:
+        if str(item.get("status") or "") != "failed":
+            continue
+        message = str(item.get("error") or f"Could not install {item.get('model') or item.get('id') or 'runtime model'}")
+        issues.append(
+            {
+                "code": "runtime_model_install_failed",
+                "message": message,
+                "help": "Check hardware compatibility or retry with force=true if you intentionally want to bypass model policy.",
+                "severity": "error",
+                "location": {"path": str(item.get("path") or "runtime.models")},
+            }
+        )
+    if not issues:
+        issues = [
+            {
+                "code": "runtime_model_install_failed",
+                "message": str(error),
+                "help": "Check hardware compatibility or retry with force=true if you intentionally want to bypass model policy.",
+                "severity": "error",
+            }
+            for error in model_install.get("errors") or ["Required runtime model could not be installed."]
+        ]
+    validation = {
+        "version": "validation.report/v1",
+        "ok": False,
+        "status": "failed",
+        "error_count": len(issues),
+        "errors": [str(issue.get("message") or "") for issue in issues],
+        "issues": issues,
+        "results": model_install.get("models") or [],
+    }
+    extra = {
+        "blueprint": blueprint,
+        "model_install": model_install,
+    }
+    if source:
+        extra["source"] = source
+    if run_id:
+        extra["run_id"] = run_id
+    if progress_id:
+        extra["progress_id"] = progress_id
+    return validation_problem_response(
+        validation,
+        status_code=422,
+        error="blueprint_model_install_failed",
+        title="Blueprint model install failed",
+        detail="A required runtime model could not be installed automatically.",
+        extra=extra,
+    )
 
 
 def run_launch_with_mn_cli(launch: dict, req: BlueprintLaunchRequest) -> dict:

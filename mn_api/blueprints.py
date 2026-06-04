@@ -16,10 +16,24 @@ from urllib.parse import urlparse
 
 from fastapi import HTTPException
 from mn_sdk import (
+    DOCKER_MODEL_RUNNER_CONTAINER_API_BASE,
+    docker_cli_path_environment,
+    docker_model_installed,
+    docker_model_name,
+    load_model_catalog,
+    load_model_ownership,
     make_validation_report,
+    record_model_owner,
+    required_blueprint_models,
+    resolve_llm_environment,
+    resolve_model_entry,
     run_input_validation,
+    run_model_validation,
+    run_service_validation,
     validate_input_validation_spec_issues,
     validate_requirements_spec_issues,
+    validate_resource_spec_issues,
+    validate_service_spec_issues,
 )
 
 from mn_api.config import ApiConfig, runtime_env_values
@@ -92,6 +106,7 @@ def runtime_path_environment() -> Dict[str, str]:
         resolved_python_paths.append(existing_pythonpath)
     if resolved_python_paths:
         env["PYTHONPATH"] = os.pathsep.join(resolved_python_paths)
+    env["PATH"] = docker_cli_path_environment().get("PATH", os.getenv("PATH", ""))
     return env
 
 
@@ -460,6 +475,88 @@ def validate_blueprint_bundle(repo_root: Path, blueprint: Dict[str, Any]) -> Pat
     if not (bundle_root / "manifest.json").is_file():
         raise HTTPException(status_code=500, detail="blueprint bundle manifest.json was not found")
     return bundle_root
+
+
+def install_blueprint_runtime_models(
+    repo_root: Path,
+    blueprint: Dict[str, Any],
+    *,
+    force: bool = False,
+    config_overrides: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    bundle_root = validate_blueprint_bundle(repo_root, blueprint)
+    try:
+        manifest = json.loads((bundle_root / "manifest.json").read_text())
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=500, detail="blueprint manifest.json is malformed") from exc
+    if not isinstance(manifest, dict):
+        raise HTTPException(status_code=500, detail="blueprint manifest.json must be an object")
+    config = load_blueprint_config(bundle_root, config_overrides=config_overrides)
+    catalog = load_model_catalog()
+    requirements = required_blueprint_models(manifest, config, catalog=catalog)
+    ledger = load_model_ownership()
+    results: list[dict[str, Any]] = []
+    errors: list[str] = []
+    blueprint_id = str(blueprint.get("id") or "")
+    blueprint_revision = str(blueprint.get("revision") or "")
+    for requirement in requirements:
+        model_ref = str(requirement.get("model") or "")
+        try:
+            entry = resolve_model_entry(model_ref, catalog=catalog)
+        except KeyError:
+            message = f"{requirement.get('path')}: unknown runtime model {model_ref!r}"
+            results.append({"model": model_ref, "status": "failed", "error": message})
+            errors.append(message)
+            continue
+        provider = str(entry.get("provider") or "docker_model_runner")
+        target = docker_model_name(entry)
+        backend = str(requirement.get("backend") or entry.get("backend") or "auto")
+        base_result = {
+            "id": entry.get("id"),
+            "model": target,
+            "provider": provider,
+            "backend": backend,
+            "path": requirement.get("path"),
+        }
+        if provider != "docker_model_runner":
+            record_model_owner(
+                entry,
+                blueprint_id=blueprint_id,
+                blueprint_revision=blueprint_revision,
+                install_source=str(repo_root),
+                backend=backend,
+            )
+            results.append({**base_result, "status": "service_required"})
+            continue
+        preexisting_record = ledger.get("models", {}).get(target)
+        try:
+            installed = docker_model_installed(target)
+        except Exception:
+            installed = False
+        if not installed:
+            command = mn_base_command() + ["model", "install", str(entry.get("id") or model_ref)]
+            if backend and backend != "auto":
+                command.extend(["--backend", backend])
+            if requirement.get("context_size"):
+                command.extend(["--context-size", str(requirement["context_size"])])
+            if force:
+                command.append("--force")
+            result = subprocess.run(command, cwd=str(bundle_root), capture_output=True, text=True, timeout=1200, check=False)
+            if result.returncode != 0:
+                message = (result.stderr or result.stdout or "model install failed").strip()
+                results.append({**base_result, "status": "failed", "error": message})
+                errors.append(message)
+                continue
+        record_model_owner(
+            entry,
+            blueprint_id=blueprint_id,
+            blueprint_revision=blueprint_revision,
+            install_source=str(repo_root),
+            backend=backend,
+            preexisting_manual=installed and not isinstance(preexisting_record, dict),
+        )
+        results.append({**base_result, "status": "already_installed" if installed else "installed"})
+    return {"ok": not errors, "models": results, "errors": errors}
 
 
 def local_blueprint_from_path(path: str) -> tuple[Path, Dict[str, Any]]:
@@ -1821,7 +1918,12 @@ def validate_blueprint_inputs(
     if not isinstance(manifest, dict):
         raise HTTPException(status_code=500, detail="blueprint manifest.json must be an object")
 
-    spec_issues = validate_requirements_spec_issues(manifest) + validate_input_validation_spec_issues(manifest)
+    spec_issues = (
+        validate_service_spec_issues(manifest)
+        + validate_requirements_spec_issues(manifest)
+        + validate_resource_spec_issues(manifest)
+        + validate_input_validation_spec_issues(manifest)
+    )
     if spec_issues:
         return make_validation_report(spec_issues)
 
@@ -1832,7 +1934,37 @@ def validate_blueprint_inputs(
         config_overrides=config_overrides,
     )
     env.update(string_env_values(env_overrides))
+    service_result = run_service_validation(
+        bundle_root,
+        manifest,
+        config=config,
+        env=env,
+        resolver=_runtime_service_resolver(),
+    )
+    if not service_result.get("ok"):
+        return service_result
+
+    model_result = run_model_validation(bundle_root, manifest, config=config, env=env)
+    if not model_result.get("ok"):
+        return model_result
+
     return run_input_validation(bundle_root, manifest, config=config, env=env)
+
+
+def _runtime_service_resolver():
+    def resolver(name: str, requirement: dict[str, Any]) -> list[dict[str, Any]]:
+        from mn_api import state
+
+        response = state.client.resolve_service(
+            name,
+            tags=requirement.get("tags") or [],
+            passing_only=True,
+        )
+        decoded = json.loads(response)
+        services = decoded.get("services") if isinstance(decoded, dict) else []
+        return services if isinstance(services, list) else []
+
+    return resolver
 
 
 def shared_runs_root() -> str:
@@ -1930,6 +2062,9 @@ def blueprint_runtime_environment(
         projected_config = load_blueprint_config_overwrites(bundle_root, config_overrides=config_overrides)
         if projected_config is not None:
             env.update(config_to_environment(projected_config))
+        docker_model_env = resolve_llm_environment(config)
+        if docker_model_env:
+            env.update(docker_model_env)
 
     scenario_path = bundle_root / "scenario.json"
     if scenario_path.is_file():
@@ -1958,6 +2093,7 @@ def apply_manifest_config_bindings(manifest: Dict[str, Any], config: Dict[str, A
 
 def config_to_environment(config: Dict[str, Any]) -> Dict[str, str]:
     env: Dict[str, str] = {}
+    docker_model_env = resolve_llm_environment(config)
     for path, names in (
         ("video_source.uri", ("VIDEO_SOURCE_URI",)),
         ("video_source.transport", ("VIDEO_SOURCE_TRANSPORT",)),
@@ -1969,6 +2105,18 @@ def config_to_environment(config: Dict[str, Any]) -> Dict[str, str]:
         ("vl_model.model", ("VL_MODEL_NAME", "OLLAMA_MODEL")),
         ("vl_model.timeout_seconds", ("VL_MODEL_TIMEOUT_SECONDS", "OLLAMA_TIMEOUT_SECONDS")),
         ("vl_model.temperature", ("VL_MODEL_TEMPERATURE", "OLLAMA_TEMPERATURE")),
+    ):
+        value = config_path_get(config, path)
+        if value is None:
+            continue
+        for name in names:
+            env[name] = str(value)
+
+    if docker_model_env:
+        env.update(docker_model_env)
+        return env
+
+    for path, names in (
         ("llm.api_base", ("MN_LLM_API_BASE", "LITELLM_API_BASE")),
         ("llm.model", ("MN_LLM_MODEL", "LITELLM_MODEL")),
         ("llm.timeout_seconds", ("MN_LLM_TIMEOUT_SECONDS", "LITELLM_TIMEOUT_SECONDS")),
@@ -2100,6 +2248,7 @@ def inject_node_environment(manifest: Dict[str, Any], env: Dict[str, str]) -> No
                 str(environment["PYTHONPATH"]),
                 str(node_env["PYTHONPATH"]),
             )
+        adjust_llm_environment_for_node(node_env, node)
         environment.update(node_env)
         add_mn_llm_aliases(environment)
 
@@ -2126,6 +2275,17 @@ def add_mn_llm_aliases(environment: Dict[str, Any]) -> None:
     ):
         if primary not in environment and legacy in environment:
             environment[primary] = environment[legacy]
+
+
+def adjust_llm_environment_for_node(environment: Dict[str, Any], node: Dict[str, Any]) -> None:
+    if environment.get("MN_LLM_PROVIDER") != "docker_model_runner":
+        return
+    config = node.get("config") if isinstance(node.get("config"), dict) else {}
+    if config.get("runner_module") == "MirrorNeuron.Runner.HostLocal":
+        return
+    api_base = str(environment.get("MN_LLM_API_BASE") or "")
+    if "localhost:12434" in api_base or "127.0.0.1:12434" in api_base:
+        environment["MN_LLM_API_BASE"] = DOCKER_MODEL_RUNNER_CONTAINER_API_BASE
 
 
 def read_json_object(path: Path) -> Dict[str, Any]:

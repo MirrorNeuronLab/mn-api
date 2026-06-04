@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from mn_api import state
 from mn_api.dependencies import enforce_request_size
-from mn_api.routes import blueprints, bundles, jobs, runs, schedules, services, system
+from mn_api.routes import blueprints, bundles, jobs, models, runs, schedules, services, system
 
 
 def create_app() -> FastAPI:
@@ -25,6 +25,7 @@ def create_app() -> FastAPI:
     app.include_router(blueprints.router)
     app.include_router(bundles.router)
     app.include_router(jobs.router)
+    app.include_router(models.router)
     app.include_router(schedules.router)
     app.include_router(services.router)
     app.include_router(runs.router)

@@ -17,6 +17,23 @@ from mn_api.routes.blueprints import runtime_blueprint_web_ui_reserved_ports, se
 from unittest.mock import patch
 import grpc
 
+
+class FakeStreamingResponse:
+    status = 200
+
+    def __init__(self, lines):
+        self.lines = lines
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def __iter__(self):
+        return iter(self.lines)
+
+
 class TestAPI(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app)
@@ -75,6 +92,105 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(body["auth"], "disabled")
         self.assertIn("blueprint_repo", body)
         self.assertIn("runs_root", body)
+
+    @patch('mn_api.routes.models.assess_model_compatibility')
+    @patch('mn_api.routes.models.load_model_ownership')
+    @patch('mn_api.routes.models.state.client')
+    @patch('mn_api.routes.models.subprocess.run')
+    def test_models_route_lists_installed_docker_models(self, mock_run, mock_client, mock_ownership, mock_compatibility):
+        mock_run.return_value = SimpleNamespace(
+            returncode=0,
+            stdout='{"Name":"ai/gemma4:E2B"}\n',
+            stderr="",
+        )
+        mock_client.get_system_summary.return_value = json.dumps({
+            "nodes": [{"name": "mirror_neuron@local", "self": True}]
+        })
+        mock_ownership.return_value = {"version": 1, "models": {}}
+        mock_compatibility.return_value = SimpleNamespace(to_dict=lambda: {
+            "status": "pass",
+            "ok": True,
+            "message": "ready",
+            "warnings": [],
+        })
+
+        response = self.client.get("/api/v1/models")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["runner_available"])
+        self.assertEqual(body["node"], "mirror_neuron@local")
+        self.assertEqual(body["models"][0]["id"], "gemma4:e2b")
+        self.assertEqual(body["models"][0]["docker_model"], "ai/gemma4:E2B")
+        self.assertEqual(body["models"][0]["node"], "mirror_neuron@local")
+        self.assertEqual(body["models"][0]["compatibility"]["status"], "pass")
+
+    @patch('mn_api.routes.models.assess_model_compatibility')
+    @patch('mn_api.routes.models.load_model_ownership')
+    @patch('mn_api.routes.models.state.client')
+    @patch('mn_api.routes.models.dmr_api_list_models')
+    @patch('mn_api.routes.models.subprocess.run')
+    def test_models_route_uses_dmr_api_when_docker_model_cli_is_missing(self, mock_run, mock_api_list, mock_client, mock_ownership, mock_compatibility):
+        mock_run.return_value = SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr="unknown command: docker model",
+        )
+        mock_api_list.return_value = {"ai/gemma4:E2B"}
+        mock_client.get_system_summary.return_value = json.dumps({
+            "nodes": [{"name": "mirror_neuron@local", "self": True}]
+        })
+        mock_ownership.return_value = {"version": 1, "models": {}}
+        mock_compatibility.return_value = SimpleNamespace(to_dict=lambda: {
+            "status": "pass",
+            "ok": True,
+            "message": "ready",
+            "warnings": [],
+        })
+
+        response = self.client.get("/api/v1/models")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["runner_available"])
+        self.assertEqual(body["models"][0]["docker_model"], "ai/gemma4:E2B")
+        mock_api_list.assert_called_once()
+
+    @patch('mn_api.routes.models.state.client')
+    @patch('mn_api.routes.models.subprocess.run')
+    @patch('mn_api.routes.models.urllib.request.urlopen')
+    def test_model_benchmark_streams_against_docker_model_runner(self, mock_urlopen, mock_run, mock_client):
+        mock_run.return_value = SimpleNamespace(
+            returncode=0,
+            stdout='{"Name":"ai/gemma4:E2B"}\n',
+            stderr="",
+        )
+        mock_client.get_system_summary.return_value = json.dumps({
+            "nodes": [{"name": "mirror_neuron@local", "self": True}]
+        })
+        mock_urlopen.return_value = FakeStreamingResponse([
+            b'data: {"choices":[{"delta":{"content":"Ready"}}]}\n\n',
+            b'data: {"choices":[{"delta":{"content":" now"}}]}\n\n',
+            b'data: [DONE]\n\n',
+        ])
+
+        response = self.client.post(
+            "/api/v1/models/gemma4%3Ae2b/benchmark",
+            json={"max_tokens": 16},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["docker_model"], "ai/gemma4:E2B")
+        self.assertEqual(body["node"], "mirror_neuron@local")
+        self.assertEqual(body["sample"], "Ready now")
+        self.assertGreater(body["tokens_per_second"], 0)
+        self.assertIsNotNone(body["first_token_ms"])
+        request = mock_urlopen.call_args.args[0]
+        self.assertTrue(request.full_url.endswith("/engines/v1/chat/completions"))
+        payload = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(payload["model"], "ai/gemma4:E2B")
+        self.assertTrue(payload["stream"])
 
     @patch('mn_api.state.client')
     def test_service_routes_proxy_runtime_registry(self, mock_client):
@@ -2345,6 +2461,103 @@ class TestAPI(unittest.TestCase):
 
     @patch("mn_api.routes.blueprints.run_mn_blueprint_run")
     @patch("mn_api.routes.blueprints.run_mn_blueprint_validate")
+    @patch("mn_api.routes.blueprints.install_blueprint_runtime_models")
+    def test_blueprint_launch_run_installs_models_before_validation(self, mock_install, mock_validate, mock_run):
+        events = []
+
+        def install_side_effect(*args, **kwargs):
+            events.append("install")
+            self.assertFalse(kwargs["force"])
+            return {
+                "ok": True,
+                "models": [{"id": "gemma4:e2b", "model": "ai/gemma4:E2B", "status": "installed"}],
+                "errors": [],
+            }
+
+        def validate_side_effect(*args, **kwargs):
+            events.append("validate")
+            return {"ok": True, "status": "passed", "issues": [], "errors": []}
+
+        mock_install.side_effect = install_side_effect
+        mock_validate.side_effect = validate_side_effect
+        mock_run.return_value = {"ok": True, "job_id": "job-from-cli", "run_id": "run-from-cli", "command": "mn blueprint run"}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            self._write_blueprint_repo(repo)
+            original = self._set_blueprint_config(repo)
+            try:
+                with patch.dict(os.environ, {"MN_LAUNCH_PROGRESS_DIR": str(repo / "progress")}):
+                    response = self.client.post(
+                        "/api/v1/blueprints/launch/runs",
+                        json={
+                            "source": "catalog",
+                            "blueprint_id": "worker_one",
+                            "progress_id": "launch-api-test",
+                        },
+                    )
+                    progress_response = self.client.get("/api/v1/blueprints/launch/progress/launch-api-test")
+            finally:
+                self._restore_config(original)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(events, ["install", "validate"])
+        body = response.json()
+        self.assertEqual(body["progress_id"], "launch-api-test")
+        self.assertEqual(body["model_install"]["models"][0]["status"], "installed")
+        self.assertEqual(progress_response.status_code, 200)
+        progress_body = progress_response.json()
+        self.assertTrue(progress_body["completed"])
+        progress_phases = [event["phase"] for event in progress_body["events"]]
+        self.assertIn("model_install", progress_phases)
+        self.assertIn("validation", progress_phases)
+        self.assertEqual(progress_body["events"][-1]["phase"], "launch")
+        self.assertEqual(progress_body["events"][-1]["status"], "completed")
+        mock_run.assert_called_once()
+
+    def test_blueprint_launch_progress_rejects_invalid_progress_id(self):
+        response = self.client.get("/api/v1/blueprints/launch/progress/not/valid")
+        self.assertEqual(response.status_code, 404)
+        response = self.client.get("/api/v1/blueprints/launch/progress/bad%20id")
+        self.assertEqual(response.status_code, 400)
+
+    @patch("mn_api.routes.blueprints.run_mn_blueprint_run")
+    @patch("mn_api.routes.blueprints.run_mn_blueprint_validate")
+    @patch("mn_api.routes.blueprints.install_blueprint_runtime_models")
+    def test_blueprint_launch_run_blocks_when_auto_model_install_fails(self, mock_install, mock_validate, mock_run):
+        mock_install.return_value = {
+            "ok": False,
+            "models": [
+                {
+                    "id": "gemma4:e2b",
+                    "model": "ai/gemma4:E2B",
+                    "path": "llm.runtime_model",
+                    "status": "failed",
+                    "error": "hardware is not compatible",
+                }
+            ],
+            "errors": ["hardware is not compatible"],
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            self._write_blueprint_repo(repo)
+            original = self._set_blueprint_config(repo)
+            try:
+                response = self.client.post(
+                    "/api/v1/blueprints/launch/runs",
+                    json={"source": "catalog", "blueprint_id": "worker_one"},
+                )
+            finally:
+                self._restore_config(original)
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.headers["content-type"], "application/problem+json")
+        self.assertEqual(response.json()["error"], "blueprint_model_install_failed")
+        self.assertEqual(response.json()["errors"][0]["location"]["path"], "llm.runtime_model")
+        mock_validate.assert_not_called()
+        mock_run.assert_not_called()
+
+    @patch("mn_api.routes.blueprints.run_mn_blueprint_run")
+    @patch("mn_api.routes.blueprints.run_mn_blueprint_validate")
     def test_blueprint_launch_run_uses_mn_cli_for_filesystem_path(self, mock_validate, mock_run):
         mock_validate.return_value = {"ok": True, "status": "passed", "issues": [], "errors": []}
         mock_run.return_value = {"ok": True, "job_id": "job-path-cli", "command": "mn blueprint run --folder"}
@@ -2407,6 +2620,44 @@ class TestAPI(unittest.TestCase):
         )
 
     @patch('mn_api.state.client')
+    @patch("mn_api.routes.blueprints.validate_blueprint_inputs")
+    @patch("mn_api.routes.blueprints.install_blueprint_runtime_models")
+    def test_blueprint_run_installs_models_before_input_validation(self, mock_install, mock_validate, mock_client):
+        events = []
+
+        def install_side_effect(*args, **kwargs):
+            events.append("install")
+            return {
+                "ok": True,
+                "models": [{"id": "gemma4:e2b", "model": "ai/gemma4:E2B", "status": "installed"}],
+                "errors": [],
+            }
+
+        def validate_side_effect(*args, **kwargs):
+            events.append("validate")
+            return {"ok": True, "status": "passed", "issues": [], "errors": []}
+
+        mock_install.side_effect = install_side_effect
+        mock_validate.side_effect = validate_side_effect
+        mock_client.submit_job.return_value = "job-with-model"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            self._write_blueprint_repo(repo)
+            original = self._set_blueprint_config(repo)
+            try:
+                response = self.client.post(
+                    "/api/v1/blueprints/worker_one/runs",
+                    json={"run_id": "run-with-auto-model"},
+                )
+            finally:
+                self._restore_config(original)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(events, ["install", "validate"])
+        self.assertEqual(response.json()["model_install"]["models"][0]["status"], "installed")
+        self.assertEqual(response.json()["job_id"], "job-with-model")
+
+    @patch('mn_api.state.client')
     def test_blueprint_run_validation_failure_blocks_submit_unless_forced(self, mock_client):
         mock_client.submit_job.return_value = "job-forced"
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2449,7 +2700,7 @@ class TestAPI(unittest.TestCase):
 
         self.assertEqual(failed.status_code, 422)
         self.assertEqual(failed.headers["content-type"], "application/problem+json")
-        self.assertEqual(failed.json()["error"], "input_validation_failed")
+        self.assertEqual(failed.json()["error"], "blueprint_validation_failed")
         self.assertEqual(failed.json()["errors"][0]["location"]["path"], "llm.api_base")
         self.assertEqual(forced.status_code, 200)
         self.assertEqual(forced.json()["job_id"], "job-forced")
@@ -2516,7 +2767,7 @@ class TestAPI(unittest.TestCase):
                 self._restore_config(original)
 
         self.assertEqual(response.status_code, 422)
-        self.assertEqual(response.json()["error"], "input_validation_failed")
+        self.assertEqual(response.json()["error"], "blueprint_validation_failed")
         self.assertEqual(cleanup_record["reason"], "validation_failed")
         self.assertEqual(cleanup_record["run_id"], "run-post-cleanup")
         self.assertTrue(cleanup_record["ready_file"].endswith("pre_launch.ready"))
