@@ -208,6 +208,16 @@ def _normalized_status(value: Any) -> str:
     return str(value or "").strip().lower()
 
 
+def _is_success_status(value: Any) -> bool:
+    normalized = re.sub(r"[^a-z0-9]+", "_", _normalized_status(value)).strip("_")
+    return normalized in {"completed", "complete", "done", "finished", "succeeded", "success"}
+
+
+def _clear_success_failure(snapshot: dict[str, Any]) -> None:
+    if _is_success_status(snapshot.get("status")):
+        snapshot.pop("failure", None)
+
+
 def _should_reconcile_job_list_status(job: dict[str, Any]) -> bool:
     job_id = _first_string(job.get("job_id"), job.get("id"))
     return bool(job_id and job_id != "unknown")
@@ -564,6 +574,9 @@ def _artifact_id(path: Path, run_dir: Path) -> str:
         "events.jsonl": "events_jsonl",
         "logs.jsonl": "logs_jsonl",
         "errors.jsonl": "errors_jsonl",
+        "timeline.jsonl": "timeline_jsonl",
+        "timeline.json": "timeline_json",
+        "observability_summary.json": "observability_summary_json",
         "events.log": "events_log",
         "errors.log": "errors_log",
         "events.index.json": "events_index_json",
@@ -595,6 +608,7 @@ def _rotated_artifact_id(rel: str) -> str | None:
 def _artifact_ref(run_id: str, path: Path, run_dir: Path) -> dict[str, Any]:
     stat = path.stat()
     rel = path.relative_to(run_dir).as_posix()
+    artifact_path = urllib.parse.quote(rel, safe="/")
     return {
         "artifact_id": _artifact_id(path, run_dir),
         "path": str(path),
@@ -602,7 +616,8 @@ def _artifact_ref(run_id: str, path: Path, run_dir: Path) -> dict[str, Any]:
         "size_bytes": stat.st_size,
         "sha256": _sha256_file(path),
         "content_type": _artifact_content_type(path),
-        "url": f"/api/v1/runs/{urllib.parse.quote(run_id)}/artifacts/{urllib.parse.quote(rel, safe='/')}",
+        "url": f"/api/v1/runs/{urllib.parse.quote(run_id)}/artifacts/{artifact_path}",
+        "reveal_url": f"/api/v1/runs/{urllib.parse.quote(run_id)}/artifacts/{artifact_path}/reveal",
     }
 
 
@@ -633,6 +648,7 @@ def _compact_job_detail(job_id: str) -> dict[str, Any]:
         stored_job = _read_json_file(run_dir / "job.json")
     run_record = _read_json_file(run_dir / "run.json") if run_dir else {}
     nested_job = stored_job.get("job") if isinstance(stored_job.get("job"), dict) else {}
+    observability_summary = _read_json_file(run_dir / "observability_summary.json") if run_dir else {}
     run_id = _first_string(
         nested_job.get("run_id"),
         nested_job.get("runId"),
@@ -655,10 +671,16 @@ def _compact_job_detail(job_id: str) -> dict[str, Any]:
     status = _infer_status(events, stored_job, run_record)
     artifacts = _run_artifacts(run_id, run_dir)
     recent_events = [_compact_event(event) for event in events[-50:]]
-    failure = _failure_from_sources(events, stored_job, run_record)
+    failure = None if _is_success_status(status) else _failure_from_sources(events, stored_job, run_record)
+    trace_id = _first_string(
+        run_record.get("trace_id"),
+        observability_summary.get("trace_id"),
+        _extract_nested_string(events, "trace_id", "traceId"),
+    )
     job = {
         "job_id": job_id,
         "run_id": run_id or None,
+        "trace_id": trace_id or None,
         "graph_id": graph_id or None,
         "status": status,
         "run_dir": str(run_dir) if run_dir else None,
@@ -670,6 +692,7 @@ def _compact_job_detail(job_id: str) -> dict[str, Any]:
         "mode": "compact",
         "job_id": job_id,
         "run_id": run_id or None,
+        "trace_id": trace_id or None,
         "graph_id": graph_id or None,
         "status": status,
         "event_count": len(events),
@@ -679,11 +702,15 @@ def _compact_job_detail(job_id: str) -> dict[str, Any]:
     }
     if failure:
         summary["failure"] = failure
+    if observability_summary:
+        summary["observability_summary"] = _compact_value(observability_summary)
     if stream_error:
         summary["event_stream_warning"] = stream_error
     return {
         "job": job,
         "summary": summary,
+        "trace_id": trace_id or None,
+        "observability_summary": observability_summary,
         "failure": failure,
         "agents": _agent_summaries(stored_job, events),
         "recent_events": recent_events,
@@ -706,6 +733,7 @@ def _workflow_progress_snapshot_for_job(job_id: str) -> dict[str, Any]:
     events, stream_error = _stream_job_events(job_id, limit=5000)
     run_dir = _run_dir_for_details(details, events, job_id=job_id)
     events = _merge_events(events, _run_store_events(run_dir, limit=5000), limit=5000)
+    observability_summary = _read_json_file(run_dir / "observability_summary.json") if run_dir else {}
     snapshot = workflow_progress_snapshot(
         _manifest_from_job_details(details, run_dir=run_dir),
         events,
@@ -714,12 +742,23 @@ def _workflow_progress_snapshot_for_job(job_id: str) -> dict[str, Any]:
         job_id=job_id,
     )
     _apply_default_assigned_node(snapshot, details)
-    if not snapshot.get("failure"):
+    _clear_success_failure(snapshot)
+    if not snapshot.get("failure") and not _is_success_status(snapshot.get("status")):
         failure = _failure_from_sources(events, _job_from_details(details), _summary_from_details(details))
         if failure:
             snapshot["failure"] = failure
     if stream_error:
         snapshot["warning"] = stream_error
+    trace_id = _first_string(
+        snapshot.get("trace_id"),
+        observability_summary.get("trace_id"),
+        (_read_json_file(run_dir / "run.json") if run_dir else {}).get("trace_id"),
+        _extract_nested_string(events, "trace_id", "traceId"),
+    )
+    if trace_id:
+        snapshot["trace_id"] = trace_id
+    if observability_summary:
+        snapshot["observability_summary"] = observability_summary
     return snapshot
 
 
@@ -1006,6 +1045,7 @@ def stream_job_workflow_progress(
         run_dir = _run_dir_for_details(details, events, job_id=job_id)
         manifest = _manifest_from_job_details(details, run_dir=run_dir)
         events = _merge_events(events, _run_store_events(run_dir, limit=5000), limit=5000)
+        observability_summary = _read_json_file(run_dir / "observability_summary.json") if run_dir else {}
         tracker = BlueprintWorkflowProgress(
             manifest,
             job_id=job_id,
@@ -1019,6 +1059,17 @@ def stream_job_workflow_progress(
         tracker.apply_job_status(_job_from_details(details), _summary_from_details(details))
         initial = tracker.snapshot(job=_job_from_details(details), summary=_summary_from_details(details))
         _apply_default_assigned_node(initial, details)
+        _clear_success_failure(initial)
+        trace_id = _first_string(
+            initial.get("trace_id"),
+            observability_summary.get("trace_id"),
+            (_read_json_file(run_dir / "run.json") if run_dir else {}).get("trace_id"),
+            _extract_nested_string(events, "trace_id", "traceId"),
+        )
+        if trace_id:
+            initial["trace_id"] = trace_id
+        if observability_summary:
+            initial["observability_summary"] = observability_summary
         if stream_error:
             initial["warning"] = stream_error
         yield _sse_event("snapshot", initial)
@@ -1081,6 +1132,7 @@ def stream_job_workflow_progress(
                     tracker.apply_job_status(_job_from_details(details), _summary_from_details(details))
                 snapshot = tracker.snapshot(job=_job_from_details(details), summary=_summary_from_details(details))
                 _apply_default_assigned_node(snapshot, details)
+                _clear_success_failure(snapshot)
                 yield _sse_event(
                     "snapshot",
                     snapshot,

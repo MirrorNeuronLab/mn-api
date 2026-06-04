@@ -807,6 +807,7 @@ class TestAPI(unittest.TestCase):
             (run_dir / "run.json").write_text(json.dumps({
                 "run_id": "observe-run",
                 "blueprint_id": "general_human_in_the_loop_workflow",
+                "trace_id": "trc_observe",
                 "status": "running",
             }))
             (run_dir / "events.jsonl").write_text(
@@ -854,9 +855,32 @@ class TestAPI(unittest.TestCase):
                 })
                 + "\n"
             )
+            (run_dir / "timeline.jsonl").write_text(
+                json.dumps({
+                    "schema_version": "mn.timeline.v1",
+                    "ts": "2026-05-22T12:00:04Z",
+                    "run_id": "observe-run",
+                    "blueprint_id": "general_human_in_the_loop_workflow",
+                    "trace_id": "trc_observe",
+                    "span_id": "spn_timeline",
+                    "type": "run_started",
+                    "status": "started",
+                    "summary": "Run started",
+                })
+                + "\n"
+            )
+            (run_dir / "observability_summary.json").write_text(json.dumps({
+                "schema_version": "mn.observability_summary.v1",
+                "run_id": "observe-run",
+                "trace_id": "trc_observe",
+                "status": "running",
+                "counts": {"events": 1, "logs": 1, "errors": 0, "timeline": 1},
+            }))
 
             with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
                 logs = self.client.get("/api/v1/runs/observe-run/logs?level=INFO")
+                timeline = self.client.get("/api/v1/runs/observe-run/timeline")
+                observability_summary = self.client.get("/api/v1/runs/observe-run/observability-summary")
                 human = self.client.get("/api/v1/runs/observe-run/human?status=pending")
                 response = self.client.post(
                     "/api/v1/runs/observe-run/human/hitl-1/response",
@@ -866,6 +890,10 @@ class TestAPI(unittest.TestCase):
 
         self.assertEqual(logs.status_code, 200)
         self.assertEqual(logs.json()["data"][0]["message"], "needs attention")
+        self.assertEqual(timeline.status_code, 200)
+        self.assertEqual(timeline.json()["data"][0]["trace_id"], "trc_observe")
+        self.assertEqual(observability_summary.status_code, 200)
+        self.assertEqual(observability_summary.json()["trace_id"], "trc_observe")
         self.assertEqual(human.status_code, 200)
         self.assertEqual(human.json()["data"][0]["payload"]["request_id"], "hitl-1")
         self.assertEqual(response.status_code, 200)
@@ -882,6 +910,9 @@ class TestAPI(unittest.TestCase):
             (run_dir / "final_artifact.json").write_text(json.dumps({"type": "prepared_1040_tax_packet"}))
             (run_dir / "errors.jsonl").write_text(json.dumps({"error": {"schema_version": "mn.error.v1"}}) + "\n")
             (run_dir / "errors.001.jsonl").write_text(json.dumps({"error": {"schema_version": "mn.error.v1"}}) + "\n")
+            (run_dir / "timeline.jsonl").write_text(json.dumps({"schema_version": "mn.timeline.v1"}) + "\n")
+            (run_dir / "timeline.json").write_text(json.dumps({"schema_version": "mn.timeline.compact.v1"}))
+            (run_dir / "observability_summary.json").write_text(json.dumps({"schema_version": "mn.observability_summary.v1"}))
             (run_dir / "report.md").write_text("# Draft Review Packet\n")
             (run_dir / "packet.pdf").write_bytes(b"%PDF-1.4\n% test pdf\n")
 
@@ -902,10 +933,39 @@ class TestAPI(unittest.TestCase):
         self.assertIn("final_artifact_json", artifact_ids)
         self.assertIn("errors_jsonl", artifact_ids)
         self.assertIn("errors_jsonl_001", artifact_ids)
+        self.assertIn("timeline_jsonl", artifact_ids)
+        self.assertIn("timeline_json", artifact_ids)
+        self.assertIn("observability_summary_json", artifact_ids)
+        summary_ref = next(artifact for artifact in listing.json()["artifacts"] if artifact["artifact_id"] == "observability_summary_json")
+        self.assertEqual(summary_ref["content_type"], "application/json")
+        self.assertIn("/api/v1/runs/artifact-run/artifacts/observability_summary.json", summary_ref["url"])
+        self.assertIn("/api/v1/runs/artifact-run/artifacts/observability_summary.json/reveal", summary_ref["reveal_url"])
         self.assertEqual(markdown.status_code, 200)
         self.assertIn("# Draft Review Packet", markdown.text)
         self.assertEqual(pdf.status_code, 200)
         self.assertEqual(pdf.content[:5], b"%PDF-")
+
+    def test_run_artifact_reveal_opens_local_file_location(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs_root = Path(tmp)
+            run_dir = runs_root / "reveal-run"
+            run_dir.mkdir()
+            (run_dir / "job.json").write_text(json.dumps({"job_id": "job-reveal"}))
+
+            with (
+                patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}),
+                patch("mn_api.routes.runs.sys.platform", "darwin"),
+                patch("mn_api.routes.runs.subprocess.Popen") as mock_popen,
+            ):
+                response = self.client.post("/api/v1/runs/reveal-run/artifacts/job.json/reveal")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["ok"])
+        self.assertTrue(body["path"].endswith("job.json"))
+        mock_popen.assert_called_once()
+        self.assertEqual(mock_popen.call_args.args[0][:2], ["open", "-R"])
+        self.assertTrue(mock_popen.call_args.args[0][2].endswith("job.json"))
 
     @patch('mn_api.state.client')
     def test_submit_by_unknown_bundle_path_is_rejected_before_sdk_call(self, mock_client):
@@ -1223,6 +1283,18 @@ class TestAPI(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp) / "video-run"
             run_dir.mkdir()
+            (run_dir / "run.json").write_text(json.dumps({
+                "run_id": "video-run",
+                "trace_id": "trc_video",
+                "status": "running",
+            }))
+            (run_dir / "observability_summary.json").write_text(json.dumps({
+                "schema_version": "mn.observability_summary.v1",
+                "run_id": "video-run",
+                "trace_id": "trc_video",
+                "status": "running",
+                "counts": {"events": 2, "logs": 0, "errors": 0, "timeline": 2},
+            }))
             (run_dir / "config.json").write_text(json.dumps({
                 "id": "video_watch_assistant",
                 "type": "service",
@@ -1296,6 +1368,8 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertEqual(body["workflow_id"], "video_watch_assistant")
+        self.assertEqual(body["trace_id"], "trc_video")
+        self.assertEqual(body["observability_summary"]["trace_id"], "trc_video")
         self.assertEqual(body["steps"][0]["id"], "start_video_monitor")
         self.assertEqual(body["steps"][0]["label"], "Start Video Monitor")
         self.assertEqual(body["steps"][0]["agents"][0]["id"], "video_monitor")
@@ -1400,6 +1474,18 @@ class TestAPI(unittest.TestCase):
                 "graph_id": "personal_income_tax_expert_v1",
                 "status": "completed",
             }))
+            (run_dir / "run.json").write_text(json.dumps({
+                "run_id": "compact-run",
+                "trace_id": "trc_compact",
+                "status": "completed",
+            }))
+            (run_dir / "observability_summary.json").write_text(json.dumps({
+                "schema_version": "mn.observability_summary.v1",
+                "run_id": "compact-run",
+                "trace_id": "trc_compact",
+                "status": "completed",
+                "counts": {"events": 1, "logs": 0, "errors": 0, "timeline": 1},
+            }))
             (run_dir / "result.json").write_text(json.dumps({"ok": True}))
             (run_dir / "final_artifact.json").write_text(json.dumps({
                 "type": "prepared_1040_tax_packet",
@@ -1431,6 +1517,8 @@ class TestAPI(unittest.TestCase):
         self.assertNotIn(huge_log[:1024], response.text)
         body = response.json()
         self.assertEqual(body["job"]["run_id"], "compact-run")
+        self.assertEqual(body["job"]["trace_id"], "trc_compact")
+        self.assertEqual(body["observability_summary"]["trace_id"], "trc_compact")
         self.assertEqual(body["job"]["status"], "completed")
         self.assertEqual(body["summary"]["mode"], "compact")
         artifact_ids = {artifact["artifact_id"] for artifact in body["artifacts"]}
@@ -1470,6 +1558,138 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(body["failure"]["desc"], "Workflow step heartbeat deadline exceeded")
         self.assertEqual(body["summary"]["failure"]["code"], "runtime.failure")
         self.assertEqual(body["job"]["reason"] if "reason" in body["job"] else body["failure"]["desc"], "Workflow step heartbeat deadline exceeded")
+
+    @patch('mn_api.state.client')
+    def test_get_job_compact_suppresses_failure_for_completed_job(self, mock_client):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs_root = Path(tmp)
+            run_dir = runs_root / "completed-run"
+            run_dir.mkdir()
+            (run_dir / "job.json").write_text(json.dumps({
+                "job_id": "job-completed",
+                "run_id": "completed-run",
+                "graph_id": "invoice_bill_extraction_assistant_v1",
+                "status": "completed",
+            }))
+            (run_dir / "run.json").write_text(json.dumps({
+                "run_id": "completed-run",
+                "status": "completed",
+            }))
+            mock_client.get_job.side_effect = AssertionError("default job details should not call full gRPC get_job")
+            mock_client.stream_events.return_value = [
+                json.dumps({
+                    "type": "job_running",
+                    "timestamp": "2026-06-04T12:00:00Z",
+                    "payload": {"run_id": "completed-run"},
+                }),
+                json.dumps({
+                    "type": "job_failed",
+                    "timestamp": "2026-06-04T12:00:01Z",
+                    "reason": "fewer than 2 healthy connected runtime nodes observed",
+                    "payload": {"run_id": "completed-run"},
+                }),
+                json.dumps({
+                    "type": "job_completed",
+                    "timestamp": "2026-06-04T12:00:02Z",
+                    "payload": {"run_id": "completed-run"},
+                }),
+            ]
+
+            with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
+                response = self.client.get("/api/v1/jobs/job-completed")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["job"]["status"], "completed")
+        self.assertIsNone(body["failure"])
+        self.assertNotIn("failure", body["job"])
+        self.assertNotIn("failure", body["summary"])
+        self.assertTrue(any(event.get("failure") for event in body["events"]))
+
+    @patch('mn_api.state.client')
+    def test_get_job_compact_does_not_promote_reliability_reason_to_failure(self, mock_client):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs_root = Path(tmp)
+            run_dir = runs_root / "running-run"
+            run_dir.mkdir()
+            (run_dir / "job.json").write_text(json.dumps({
+                "job_id": "job-running",
+                "run_id": "running-run",
+                "graph_id": "invoice_bill_extraction_assistant_v1",
+                "status": "running",
+            }))
+            mock_client.get_job.side_effect = AssertionError("default job details should not call full gRPC get_job")
+            mock_client.stream_events.return_value = [
+                json.dumps({
+                    "type": "reliability_strategy_resolved",
+                    "timestamp": "2026-06-04T12:00:00Z",
+                    "requested_recovery_policy": "auto",
+                    "effective_recovery_policy": "local_restart",
+                    "mode": "single_node",
+                    "degraded": False,
+                    "reason": "fewer than 2 healthy connected runtime nodes observed",
+                    "observed_nodes": ["mirror_neuron@127.0.0.1"],
+                }),
+                json.dumps({
+                    "type": "job_running",
+                    "timestamp": "2026-06-04T12:00:01Z",
+                    "payload": {"run_id": "running-run"},
+                }),
+            ]
+
+            with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
+                response = self.client.get("/api/v1/jobs/job-running")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["job"]["status"], "running")
+        self.assertIsNone(body["failure"])
+        self.assertNotIn("failure", body["job"])
+        self.assertNotIn("failure", body["summary"])
+        self.assertFalse(any(event.get("failure") for event in body["events"]))
+
+    @patch('mn_api.state.client')
+    def test_get_job_workflow_progress_suppresses_failure_for_completed_job(self, mock_client):
+        mock_client.get_job.return_value = json.dumps({
+            "job": {
+                "job_id": "job-completed",
+                "status": "completed",
+                "manifest": {
+                    "id": "invoice-blueprint",
+                    "flow": {
+                        "entrypoint": "extract",
+                        "steps": [{"id": "extract", "label": "Extract", "run": "extractor"}],
+                    },
+                    "runtime": {
+                        "bindings": {
+                            "extractor": {"workers": [{"id": "extractor", "role": "Extract fields"}]}
+                        }
+                    },
+                },
+            },
+            "summary": {"status": "completed"},
+            "agents": [],
+        })
+        mock_client.stream_events.return_value = [
+            json.dumps({
+                "type": "workflow_step_attempt_completed",
+                "timestamp": "2026-06-04T12:00:00Z",
+                "payload": {"step": "extract", "worker": "extractor"},
+            }),
+            json.dumps({
+                "type": "job_failed",
+                "timestamp": "2026-06-04T12:00:01Z",
+                "reason": "fewer than 2 healthy connected runtime nodes observed",
+            }),
+            json.dumps({"type": "job_completed", "timestamp": "2026-06-04T12:00:02Z"}),
+        ]
+
+        response = self.client.get("/api/v1/jobs/job-completed/workflow-progress")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "completed")
+        self.assertNotIn("failure", body)
 
     @patch('mn_api.state.client')
     def test_get_job_compact_does_not_treat_agent_completion_as_job_completion(self, mock_client):
@@ -2121,7 +2341,7 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(body["job_id"], "job-from-cli")
         self.assertEqual(body["id"], "job-from-cli")
         self.assertEqual(body["run_id"], "run-from-cli")
-        self.assertEqual(mock_run.call_args.args[0], ["worker_one", "--detached"])
+        self.assertEqual(mock_run.call_args.args[0], ["--folder", str((repo / "worker_one").resolve()), "--detached"])
 
     @patch("mn_api.routes.blueprints.run_mn_blueprint_run")
     @patch("mn_api.routes.blueprints.run_mn_blueprint_validate")

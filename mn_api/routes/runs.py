@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 import urllib.error
@@ -93,6 +94,9 @@ def _artifact_id(path: Path, run_dir: Path) -> str:
         "events.jsonl": "events_jsonl",
         "logs.jsonl": "logs_jsonl",
         "errors.jsonl": "errors_jsonl",
+        "timeline.jsonl": "timeline_jsonl",
+        "timeline.json": "timeline_json",
+        "observability_summary.json": "observability_summary_json",
         "events.log": "events_log",
         "errors.log": "errors_log",
         "events.index.json": "events_index_json",
@@ -124,6 +128,7 @@ def _rotated_artifact_id(rel: str) -> str | None:
 def _artifact_ref(run_id: str, path: Path, run_dir: Path) -> dict[str, Any]:
     stat = path.stat()
     rel = path.relative_to(run_dir).as_posix()
+    artifact_path = urllib.parse.quote(rel, safe="/")
     return {
         "artifact_id": _artifact_id(path, run_dir),
         "path": str(path),
@@ -131,7 +136,8 @@ def _artifact_ref(run_id: str, path: Path, run_dir: Path) -> dict[str, Any]:
         "size_bytes": stat.st_size,
         "sha256": _sha256_file(path),
         "content_type": _artifact_content_type(path),
-        "url": f"/api/v1/runs/{urllib.parse.quote(run_id)}/artifacts/{urllib.parse.quote(rel, safe='/')}",
+        "url": f"/api/v1/runs/{urllib.parse.quote(run_id)}/artifacts/{artifact_path}",
+        "reveal_url": f"/api/v1/runs/{urllib.parse.quote(run_id)}/artifacts/{artifact_path}/reveal",
     }
 
 
@@ -156,6 +162,16 @@ def _artifact_file_path(run_dir: Path, artifact_path: str) -> Path:
     if not candidate.is_file():
         raise HTTPException(status_code=404, detail="artifact not found")
     return candidate
+
+
+def _reveal_local_path(path: Path) -> None:
+    if sys.platform == "darwin":
+        subprocess.Popen(["open", "-R", str(path)])
+        return
+    if sys.platform.startswith("win"):
+        subprocess.Popen(["explorer", "/select,", str(path)])
+        return
+    subprocess.Popen(["xdg-open", str(path.parent)])
 
 
 def _read_event_tail(path: Path, *, limit: int) -> list[dict[str, Any]]:
@@ -233,6 +249,17 @@ def list_run_artifacts(run_id: str, _auth=Depends(require_auth)):
     run_dir = _ensure_run_exists(run_id)
     artifacts = [_artifact_ref(run_id, path, run_dir) for path in _list_artifact_files(run_dir)]
     return {"run_id": run_id, "run_dir": str(run_dir), "artifacts": artifacts}
+
+
+@router.post("/runs/{run_id}/artifacts/{artifact_path:path}/reveal")
+def reveal_run_artifact(run_id: str, artifact_path: str, _auth=Depends(require_auth)):
+    run_dir = _ensure_run_exists(run_id)
+    path = _artifact_file_path(run_dir, artifact_path)
+    try:
+        _reveal_local_path(path)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"failed to open {path.name}") from exc
+    return {"ok": True, "path": str(path), "folder": str(path.parent)}
 
 
 @router.get("/runs/{run_id}/artifacts/{artifact_path:path}")
@@ -525,6 +552,36 @@ def get_run_logs(
     }
 
 
+@router.get("/runs/{run_id}/timeline")
+def get_run_timeline(
+    run_id: str,
+    limit: int = Query(500, ge=0, le=5000),
+    since: str | None = Query(default=None),
+    _auth=Depends(require_auth),
+):
+    _ensure_run_exists(run_id)
+    tools = _observability_tools()
+    return {
+        "run_id": run_id,
+        "data": tools["read_run_timeline"](
+            run_id,
+            runs_root=_runs_root(),
+            limit=limit,
+            since=since,
+        ),
+    }
+
+
+@router.get("/runs/{run_id}/observability-summary")
+def get_run_observability_summary(run_id: str, _auth=Depends(require_auth)):
+    _ensure_run_exists(run_id)
+    tools = _observability_tools()
+    summary = tools["read_run_observability_summary"](run_id, runs_root=_runs_root())
+    if not summary:
+        raise HTTPException(status_code=404, detail="observability summary not found")
+    return summary
+
+
 @router.get("/runs/{run_id}/stream")
 def stream_run_observability(
     run_id: str,
@@ -678,8 +735,10 @@ def _observability_tools() -> dict[str, Any]:
             read_human_events,
             read_run_events,
             read_run_logs,
+            read_run_observability_summary,
             read_run_resources,
             read_run_stream_records,
+            read_run_timeline,
             record_human_response,
         )
     except ModuleNotFoundError as exc:
@@ -690,8 +749,10 @@ def _observability_tools() -> dict[str, Any]:
         "read_human_events": read_human_events,
         "read_run_events": read_run_events,
         "read_run_logs": read_run_logs,
+        "read_run_observability_summary": read_run_observability_summary,
         "read_run_resources": read_run_resources,
         "read_run_stream_records": read_run_stream_records,
+        "read_run_timeline": read_run_timeline,
         "record_human_response": record_human_response,
     }
 

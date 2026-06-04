@@ -324,12 +324,7 @@ def submit_uploaded_bundle_launch(launch: dict, req: BlueprintLaunchRequest, val
 
 
 def run_launch_with_mn_cli(launch: dict, req: BlueprintLaunchRequest) -> dict:
-    source = launch["source"]
-    run_args: list[str]
-    if source == "catalog":
-        run_args = [launch["blueprint"]["id"], "--detached"]
-    else:
-        run_args = ["--folder", str(launch["bundle_root"]), "--detached"]
+    run_args = ["--folder", str(launch["bundle_root"]), "--detached"]
     if req.run_id:
         run_args.extend(["--run-id", req.run_id])
     if req.force:

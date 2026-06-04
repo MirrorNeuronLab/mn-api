@@ -157,3 +157,79 @@ class TestStateClient(unittest.TestCase):
                 }
             ],
         )
+
+    def test_get_client_rebuilds_existing_client_when_grpc_tokens_change(self):
+        calls = []
+        closed = []
+
+        state.config = ApiConfig(
+            env="dev",
+            host="localhost",
+            port=54001,
+            grpc_target="localhost:55051",
+            grpc_timeout_seconds=10.0,
+            grpc_auth_token="",
+            grpc_admin_token="old-admin",
+            api_token="",
+            request_size_limit_bytes=1024 * 1024,
+            cors_allow_origins=[],
+            blueprint_repo="/tmp/blueprints",
+            configured_blueprint_repo="/tmp/blueprints",
+            dev_local_blueprint_repo="",
+        )
+        refreshed = ApiConfig(
+            env="dev",
+            host="localhost",
+            port=54001,
+            grpc_target="localhost:55051",
+            grpc_timeout_seconds=10.0,
+            grpc_auth_token="",
+            grpc_admin_token="new-admin",
+            api_token="",
+            request_size_limit_bytes=1024 * 1024,
+            cors_allow_origins=[],
+            blueprint_repo="/tmp/blueprints",
+            configured_blueprint_repo="/tmp/blueprints",
+            dev_local_blueprint_repo="",
+        )
+
+        class ExistingChannel:
+            def close(self):
+                closed.append(True)
+
+        state._client = SimpleNamespace(channel=ExistingChannel())
+
+        class CurrentClient:
+            def __init__(
+                self,
+                target=None,
+                timeout=None,
+                auth_token=None,
+                admin_token=None,
+            ):
+                calls.append(
+                    {
+                        "target": target,
+                        "timeout": timeout,
+                        "auth_token": auth_token,
+                        "admin_token": admin_token,
+                    }
+                )
+
+        state.Client = CurrentClient
+
+        with patch.object(state.ApiConfig, "from_env", return_value=refreshed):
+            state.get_client()
+
+        self.assertEqual(closed, [True])
+        self.assertEqual(
+            calls,
+            [
+                {
+                    "target": "localhost:55051",
+                    "timeout": 10.0,
+                    "auth_token": "",
+                    "admin_token": "new-admin",
+                }
+            ],
+        )

@@ -71,6 +71,7 @@ def _client_kwargs() -> dict:
 
 def get_client() -> Client:
     global _client
+    refresh_config_from_env()
     if _client is None:
         _client = Client(**_client_kwargs())
     return _client
