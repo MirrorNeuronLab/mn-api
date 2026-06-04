@@ -29,6 +29,7 @@ _ARTIFACT_CONTENT_TYPES = {
     ".pdf": "application/pdf",
     ".txt": "text/plain; charset=utf-8",
     ".log": "text/plain; charset=utf-8",
+    ".gz": "application/gzip",
 }
 
 
@@ -91,7 +92,12 @@ def _artifact_id(path: Path, run_dir: Path) -> str:
         "final_artifact.json": "final_artifact_json",
         "events.jsonl": "events_jsonl",
         "logs.jsonl": "logs_jsonl",
+        "errors.jsonl": "errors_jsonl",
+        "events.log": "events_log",
+        "errors.log": "errors_log",
+        "events.index.json": "events_index_json",
         "resources.jsonl": "resources_jsonl",
+        "errors.index.json": "errors_index_json",
         "human.jsonl": "human_events_jsonl",
         "job.json": "job_json",
         "run.json": "run_json",
@@ -100,8 +106,19 @@ def _artifact_id(path: Path, run_dir: Path) -> str:
     }
     if rel in known:
         return known[rel]
+    rotated_id = _rotated_artifact_id(rel)
+    if rotated_id:
+        return rotated_id
     normalized = re.sub(r"[^A-Za-z0-9]+", "_", rel).strip("_").lower()
     return normalized or "artifact"
+
+
+def _rotated_artifact_id(rel: str) -> str | None:
+    name = Path(rel).name
+    match = re.match(r"^(events|logs|errors)\.(\d{3})\.jsonl(?:\.gz)?$", name)
+    if not match:
+        return None
+    return f"{match.group(1)}_jsonl_{match.group(2)}"
 
 
 def _artifact_ref(run_id: str, path: Path, run_dir: Path) -> dict[str, Any]:

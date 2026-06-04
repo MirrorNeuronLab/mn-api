@@ -880,6 +880,8 @@ class TestAPI(unittest.TestCase):
             run_dir.mkdir()
             (run_dir / "result.json").write_text(json.dumps({"ok": True, "value": 42}))
             (run_dir / "final_artifact.json").write_text(json.dumps({"type": "prepared_1040_tax_packet"}))
+            (run_dir / "errors.jsonl").write_text(json.dumps({"error": {"schema_version": "mn.error.v1"}}) + "\n")
+            (run_dir / "errors.001.jsonl").write_text(json.dumps({"error": {"schema_version": "mn.error.v1"}}) + "\n")
             (run_dir / "report.md").write_text("# Draft Review Packet\n")
             (run_dir / "packet.pdf").write_bytes(b"%PDF-1.4\n% test pdf\n")
 
@@ -898,6 +900,8 @@ class TestAPI(unittest.TestCase):
         artifact_ids = {artifact["artifact_id"] for artifact in listing.json()["artifacts"]}
         self.assertIn("result_json", artifact_ids)
         self.assertIn("final_artifact_json", artifact_ids)
+        self.assertIn("errors_jsonl", artifact_ids)
+        self.assertIn("errors_jsonl_001", artifact_ids)
         self.assertEqual(markdown.status_code, 200)
         self.assertIn("# Draft Review Packet", markdown.text)
         self.assertEqual(pdf.status_code, 200)
@@ -1433,6 +1437,39 @@ class TestAPI(unittest.TestCase):
         self.assertIn("result_json", artifact_ids)
         self.assertIn("final_artifact_json", artifact_ids)
         self.assertTrue(any(artifact["content_type"] == "application/pdf" for artifact in body["artifacts"]))
+
+    @patch('mn_api.state.client')
+    def test_get_job_compact_upgrades_legacy_failure_reason(self, mock_client):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs_root = Path(tmp)
+            run_dir = runs_root / "failed-run"
+            run_dir.mkdir()
+            (run_dir / "job.json").write_text(json.dumps({
+                "job_id": "job-failed",
+                "run_id": "failed-run",
+                "graph_id": "failure_graph",
+                "status": "failed",
+            }))
+            (run_dir / "errors.jsonl").write_text("")
+            mock_client.get_job.side_effect = AssertionError("default job details should not call full gRPC get_job")
+            mock_client.stream_events.return_value = [
+                json.dumps({
+                    "type": "job_failed",
+                    "timestamp": "2026-06-04T12:00:00Z",
+                    "reason": "workflow step heartbeat deadline exceeded",
+                    "payload": {"run_id": "failed-run", "step_id": "prepare"},
+                })
+            ]
+
+            with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
+                response = self.client.get("/api/v1/jobs/job-failed")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["failure"]["schema_version"], "mn.error.v1")
+        self.assertEqual(body["failure"]["desc"], "Workflow step heartbeat deadline exceeded")
+        self.assertEqual(body["summary"]["failure"]["code"], "runtime.failure")
+        self.assertEqual(body["job"]["reason"] if "reason" in body["job"] else body["failure"]["desc"], "Workflow step heartbeat deadline exceeded")
 
     @patch('mn_api.state.client')
     def test_get_job_compact_does_not_treat_agent_completion_as_job_completion(self, mock_client):

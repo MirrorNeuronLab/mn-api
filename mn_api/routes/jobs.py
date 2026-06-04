@@ -8,6 +8,7 @@ import threading
 import time
 import urllib.parse
 import hashlib
+import gzip
 from collections import Counter, deque
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,8 @@ from mn_sdk import (
     run_input_validation,
     validate_input_validation_spec_issues,
     validate_requirements_spec_issues,
+    failure_from_event,
+    normalize_error,
     workflow_progress_snapshot,
 )
 
@@ -62,6 +65,7 @@ _ARTIFACT_CONTENT_TYPES = {
     ".pdf": "application/pdf",
     ".txt": "text/plain; charset=utf-8",
     ".log": "text/plain; charset=utf-8",
+    ".gz": "application/gzip",
 }
 
 
@@ -257,7 +261,8 @@ def _read_jsonl_file(path: Path, *, limit: int = 5000) -> list[dict[str, Any]]:
         return []
     events: deque[dict[str, Any]] = deque(maxlen=limit)
     try:
-        with path.open("r", encoding="utf-8") as handle:
+        opener = gzip.open if path.suffix == ".gz" else Path.open
+        with opener(path, "rt", encoding="utf-8") as handle:
             for line in handle:
                 stripped = line.strip()
                 if not stripped:
@@ -271,6 +276,23 @@ def _read_jsonl_file(path: Path, *, limit: int = 5000) -> list[dict[str, Any]]:
     except OSError:
         return []
     return list(events)
+
+
+def _stream_jsonl_files(run_dir: Path, file_name: str) -> list[Path]:
+    paths: list[Path] = []
+    index_path = run_dir / f"{Path(file_name).stem}.index.json"
+    if index_path.exists():
+        index = _read_json_file(index_path)
+        for segment in index.get("segments") or []:
+            if isinstance(segment, dict) and segment.get("path"):
+                segment_path = run_dir / str(segment["path"])
+                if not segment_path.exists() and segment_path.suffix != ".gz":
+                    compressed = segment_path.with_suffix(segment_path.suffix + ".gz")
+                    if compressed.exists():
+                        segment_path = compressed
+                paths.append(segment_path)
+    paths.append(run_dir / file_name)
+    return paths
 
 
 def _run_dir_from_id(run_id: str | None) -> Path | None:
@@ -403,12 +425,23 @@ def _compact_value(value: Any, depth: int = 0) -> Any:
 
 
 def _compact_event(event: dict[str, Any]) -> dict[str, Any]:
+    failure = failure_from_event(event)
     compact = {
         "type": event.get("type"),
         "timestamp": event.get("timestamp") or event.get("ts"),
         "agent_id": event.get("agent_id") or event.get("node_id"),
         "status": event.get("status"),
     }
+    if failure:
+        compact["failure"] = {
+            "schema_version": failure.get("schema_version"),
+            "code": failure.get("code"),
+            "desc": failure.get("desc"),
+            "severity": failure.get("severity"),
+            "details": _compact_value(failure.get("details")),
+            "remediation": failure.get("remediation"),
+            "links": failure.get("links"),
+        }
     for key in ("message", "payload", "sandbox", "error", "reason"):
         if key in event:
             compact[key] = _compact_value(event[key])
@@ -434,6 +467,46 @@ def _infer_status(events: list[dict[str, Any]], stored_job: dict[str, Any], run_
         if "started" in event_type or "running" in event_type:
             return "running"
     return "unknown"
+
+
+def _failure_from_sources(
+    events: list[dict[str, Any]],
+    stored_job: dict[str, Any],
+    run_record: dict[str, Any],
+) -> dict[str, Any] | None:
+    for event in reversed(events):
+        failure = failure_from_event(event)
+        if failure:
+            return failure
+
+    for mapping in (
+        stored_job,
+        stored_job.get("job") if isinstance(stored_job.get("job"), dict) else {},
+        run_record,
+    ):
+        failure = _failure_from_mapping(mapping)
+        if failure:
+            return failure
+    return None
+
+
+def _failure_from_mapping(mapping: dict[str, Any]) -> dict[str, Any] | None:
+    if not isinstance(mapping, dict):
+        return None
+    for key in ("failure", "error"):
+        value = mapping.get(key)
+        if value not in (None, ""):
+            return normalize_error(value, context={"code": "runtime.job.failed"})
+    result = mapping.get("result")
+    if isinstance(result, dict):
+        for key in ("failure", "error", "reason", "status_reason"):
+            value = result.get(key)
+            if value not in (None, ""):
+                return normalize_error(value, context={"code": "runtime.job.failed"})
+    reason = _first_string(mapping.get("reason"), mapping.get("status_reason"))
+    if reason:
+        return normalize_error(reason, context={"code": "runtime.job.failed"})
+    return None
 
 
 def _is_job_completion_event(event_type: str) -> bool:
@@ -490,7 +563,12 @@ def _artifact_id(path: Path, run_dir: Path) -> str:
         "final_artifact.json": "final_artifact_json",
         "events.jsonl": "events_jsonl",
         "logs.jsonl": "logs_jsonl",
+        "errors.jsonl": "errors_jsonl",
+        "events.log": "events_log",
+        "errors.log": "errors_log",
+        "events.index.json": "events_index_json",
         "resources.jsonl": "resources_jsonl",
+        "errors.index.json": "errors_index_json",
         "human.jsonl": "human_events_jsonl",
         "job.json": "job_json",
         "run.json": "run_json",
@@ -499,8 +577,19 @@ def _artifact_id(path: Path, run_dir: Path) -> str:
     }
     if rel in known:
         return known[rel]
+    rotated_id = _rotated_artifact_id(rel)
+    if rotated_id:
+        return rotated_id
     normalized = re.sub(r"[^A-Za-z0-9]+", "_", rel).strip("_").lower()
     return normalized or "artifact"
+
+
+def _rotated_artifact_id(rel: str) -> str | None:
+    name = Path(rel).name
+    match = re.match(r"^(events|logs|errors)\.(\d{3})\.jsonl(?:\.gz)?$", name)
+    if not match:
+        return None
+    return f"{match.group(1)}_jsonl_{match.group(2)}"
 
 
 def _artifact_ref(run_id: str, path: Path, run_dir: Path) -> dict[str, Any]:
@@ -566,6 +655,7 @@ def _compact_job_detail(job_id: str) -> dict[str, Any]:
     status = _infer_status(events, stored_job, run_record)
     artifacts = _run_artifacts(run_id, run_dir)
     recent_events = [_compact_event(event) for event in events[-50:]]
+    failure = _failure_from_sources(events, stored_job, run_record)
     job = {
         "job_id": job_id,
         "run_id": run_id or None,
@@ -574,6 +664,8 @@ def _compact_job_detail(job_id: str) -> dict[str, Any]:
         "run_dir": str(run_dir) if run_dir else None,
         "artifacts": artifacts,
     }
+    if failure:
+        job["failure"] = failure
     summary = {
         "mode": "compact",
         "job_id": job_id,
@@ -585,11 +677,14 @@ def _compact_job_detail(job_id: str) -> dict[str, Any]:
         "artifact_count": len(artifacts),
         "full_detail_url": f"/api/v1/jobs/{urllib.parse.quote(job_id)}?include=full",
     }
+    if failure:
+        summary["failure"] = failure
     if stream_error:
         summary["event_stream_warning"] = stream_error
     return {
         "job": job,
         "summary": summary,
+        "failure": failure,
         "agents": _agent_summaries(stored_job, events),
         "recent_events": recent_events,
         "events": recent_events,
@@ -619,6 +714,10 @@ def _workflow_progress_snapshot_for_job(job_id: str) -> dict[str, Any]:
         job_id=job_id,
     )
     _apply_default_assigned_node(snapshot, details)
+    if not snapshot.get("failure"):
+        failure = _failure_from_sources(events, _job_from_details(details), _summary_from_details(details))
+        if failure:
+            snapshot["failure"] = failure
     if stream_error:
         snapshot["warning"] = stream_error
     return snapshot
@@ -728,7 +827,12 @@ def _run_dir_for_details(details: dict[str, Any], events: list[dict[str, Any]], 
 def _run_store_events(run_dir: Path | None, *, limit: int = 5000) -> list[dict[str, Any]]:
     if run_dir is None:
         return []
-    return _read_jsonl_file(run_dir / "events.jsonl", limit=limit)
+    records: list[dict[str, Any]] = []
+    for path in _stream_jsonl_files(run_dir, "events.jsonl"):
+        records.extend(_read_jsonl_file(path, limit=limit))
+        if limit is not None and limit >= 0 and len(records) > limit:
+            records = records[-limit:]
+    return records[-limit:] if limit is not None and limit >= 0 else records
 
 
 def _merge_events(*event_groups: list[dict[str, Any]], limit: int = 5000) -> list[dict[str, Any]]:
