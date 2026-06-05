@@ -348,7 +348,6 @@ def public_handshake_summary(handshake: dict[str, Any]) -> dict[str, Any]:
         "runtime_mode",
         "grpc_host",
         "grpc_port",
-        "dist_port",
         "cluster_nodes",
         "network_only",
     )

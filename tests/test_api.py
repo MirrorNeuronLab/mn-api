@@ -14,7 +14,7 @@ from mn_api import state
 from mn_api.main import app
 from mn_api.blueprints import parse_cli_field, scheduler_allocated_ports_from_jobs_payload
 from mn_api.routes.blueprints import runtime_blueprint_web_ui_reserved_ports, service_ports_from_payload
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import grpc
 
 
@@ -168,6 +168,48 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(model["nodes"], ["mirror_neuron@gpu-node"])
         self.assertEqual(model["owner_count"], 2)
         self.assertEqual(model["used_by"], ["invoice", "research"])
+        self.assertFalse(model["orphaned"])
+
+    @patch('mn_api.routes.models.assess_model_compatibility')
+    @patch('mn_api.routes.models.load_model_ownership')
+    @patch('mn_api.routes.models.state.client')
+    @patch('mn_api.routes.models.subprocess.run')
+    def test_models_route_reports_manual_installs_as_not_orphaned(self, mock_run, mock_client, mock_ownership, mock_compatibility):
+        mock_run.return_value = SimpleNamespace(
+            returncode=0,
+            stdout='{"Name":"ai/gemma4:E2B"}\n',
+            stderr="",
+        )
+        mock_client.get_system_summary.return_value = json.dumps({
+            "nodes": [{"name": "mirror_neuron@gpu-node", "self": True}]
+        })
+        mock_ownership.return_value = {
+            "version": 1,
+            "models": {
+                "ai/gemma4:E2B": {
+                    "model_id": "gemma4:e2b",
+                    "docker_model": "ai/gemma4:E2B",
+                    "provider": "docker_model_runner",
+                    "manual": True,
+                    "owners": {},
+                }
+            },
+        }
+        mock_compatibility.return_value = SimpleNamespace(to_dict=lambda: {
+            "status": "pass",
+            "ok": True,
+            "message": "ready",
+            "warnings": [],
+        })
+
+        response = self.client.get("/api/v1/models")
+
+        self.assertEqual(response.status_code, 200)
+        model = response.json()["models"][0]
+        self.assertTrue(model["installed"])
+        self.assertTrue(model["manual"])
+        self.assertEqual(model["owner_count"], 0)
+        self.assertEqual(model["used_by"], [])
         self.assertFalse(model["orphaned"])
 
     @patch('mn_api.routes.models.assess_model_compatibility')
@@ -734,6 +776,38 @@ class TestAPI(unittest.TestCase):
         mock_progress.assert_called_once_with("job-progress")
 
     @patch('mn_api.state.client')
+    def test_list_jobs_status_reconciliation_preserves_recovery_metadata(self, mock_client):
+        mock_client.list_jobs.return_value = json.dumps({
+            "data": [
+                {
+                    "job_id": "job-review",
+                    "status": "paused",
+                    "recovery_status": "paused_for_review",
+                    "recovery_requires_review": True,
+                    "recovery": {
+                        "status": "paused_for_review",
+                        "reason": "worker restart attempts exhausted",
+                        "can_resume": True,
+                    },
+                }
+            ]
+        })
+
+        with patch(
+            "mn_api.routes.jobs._workflow_progress_snapshot_for_job",
+            return_value={"job_id": "job-review", "status": "running"},
+        ):
+            response = self.client.get("/api/v1/jobs")
+
+        self.assertEqual(response.status_code, 200)
+        row = response.json()["data"][0]
+        self.assertEqual(row["status"], "running")
+        self.assertEqual(row["recovery_status"], "paused_for_review")
+        self.assertTrue(row["recovery_requires_review"])
+        self.assertEqual(row["recovery"]["reason"], "worker restart attempts exhausted")
+        self.assertTrue(row["recovery"]["can_resume"])
+
+    @patch('mn_api.state.client')
     def test_list_jobs_refreshes_active_rows_from_workflow_progress(self, mock_client):
         mock_client.list_jobs.return_value = json.dumps({
             "data": [{"job_id": "job-progress", "status": "running"}]
@@ -835,6 +909,64 @@ class TestAPI(unittest.TestCase):
         self.assertIn("node_info", remote_client.network_handshake.call_args.kwargs)
         mock_client.add_node.assert_called_once_with("mirror_neuron@10.0.0.42", token="join-token")
 
+    @patch('mn_api.routes.system.socket.gethostname', return_value="api-box")
+    @patch('mn_api.routes.system.detect_lan_ip', return_value="192.168.1.9")
+    @patch('mn_api.routes.system.Client')
+    @patch('mn_api.state.client')
+    def test_add_cluster_node_falls_back_when_default_grpc_port_unavailable(
+        self,
+        mock_client,
+        mock_remote_client_class,
+        _mock_detect_lan_ip,
+        _mock_gethostname,
+    ):
+        class UnavailableRpcError(grpc.RpcError):
+            def code(self):
+                return grpc.StatusCode.UNAVAILABLE
+
+        first_remote = SimpleNamespace(
+            network_handshake=Mock(side_effect=UnavailableRpcError())
+        )
+        second_remote = SimpleNamespace(
+            network_handshake=Mock(
+                return_value={
+                    "node_name": "mirror_neuron@10.0.0.42",
+                    "runtime_mode": "network_only",
+                    "grpc_host": "10.0.0.42",
+                    "grpc_port": 50051,
+                    "redis_url": "redis://:join-token@10.0.0.42:6379/0",
+                }
+            )
+        )
+        mock_remote_client_class.side_effect = [first_remote, second_remote]
+        mock_client.add_node.return_value = "connected"
+
+        response = self.client.post(
+            "/api/v1/system/cluster/nodes:add",
+            json={"host": "10.0.0.42", "token": "join-token"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["node_name"], "mirror_neuron@10.0.0.42")
+        self.assertEqual(body["status"], "connected")
+        self.assertNotIn("join-token", json.dumps(body))
+        self.assertEqual(
+            [call.kwargs["target"] for call in mock_remote_client_class.call_args_list],
+            ["10.0.0.42:55051", "10.0.0.42:50051"],
+        )
+        first_remote.network_handshake.assert_called_once()
+        second_remote.network_handshake.assert_called_once_with(
+            "join-token",
+            node_name="mirror_neuron@192.168.1.9",
+            node_info={
+                "node_name": "mirror_neuron@192.168.1.9",
+                "display_name": "api-box",
+                "hostname": "api-box",
+            },
+        )
+        mock_client.add_node.assert_called_once_with("mirror_neuron@10.0.0.42", token="join-token")
+
     @patch('mn_api.state.client')
     def test_remove_cluster_node_success(self, mock_client):
         mock_client.remove_node.return_value = "disconnected"
@@ -847,6 +979,32 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "disconnected")
         mock_client.remove_node.assert_called_once_with("mirror_neuron@10.0.0.42")
+
+    @patch('mn_api.routes.system.Client')
+    @patch('mn_api.state.client')
+    def test_add_cluster_node_rejects_invalid_host_before_handshake(self, mock_client, mock_remote_client_class):
+        response = self.client.post(
+            "/api/v1/system/cluster/nodes:add",
+            json={"host": "http://10.0.0.42", "token": "join-token"},
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["detail"], "Remote node host must be a host name or IP address.")
+        mock_remote_client_class.assert_not_called()
+        mock_client.add_node.assert_not_called()
+
+    @patch('mn_api.routes.system.Client')
+    @patch('mn_api.state.client')
+    def test_add_cluster_node_rejects_invalid_token_before_handshake(self, mock_client, mock_remote_client_class):
+        response = self.client.post(
+            "/api/v1/system/cluster/nodes:add",
+            json={"host": "10.0.0.42", "token": "bad token"},
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["detail"], "Remote node token is required.")
+        mock_remote_client_class.assert_not_called()
+        mock_client.add_node.assert_not_called()
 
     @patch('mn_api.state.client')
     def test_submit_job_success(self, mock_client):
@@ -1295,6 +1453,17 @@ class TestAPI(unittest.TestCase):
         response = self.client.post("/api/v1/jobs/test_job_123/cancel")
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.json(), {"error": "job test_job_123 was not found"})
+
+    @patch('mn_api.routes.jobs.cleanup_blueprint_processes_for_job')
+    @patch('mn_api.state.client')
+    def test_cancel_job_runs_blueprint_cleanup_on_backend_error(self, mock_client, mock_cleanup):
+        mock_client.cancel_job.side_effect = Exception("backend unavailable")
+
+        response = self.client.post("/api/v1/jobs/test_job_123/cancel")
+
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.json(), {"error": "backend unavailable"})
+        mock_cleanup.assert_called_once_with("test_job_123")
 
     @patch('mn_api.state.client')
     def test_cancel_job_generic_error(self, mock_client):
@@ -1879,6 +2048,33 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(body["summary"]["status"], "running")
 
     @patch('mn_api.state.client')
+    def test_get_job_compact_infers_lifecycle_status_from_bare_runtime_events(self, mock_client):
+        mock_client.get_job.side_effect = AssertionError("default job details should not call full gRPC get_job")
+        cases = {
+            "job_pausing": "pausing",
+            "job_paused": "paused",
+            "job_resumed": "running",
+            "job_cancelled": "cancelled",
+        }
+
+        for event_type, expected_status in cases.items():
+            with self.subTest(event_type=event_type):
+                mock_client.stream_events.return_value = [
+                    json.dumps({
+                        "type": event_type,
+                        "timestamp": "2026-06-04T12:00:00Z",
+                        "payload": {"run_id": "lifecycle-run"},
+                    })
+                ]
+
+                response = self.client.get(f"/api/v1/jobs/{event_type}-job")
+
+                self.assertEqual(response.status_code, 200)
+                body = response.json()
+                self.assertEqual(body["job"]["status"], expected_status)
+                self.assertEqual(body["summary"]["status"], expected_status)
+
+    @patch('mn_api.state.client')
     def test_get_job_include_full_keeps_debug_grpc_path(self, mock_client):
         mock_client.get_job.return_value = json.dumps({
             "job": {"job_id": "job-full", "graph_id": "graph-1", "status": "running"}
@@ -2082,6 +2278,17 @@ class TestAPI(unittest.TestCase):
         response = self.client.get("/api/v1/jobs/test_job_123/dead-letters")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["data"][0]["reason"], "queue full")
+
+    @patch('mn_api.state.client')
+    def test_replay_job_dead_letter_reports_not_exposed_without_backend_call(self, mock_client):
+        response = self.client.post("/api/v1/jobs/test_job_123/dead-letters/2/replay")
+
+        self.assertEqual(response.status_code, 501)
+        body = response.json()["detail"]
+        self.assertEqual(body["error"], "dead_letter_replay_not_exposed")
+        self.assertEqual(body["job_id"], "test_job_123")
+        self.assertEqual(body["index"], 2)
+        mock_client.stream_events.assert_not_called()
 
     @patch('mn_api.state.client')
     def test_metrics_success(self, mock_client):

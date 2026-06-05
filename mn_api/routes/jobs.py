@@ -464,9 +464,18 @@ def _infer_status(events: list[dict[str, Any]], stored_job: dict[str, Any], run_
         return status
     for event in reversed(events):
         event_type = str(event.get("type") or "").lower()
+        normalized_event_type = re.sub(r"[^a-z0-9]+", "_", event_type).strip("_")
         event_status = _first_string(event.get("status"), _extract_nested_string(event.get("payload"), "status"))
         if event_status and _is_job_status_event(event_type):
             return event_status
+        lifecycle_status = {
+            "job_pausing": "pausing",
+            "job_paused": "paused",
+            "job_resumed": "running",
+            "job_cancelled": "cancelled",
+        }.get(normalized_event_type)
+        if lifecycle_status:
+            return lifecycle_status
         if "failed" in event_type or "error" in event_type:
             return "failed"
         if "cancel" in event_type:

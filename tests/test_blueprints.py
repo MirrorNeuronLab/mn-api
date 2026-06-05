@@ -192,6 +192,41 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertIn("2048", command)
         mock_record.assert_called_once()
 
+    @patch("mn_api.blueprints.record_model_owner")
+    @patch("mn_api.blueprints.load_model_ownership")
+    @patch("mn_api.blueprints.docker_model_installed")
+    @patch("mn_api.blueprints.subprocess.run")
+    def test_install_blueprint_runtime_models_failure_does_not_record_owner(self, mock_run, mock_installed, mock_ledger, mock_record):
+        mock_run.return_value = SimpleNamespace(returncode=1, stdout="", stderr="pull failed")
+        mock_installed.return_value = False
+        mock_ledger.return_value = {"version": 1, "models": {}}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            bundle = repo / "worker_one"
+            bundle.mkdir()
+            (bundle / "manifest.json").write_text(json.dumps({
+                "metadata": {"blueprint_id": "worker_one"},
+                "nodes": [],
+                "edges": [],
+                "runtime": {
+                    "models": {
+                        "primary": {
+                            "provider": "docker_model_runner",
+                            "model": "gemma4:e2b",
+                        }
+                    }
+                },
+            }))
+
+            summary = install_blueprint_runtime_models(repo.resolve(), {"id": "worker_one", "path": "worker_one"})
+
+        self.assertFalse(summary["ok"])
+        self.assertEqual(summary["models"][0]["status"], "failed")
+        self.assertEqual(summary["models"][0]["error"], "pull failed")
+        self.assertEqual(summary["errors"], ["pull failed"])
+        self.assertIn("install", mock_run.call_args.args[0])
+        mock_record.assert_not_called()
+
     def test_catalog_loads_category_facets_and_filters_by_slug_or_name(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
