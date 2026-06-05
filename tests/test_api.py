@@ -128,6 +128,51 @@ class TestAPI(unittest.TestCase):
     @patch('mn_api.routes.models.assess_model_compatibility')
     @patch('mn_api.routes.models.load_model_ownership')
     @patch('mn_api.routes.models.state.client')
+    @patch('mn_api.routes.models.subprocess.run')
+    def test_models_route_includes_persisted_ownership_metadata(self, mock_run, mock_client, mock_ownership, mock_compatibility):
+        mock_run.return_value = SimpleNamespace(
+            returncode=0,
+            stdout='{"Name":"ai/gemma4:E2B"}\n',
+            stderr="",
+        )
+        mock_client.get_system_summary.return_value = json.dumps({
+            "nodes": [{"name": "mirror_neuron@gpu-node", "self": True}]
+        })
+        mock_ownership.return_value = {
+            "version": 1,
+            "models": {
+                "ai/gemma4:E2B": {
+                    "model_id": "gemma4:e2b",
+                    "docker_model": "ai/gemma4:E2B",
+                    "provider": "docker_model_runner",
+                    "manual": False,
+                    "owners": {
+                        "invoice": {"blueprint_id": "invoice"},
+                        "research": {"blueprint_id": "research"},
+                    },
+                }
+            },
+        }
+        mock_compatibility.return_value = SimpleNamespace(to_dict=lambda: {
+            "status": "pass",
+            "ok": True,
+            "message": "ready",
+            "warnings": [],
+        })
+
+        response = self.client.get("/api/v1/models")
+
+        self.assertEqual(response.status_code, 200)
+        model = response.json()["models"][0]
+        self.assertEqual(model["node"], "mirror_neuron@gpu-node")
+        self.assertEqual(model["nodes"], ["mirror_neuron@gpu-node"])
+        self.assertEqual(model["owner_count"], 2)
+        self.assertEqual(model["used_by"], ["invoice", "research"])
+        self.assertFalse(model["orphaned"])
+
+    @patch('mn_api.routes.models.assess_model_compatibility')
+    @patch('mn_api.routes.models.load_model_ownership')
+    @patch('mn_api.routes.models.state.client')
     @patch('mn_api.routes.models.dmr_api_list_models')
     @patch('mn_api.routes.models.subprocess.run')
     def test_models_route_uses_dmr_api_when_docker_model_cli_is_missing(self, mock_run, mock_api_list, mock_client, mock_ownership, mock_compatibility):
@@ -2252,6 +2297,7 @@ class TestAPI(unittest.TestCase):
         mock_client.submit_job.return_value = "job-local-config"
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
+            runs_root = (repo / "runs").resolve()
             self._write_blueprint_repo(repo)
             (repo / "worker_one" / "manifest.json").write_text(json.dumps({
                 "graph_id": "worker_one_graph",
@@ -2271,10 +2317,11 @@ class TestAPI(unittest.TestCase):
             }))
             original = self._set_blueprint_config(repo)
             try:
-                response = self.client.post(
-                    "/api/v1/blueprints/worker_one/runs",
-                    json={"run_id": "run-local-config"},
-                )
+                with patch.dict('os.environ', {"MN_RUNS_ROOT": str(runs_root)}):
+                    response = self.client.post(
+                        "/api/v1/blueprints/worker_one/runs",
+                        json={"run_id": "run-local-config"},
+                    )
             finally:
                 self._restore_config(original)
 
@@ -2644,13 +2691,15 @@ class TestAPI(unittest.TestCase):
         mock_client.submit_job.return_value = "job-with-model"
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
+            runs_root = (repo / "runs").resolve()
             self._write_blueprint_repo(repo)
             original = self._set_blueprint_config(repo)
             try:
-                response = self.client.post(
-                    "/api/v1/blueprints/worker_one/runs",
-                    json={"run_id": "run-with-auto-model"},
-                )
+                with patch.dict('os.environ', {"MN_RUNS_ROOT": str(runs_root)}):
+                    response = self.client.post(
+                        "/api/v1/blueprints/worker_one/runs",
+                        json={"run_id": "run-with-auto-model"},
+                    )
             finally:
                 self._restore_config(original)
 
