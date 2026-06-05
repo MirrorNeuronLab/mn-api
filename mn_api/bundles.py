@@ -42,7 +42,7 @@ async def save_uploaded_bundle(bundle: UploadFile, upload_root: Path) -> Dict[st
 
     return {
         "bundle_path": str(bundle_root),
-        "manifest": json.loads(manifest_path.read_text()),
+        "manifest": json.loads(manifest_path.read_text(encoding="utf-8")),
     }
 
 
@@ -62,7 +62,7 @@ def load_uploaded_bundle(bundle_path: str, upload_root: Path) -> tuple[str, Dict
         if path.is_file():
             payloads[path.relative_to(payloads_path).as_posix()] = path.read_bytes()
 
-    return manifest_path.read_text(), payloads
+    return manifest_path.read_text(encoding="utf-8"), payloads
 
 
 def safe_extract_path(root: Path, member_name: str) -> Path:

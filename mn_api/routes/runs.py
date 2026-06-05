@@ -298,20 +298,6 @@ def get_run_ui(run_id: str, limit: int = Query(200, ge=0, le=1000), _auth=Depend
     }
 
 
-def _service_ui_fallback(run_id: str, run_dir: Path) -> dict[str, Any]:
-    service = _stored_web_ui_service(run_id, run_dir) or _registered_web_ui_service(run_id, run_dir)
-    if not service:
-        return {}
-    return {"ui": _ui_from_service(service, run_id), "web_ui": _web_ui_from_service(service, run_id, run_dir)}
-
-
-def _service_web_ui_fallback(run_id: str, run_dir: Path) -> dict[str, Any]:
-    service = _stored_web_ui_service(run_id, run_dir) or _registered_web_ui_service(run_id, run_dir)
-    if not service:
-        return {}
-    return _web_ui_from_service(service, run_id, run_dir)
-
-
 def _registered_web_ui_service(run_id: str, run_dir: Path) -> dict[str, Any]:
     job = _read_json_file(run_dir / "job.json")
     job_id = job.get("job_id") if isinstance(job.get("job_id"), str) else None
