@@ -506,7 +506,7 @@ class TestBlueprintServices(unittest.TestCase):
             "http://localhost:61001",
         )
         self.assertIn(
-            ".mn_runtime_web_ui/src/mn_blueprint_support/gradio_dashboard.py",
+            "mn_runtime_web_ui/src/mn_blueprint_support/gradio_dashboard.py",
             payload_bytes,
         )
 

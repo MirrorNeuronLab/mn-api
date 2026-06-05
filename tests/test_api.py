@@ -581,6 +581,8 @@ class TestAPI(unittest.TestCase):
                 os.environ,
                 {
                     "HOME": tmp,
+                    "MN_HOME": "",
+                    "MIRROR_NEURON_HOME": "",
                     "MN_GRPC_AUTH_TOKEN": "",
                     "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN": "",
                 },
