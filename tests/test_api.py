@@ -2102,6 +2102,25 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(resume_response.status_code, 200)
         self.assertEqual(resume_response.json(), {"status": "running", "job_id": "test_job_123"})
 
+    @patch('mn_api.state.client')
+    def test_pause_and_resume_job_grpc_errors(self, mock_client):
+        class MockRpcError(Exception):
+            def __init__(self, detail):
+                self.detail = detail
+
+            def details(self):
+                return self.detail
+
+        mock_client.pause_job.side_effect = MockRpcError("job test_job_123 cannot be paused")
+        pause_response = self.client.post("/api/v1/jobs/test_job_123/pause")
+        self.assertEqual(pause_response.status_code, 500)
+        self.assertEqual(pause_response.json(), {"error": "job test_job_123 cannot be paused"})
+
+        mock_client.resume_job.side_effect = MockRpcError("job test_job_123 cannot be resumed")
+        resume_response = self.client.post("/api/v1/jobs/test_job_123/resume")
+        self.assertEqual(resume_response.status_code, 500)
+        self.assertEqual(resume_response.json(), {"error": "job test_job_123 cannot be resumed"})
+
     def test_blueprint_list_detail_and_install_success(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
