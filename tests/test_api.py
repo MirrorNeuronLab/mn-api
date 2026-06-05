@@ -215,6 +215,53 @@ class TestAPI(unittest.TestCase):
     @patch('mn_api.routes.models.assess_model_compatibility')
     @patch('mn_api.routes.models.load_model_ownership')
     @patch('mn_api.routes.models.state.client')
+    @patch('mn_api.routes.models.subprocess.run')
+    def test_models_route_includes_external_installed_model_from_ownership(self, mock_run, mock_client, mock_ownership, mock_compatibility):
+        mock_run.return_value = SimpleNamespace(
+            returncode=0,
+            stdout='{"Name":"custom/local:latest"}\n',
+            stderr="",
+        )
+        mock_client.get_system_summary.return_value = json.dumps({
+            "nodes": [{"name": "mirror_neuron@local", "self": True}]
+        })
+        mock_ownership.return_value = {
+            "version": 1,
+            "models": {
+                "custom/local:latest": {
+                    "model_id": "custom-local",
+                    "docker_model": "custom/local:latest",
+                    "provider": "docker_model_runner",
+                    "backend": "llama.cpp",
+                    "manual": True,
+                    "owners": {},
+                }
+            },
+        }
+        mock_compatibility.return_value = SimpleNamespace(to_dict=lambda: {
+            "status": "unknown",
+            "ok": False,
+            "message": "external model",
+            "warnings": [],
+        })
+
+        response = self.client.get("/api/v1/models")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["runner_available"])
+        model = body["models"][0]
+        self.assertEqual(model["id"], "custom-local")
+        self.assertEqual(model["docker_model"], "custom/local:latest")
+        self.assertTrue(model["installed"])
+        self.assertTrue(model["manual"])
+        self.assertEqual(model["node"], "mirror_neuron@local")
+        self.assertEqual(model["nodes"], ["mirror_neuron@local"])
+        self.assertFalse(model["orphaned"])
+
+    @patch('mn_api.routes.models.assess_model_compatibility')
+    @patch('mn_api.routes.models.load_model_ownership')
+    @patch('mn_api.routes.models.state.client')
     @patch('mn_api.routes.models.dmr_api_list_models')
     @patch('mn_api.routes.models.subprocess.run')
     def test_models_route_uses_dmr_api_when_docker_model_cli_is_missing(self, mock_run, mock_api_list, mock_client, mock_ownership, mock_compatibility):
@@ -610,10 +657,23 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(job_record["web_ui_service"]["browser_video_source"], "http://127.0.0.1:8889/video-watch/")
 
     def test_config_uses_grpc_admin_token(self):
-        with patch.dict(os.environ, {"MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN": "admin-secret"}, clear=False):
+        with patch.dict(os.environ, {"MN_GRPC_ADMIN_TOKEN": "admin-secret"}, clear=False):
             config = ApiConfig.from_env()
 
         self.assertEqual(config.grpc_admin_token, "admin-secret")
+
+    def test_config_uses_legacy_grpc_admin_token(self):
+        with patch.dict(
+            os.environ,
+            {
+                "MN_GRPC_ADMIN_TOKEN": "",
+                "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN": "legacy-admin-secret",
+            },
+            clear=False,
+        ):
+            config = ApiConfig.from_env()
+
+        self.assertEqual(config.grpc_admin_token, "legacy-admin-secret")
 
     def test_config_uses_dev_local_blueprint_repo_only_in_dev(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -671,6 +731,7 @@ class TestAPI(unittest.TestCase):
                     "MN_HOME": "",
                     "MIRROR_NEURON_HOME": "",
                     "MN_GRPC_AUTH_TOKEN": "",
+                    "MN_GRPC_ADMIN_TOKEN": "",
                     "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN": "",
                 },
                 clear=False,
@@ -692,7 +753,7 @@ class TestAPI(unittest.TestCase):
                         "MN_GRPC_PORT=55111",
                         "MN_CORE_GRPC_TARGET=127.0.0.1:55111",
                         "MN_GRPC_AUTH_TOKEN=auth-from-state",
-                        "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN=admin-from-state",
+                        "MN_GRPC_ADMIN_TOKEN=admin-from-state",
                     ]
                 )
                 + "\n"
@@ -957,6 +1018,48 @@ class TestAPI(unittest.TestCase):
         )
         first_remote.network_handshake.assert_called_once()
         second_remote.network_handshake.assert_called_once_with(
+            "join-token",
+            node_name="mirror_neuron@192.168.1.9",
+            node_info={
+                "node_name": "mirror_neuron@192.168.1.9",
+                "display_name": "api-box",
+                "hostname": "api-box",
+            },
+        )
+        mock_client.add_node.assert_called_once_with("mirror_neuron@10.0.0.42", token="join-token")
+
+    @patch('mn_api.routes.system.socket.gethostname', return_value="api-box")
+    @patch('mn_api.routes.system.detect_lan_ip', return_value="192.168.1.9")
+    @patch('mn_api.routes.system.Client')
+    @patch('mn_api.state.client')
+    def test_add_cluster_node_uses_explicit_grpc_port_without_fallback(
+        self,
+        mock_client,
+        mock_remote_client_class,
+        _mock_detect_lan_ip,
+        _mock_gethostname,
+    ):
+        remote_client = mock_remote_client_class.return_value
+        remote_client.network_handshake.return_value = {
+            "node_name": "mirror_neuron@10.0.0.42",
+            "runtime_mode": "network_only",
+            "grpc_host": "10.0.0.42",
+            "grpc_port": 56051,
+            "redis_url": "redis://:join-token@10.0.0.42:6379/0",
+        }
+        mock_client.add_node.return_value = "connected"
+
+        response = self.client.post(
+            "/api/v1/system/cluster/nodes:add",
+            json={"host": "10.0.0.42", "token": "join-token", "grpc_port": 56051},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "connected")
+        self.assertNotIn("join-token", json.dumps(body))
+        mock_remote_client_class.assert_called_once_with(target="10.0.0.42:56051", auth_token="", timeout=10)
+        remote_client.network_handshake.assert_called_once_with(
             "join-token",
             node_name="mirror_neuron@192.168.1.9",
             node_info={

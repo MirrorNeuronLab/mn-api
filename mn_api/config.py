@@ -67,10 +67,11 @@ class ApiConfig:
                 runtime_env=runtime_env,
             ),
             grpc_admin_token=_token_from_env_or_file(
-                "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN",
+                "MN_GRPC_ADMIN_TOKEN",
                 _mn_home() / "grpc_admin.token",
                 legacy_path=Path.home() / ".mirror_neuron" / "grpc_admin.token",
                 runtime_env=runtime_env,
+                aliases=("MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN",),
             ),
             api_token=os.getenv("MN_API_TOKEN", ""),
             request_size_limit_bytes=_int(
@@ -176,13 +177,16 @@ def _token_from_env_or_file(
     *,
     legacy_path: Path | None = None,
     runtime_env: dict[str, str] | None = None,
+    aliases: tuple[str, ...] = (),
 ) -> str:
-    token = os.getenv(name)
-    if token:
-        return token
-    token = (runtime_env or {}).get(name, "")
-    if token:
-        return token
+    for env_name in (name, *aliases):
+        token = os.getenv(env_name)
+        if token:
+            return token
+    for env_name in (name, *aliases):
+        token = (runtime_env or {}).get(env_name, "")
+        if token:
+            return token
 
     for token_path in (path, legacy_path):
         if token_path is None:
