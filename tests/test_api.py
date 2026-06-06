@@ -919,7 +919,10 @@ class TestAPI(unittest.TestCase):
                 {
                     "name": "mn1",
                     "cpu_cores": 8,
+                    "cpu_model": "AMD Ryzen AI Max+ 395",
                     "gpu_count": 2,
+                    "gpu_model": "NVIDIA RTX 4090",
+                    "gpu_models": ["NVIDIA RTX 4090", "NVIDIA RTX 6000 Ada"],
                     "gpu_memory_total_mb": 48_000,
                     "gpu_memory_free_mb": 32_000,
                     "memory_gb": 16.0,
@@ -938,6 +941,12 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.json()["combined"]["memory_available_gb"], 0.0)
         self.assertEqual(response.json()["combined"]["gpu_memory_total_gb"], 46.88)
         self.assertEqual(response.json()["nodes"][0]["name"], "mn1")
+        self.assertEqual(response.json()["nodes"][0]["cpu_model"], "AMD Ryzen AI Max+ 395")
+        self.assertEqual(response.json()["nodes"][0]["gpu_model"], "NVIDIA RTX 4090")
+        self.assertEqual(
+            response.json()["nodes"][0]["gpu_models"],
+            ["NVIDIA RTX 4090", "NVIDIA RTX 6000 Ada"],
+        )
 
     @patch('mn_api.state.client')
     def test_set_resource_success(self, mock_client):
