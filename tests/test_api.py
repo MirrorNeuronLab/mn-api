@@ -905,6 +905,8 @@ class TestAPI(unittest.TestCase):
         response = self.client.get("/api/v1/resource")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["totals"]["cpu_cores"], 8)
+        self.assertEqual(response.json()["totals"]["memory_total_gb"], 0.0)
+        self.assertEqual(response.json()["totals"]["gpu_memory_total_gb"], 0.0)
         self.assertEqual(response.json()["combined"]["cpu_cores"], 8)
         mock_client.get_resource.assert_called_once()
 
@@ -914,7 +916,14 @@ class TestAPI(unittest.TestCase):
             "mode": "cluster",
             "node_count": 2,
             "nodes": [
-                {"name": "mn1", "cpu_cores": 8, "gpu_count": 2, "memory_gb": 16.0},
+                {
+                    "name": "mn1",
+                    "cpu_cores": 8,
+                    "gpu_count": 2,
+                    "gpu_memory_total_mb": 48_000,
+                    "gpu_memory_free_mb": 32_000,
+                    "memory_gb": 16.0,
+                },
                 {"name": "mn2", "cpu_cores": 4, "gpu_count": 0, "memory_gb": 8.0},
             ],
         })
@@ -925,17 +934,31 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.json()["combined"]["cpu_cores"], 12)
         self.assertEqual(response.json()["combined"]["gpu_count"], 2)
         self.assertEqual(response.json()["combined"]["memory_gb"], 24.0)
+        self.assertEqual(response.json()["combined"]["memory_total_gb"], 24.0)
+        self.assertEqual(response.json()["combined"]["memory_available_gb"], 0.0)
+        self.assertEqual(response.json()["combined"]["gpu_memory_total_gb"], 46.88)
         self.assertEqual(response.json()["nodes"][0]["name"], "mn1")
 
     @patch('mn_api.state.client')
     def test_set_resource_success(self, mock_client):
-        mock_client.set_resource.return_value = '{"limits": {"cpu": 50, "gpu": 75, "memory": 100}}'
+        mock_client.set_resource.return_value = json.dumps({
+            "limits": {"cpu": 50, "gpu": 75, "memory": 100},
+            "totals": {
+                "cpu_cores": 8,
+                "gpu_count": 1,
+                "gpu_memory_total_mb": 24_576,
+                "gpu_memory_free_mb": 20_480,
+                "memory_gb": 32.0,
+            },
+        })
         response = self.client.put(
             "/api/v1/resource",
             json={"cpu": 50, "gpu": 75, "memory": 100},
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["limits"]["gpu"], 75)
+        self.assertEqual(response.json()["totals"]["gpu_memory_total_gb"], 24.0)
+        self.assertEqual(response.json()["totals"]["memory_total_gb"], 32.0)
         mock_client.set_resource.assert_called_once_with({"cpu": 50, "gpu": 75, "memory": 100})
 
     @patch('mn_api.routes.system.Client')

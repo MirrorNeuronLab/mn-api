@@ -161,7 +161,13 @@ def counts(values):
 RESOURCE_TOTAL_KEYS = (
     "cpu_cores",
     "gpu_count",
+    "gpu_memory_total_mb",
+    "gpu_memory_free_mb",
+    "gpu_memory_total_gb",
+    "gpu_memory_free_gb",
     "memory_gb",
+    "memory_total_gb",
+    "memory_available_gb",
     "disk_gb",
     "disk_available_gb",
 )
@@ -169,17 +175,32 @@ INTEGER_RESOURCE_KEYS = {"cpu_cores", "gpu_count"}
 
 
 def ensure_combined_resource_totals(payload: Any) -> Any:
-    if not isinstance(payload, dict) or isinstance(payload.get("combined"), dict):
-        return payload
-
-    if isinstance(payload.get("totals"), dict):
-        combined = payload["totals"]
-    elif isinstance(payload.get("nodes"), list):
-        combined = combine_node_resources(payload["nodes"])
-    else:
+    if not isinstance(payload, dict):
         return payload
 
     enriched = dict(payload)
+
+    if isinstance(enriched.get("nodes"), list):
+        enriched["nodes"] = [
+            normalize_resource_totals(node) if isinstance(node, dict) else node
+            for node in enriched["nodes"]
+        ]
+
+    if isinstance(enriched.get("totals"), dict):
+        enriched["totals"] = normalize_resource_totals(enriched["totals"])
+
+    if isinstance(enriched.get("usable"), dict):
+        enriched["usable"] = normalize_resource_totals(enriched["usable"])
+
+    if isinstance(enriched.get("combined"), dict):
+        combined = enriched["combined"]
+    elif isinstance(enriched.get("totals"), dict):
+        combined = enriched["totals"]
+    elif isinstance(enriched.get("nodes"), list):
+        combined = combine_node_resources(enriched["nodes"])
+    else:
+        return enriched
+
     enriched["combined"] = normalize_resource_totals(combined)
     return enriched
 
@@ -193,6 +214,7 @@ def combine_node_resources(nodes: Any) -> dict[str, Any]:
     for node in nodes:
         if not isinstance(node, dict):
             continue
+        node = normalize_resource_totals(node)
         for key in RESOURCE_TOTAL_KEYS:
             combined[key] += resource_number(node.get(key))
 
@@ -201,8 +223,29 @@ def combine_node_resources(nodes: Any) -> dict[str, Any]:
 
 def normalize_resource_totals(totals: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(totals)
+
+    if "memory_total_gb" not in normalized and "memory_gb" in normalized:
+        normalized["memory_total_gb"] = normalized["memory_gb"]
+    if "memory_gb" not in normalized and "memory_total_gb" in normalized:
+        normalized["memory_gb"] = normalized["memory_total_gb"]
+    if "memory_available_gb" not in normalized:
+        normalized["memory_available_gb"] = 0.0
+
+    if "gpu_memory_total_gb" not in normalized and "gpu_memory_total_mb" in normalized:
+        normalized["gpu_memory_total_gb"] = resource_number(normalized["gpu_memory_total_mb"]) / 1024
+    if "gpu_memory_free_gb" not in normalized and "gpu_memory_free_mb" in normalized:
+        normalized["gpu_memory_free_gb"] = resource_number(normalized["gpu_memory_free_mb"]) / 1024
+    if "gpu_memory_total_mb" not in normalized and "gpu_memory_total_gb" in normalized:
+        normalized["gpu_memory_total_mb"] = resource_number(normalized["gpu_memory_total_gb"]) * 1024
+    if "gpu_memory_free_mb" not in normalized and "gpu_memory_free_gb" in normalized:
+        normalized["gpu_memory_free_mb"] = resource_number(normalized["gpu_memory_free_gb"]) * 1024
+
     for key in RESOURCE_TOTAL_KEYS:
         if key not in totals:
+            if key not in normalized:
+                normalized[key] = 0 if key in INTEGER_RESOURCE_KEYS else 0.0
+            value = resource_number(normalized.get(key))
+            normalized[key] = int(value) if key in INTEGER_RESOURCE_KEYS else round(value, 2)
             continue
         value = resource_number(totals.get(key))
         normalized[key] = int(value) if key in INTEGER_RESOURCE_KEYS else round(value, 2)
