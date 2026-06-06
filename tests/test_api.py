@@ -768,6 +768,71 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(config.grpc_auth_token, "auth-from-state")
         self.assertEqual(config.grpc_admin_token, "admin-from-state")
 
+    def test_state_recreates_client_when_grpc_admin_token_changes(self):
+        created = []
+
+        class FakeChannel:
+            def __init__(self):
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+        class FakeClient:
+            def __init__(self, target=None, timeout=None, auth_token=None, admin_token=None):
+                self.kwargs = {
+                    "target": target,
+                    "timeout": timeout,
+                    "auth_token": auth_token,
+                    "admin_token": admin_token,
+                }
+                self.channel = FakeChannel()
+                created.append(self)
+
+        original_config = state.config
+        original_client = state._client
+        original_refresh = state.refresh_config_from_env
+        try:
+            state._client = None
+            first = SimpleNamespace(
+                grpc_target="127.0.0.1:55051",
+                grpc_timeout_seconds=10.0,
+                grpc_auth_token="auth-token",
+                grpc_admin_token="admin-one",
+            )
+            second = SimpleNamespace(
+                grpc_target="127.0.0.1:55051",
+                grpc_timeout_seconds=10.0,
+                grpc_auth_token="auth-token",
+                grpc_admin_token="admin-two",
+            )
+            with patch("mn_api.state.Client", FakeClient):
+                state.config = first
+                refreshed_config = {"value": first}
+
+                def fake_refresh_config_from_env():
+                    refreshed = refreshed_config["value"]
+                    if (
+                        state._client is not None
+                        and state._grpc_client_settings(refreshed)
+                        != state._grpc_client_settings(state.config)
+                    ):
+                        state.close_client()
+                    state.config = refreshed
+                    return state.config
+
+                state.refresh_config_from_env = fake_refresh_config_from_env
+                self.assertEqual(state.get_client().kwargs["admin_token"], "admin-one")
+                refreshed_config["value"] = second
+                self.assertEqual(state.get_client().kwargs["admin_token"], "admin-two")
+
+            self.assertEqual(len(created), 2)
+            self.assertTrue(created[0].channel.closed)
+        finally:
+            state._client = original_client
+            state.config = original_config
+            state.refresh_config_from_env = original_refresh
+
     def test_auth_required_when_token_configured(self):
         original = state.config
         state.config = SimpleNamespace(api_token="secret", request_size_limit_bytes=1024 * 1024)
