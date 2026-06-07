@@ -741,6 +741,48 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(config.grpc_auth_token, "auth-from-file")
         self.assertEqual(config.grpc_admin_token, "admin-from-file")
 
+    def test_config_uses_local_grpc_token_files_before_stale_runtime_env(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            token_dir = Path(tmp) / ".mn"
+            token_dir.mkdir()
+            (token_dir / "docker-compose.env").write_text(
+                "MN_GRPC_AUTH_TOKEN=stale-auth-from-state\n"
+                "MN_GRPC_ADMIN_TOKEN=stale-admin-from-state\n"
+            )
+            (token_dir / "grpc_auth.token").write_text("auth-from-file\n")
+            (token_dir / "grpc_admin.token").write_text("admin-from-file\n")
+
+            with patch.dict(os.environ, {"HOME": tmp}, clear=True):
+                config = ApiConfig.from_env()
+
+        self.assertEqual(config.grpc_auth_token, "auth-from-file")
+        self.assertEqual(config.grpc_admin_token, "admin-from-file")
+
+    def test_config_uses_configured_grpc_token_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            token_dir = Path(tmp)
+            auth_file = token_dir / "auth.token"
+            admin_file = token_dir / "admin.token"
+            auth_file.write_text("auth-from-configured-file\n")
+            admin_file.write_text("admin-from-configured-file\n")
+
+            with patch.dict(
+                os.environ,
+                {
+                    "HOME": tmp,
+                    "MN_GRPC_AUTH_TOKEN_FILE": str(auth_file),
+                    "MN_GRPC_ADMIN_TOKEN_FILE": str(admin_file),
+                    "MN_GRPC_AUTH_TOKEN": "",
+                    "MN_GRPC_ADMIN_TOKEN": "",
+                    "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN": "",
+                },
+                clear=True,
+            ):
+                config = ApiConfig.from_env()
+
+        self.assertEqual(config.grpc_auth_token, "auth-from-configured-file")
+        self.assertEqual(config.grpc_admin_token, "admin-from-configured-file")
+
     def test_config_uses_persisted_runtime_grpc_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             state_dir = Path(tmp) / ".mn"

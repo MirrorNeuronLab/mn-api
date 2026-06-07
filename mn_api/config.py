@@ -183,21 +183,33 @@ def _token_from_env_or_file(
         token = os.getenv(env_name)
         if token:
             return token
+
+    configured_file = os.getenv(f"{name}_FILE", "").strip()
+    if configured_file:
+        token = _read_token_file(Path(configured_file).expanduser())
+        if token:
+            return token
+
+    for token_path in (path, legacy_path):
+        token = _read_token_file(token_path)
+        if token:
+            return token
+
     for env_name in (name, *aliases):
         token = (runtime_env or {}).get(env_name, "")
         if token:
             return token
 
-    for token_path in (path, legacy_path):
-        if token_path is None:
-            continue
-        try:
-            value = token_path.read_text(encoding="utf-8").strip()
-        except OSError:
-            continue
-        if value:
-            return value
     return ""
+
+
+def _read_token_file(path: Path | None) -> str:
+    if path is None:
+        return ""
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
 
 
 def auth_enabled(config: ApiConfig) -> bool:
