@@ -8,6 +8,7 @@ import threading
 import urllib.parse
 import hashlib
 import gzip
+import grpc
 from collections import Counter, deque
 from pathlib import Path
 from typing import Any
@@ -181,7 +182,22 @@ def cleanup_jobs(_auth=Depends(require_auth)):
         cleared_count = state.client.clear_jobs()
         return {"cleared_count": cleared_count}
     except Exception as exc:
+        if _is_clear_jobs_admin_token_error(exc):
+            state.close_client()
+            try:
+                cleared_count = state.client.clear_jobs()
+                return {"cleared_count": cleared_count}
+            except Exception as retry_exc:
+                return handle_grpc_error(retry_exc)
         return handle_grpc_error(exc)
+
+
+def _is_clear_jobs_admin_token_error(exc: Exception) -> bool:
+    if not isinstance(exc, grpc.RpcError):
+        return False
+    if exc.code() != grpc.StatusCode.PERMISSION_DENIED:
+        return False
+    return "MN_GRPC_ADMIN_TOKEN" in str(exc.details())
 
 
 @router.get("/jobs/{job_id}")

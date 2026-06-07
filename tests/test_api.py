@@ -957,6 +957,35 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.json(), {"cleared_count": 3})
         mock_client.clear_jobs.assert_called_once()
 
+    def test_cleanup_jobs_retries_after_admin_token_mismatch(self):
+        class PermissionDeniedRpcError(grpc.RpcError):
+            def code(self):
+                return grpc.StatusCode.PERMISSION_DENIED
+
+            def details(self):
+                return "ClearJobs requires MN_GRPC_ADMIN_TOKEN"
+
+        first_client = SimpleNamespace(clear_jobs=Mock(side_effect=PermissionDeniedRpcError()))
+        second_client = SimpleNamespace(clear_jobs=Mock(return_value=2))
+        close_client = Mock()
+        clients = [first_client, second_client]
+
+        class ClientProxy:
+            def __getattr__(self, name):
+                return getattr(clients.pop(0), name)
+
+        with patch("mn_api.routes.jobs.state.client", ClientProxy()), patch(
+            "mn_api.routes.jobs.state.close_client",
+            close_client,
+        ):
+            response = self.client.post("/api/v1/jobs:cleanup")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"cleared_count": 2})
+        first_client.clear_jobs.assert_called_once()
+        second_client.clear_jobs.assert_called_once()
+        close_client.assert_called_once()
+
     @patch('mn_api.state.client')
     def test_get_system_summary_success(self, mock_client):
         mock_client.get_system_summary.return_value = '{"nodes": [], "jobs": []}'
