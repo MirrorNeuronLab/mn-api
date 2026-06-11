@@ -32,6 +32,7 @@ from mn_api.blueprints import cleanup_blueprint_processes_for_job
 from mn_api.bundles import load_uploaded_bundle
 from mn_api.dependencies import require_auth
 from mn_api.errors import handle_grpc_error, validation_problem_response
+from mn_api.run_outputs import output_refs
 from mn_api.schemas import SubmitJobRequest
 
 
@@ -658,6 +659,12 @@ def _run_artifacts(run_id: str | None, run_dir: Path | None) -> list[dict[str, A
             artifacts.append(_artifact_ref(run_id, path, run_dir))
         except OSError:
             continue
+    seen_paths = {artifact.get("path") for artifact in artifacts}
+    for artifact in output_refs(run_id, run_dir):
+        if artifact.get("path") in seen_paths:
+            continue
+        artifacts.append(artifact)
+        seen_paths.add(artifact.get("path"))
     return artifacts
 
 

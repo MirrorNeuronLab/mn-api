@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 
 from mn_api import state
 from mn_api.dependencies import require_auth
+from mn_api.run_outputs import output_content_type, output_path_by_index, output_refs
 
 
 router = APIRouter(prefix="/api/v1")
@@ -248,6 +249,7 @@ def get_run_final_artifact(run_id: str, _auth=Depends(require_auth)):
 def list_run_artifacts(run_id: str, _auth=Depends(require_auth)):
     run_dir = _ensure_run_exists(run_id)
     artifacts = [_artifact_ref(run_id, path, run_dir) for path in _list_artifact_files(run_dir)]
+    artifacts.extend(output_refs(run_id, run_dir))
     return {"run_id": run_id, "run_dir": str(run_dir), "artifacts": artifacts}
 
 
@@ -267,6 +269,34 @@ def get_run_artifact(run_id: str, artifact_path: str, _auth=Depends(require_auth
     run_dir = _ensure_run_exists(run_id)
     path = _artifact_file_path(run_dir, artifact_path)
     return FileResponse(path, media_type=_artifact_content_type(path))
+
+
+@router.get("/runs/{run_id}/outputs")
+def list_run_outputs(run_id: str, _auth=Depends(require_auth)):
+    run_dir = _ensure_run_exists(run_id)
+    return {"run_id": run_id, "run_dir": str(run_dir), "outputs": output_refs(run_id, run_dir)}
+
+
+@router.post("/runs/{run_id}/outputs/{output_index}/reveal")
+def reveal_run_output(run_id: str, output_index: int, _auth=Depends(require_auth)):
+    run_dir = _ensure_run_exists(run_id)
+    path = output_path_by_index(run_dir, output_index)
+    if path is None or not path.is_file():
+        raise HTTPException(status_code=404, detail="output not found")
+    try:
+        _reveal_local_path(path)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"failed to open {path.name}") from exc
+    return {"ok": True, "path": str(path), "folder": str(path.parent)}
+
+
+@router.get("/runs/{run_id}/outputs/{output_index}")
+def get_run_output(run_id: str, output_index: int, _auth=Depends(require_auth)):
+    run_dir = _ensure_run_exists(run_id)
+    path = output_path_by_index(run_dir, output_index)
+    if path is None or not path.is_file():
+        raise HTTPException(status_code=404, detail="output not found")
+    return FileResponse(path, media_type=output_content_type(path), filename=path.name)
 
 
 @router.get("/runs/{run_id}/ui")

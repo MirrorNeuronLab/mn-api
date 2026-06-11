@@ -1559,6 +1559,57 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(mock_popen.call_args.args[0][:2], ["open", "-R"])
         self.assertTrue(mock_popen.call_args.args[0][2].endswith("job.json"))
 
+    def test_run_outputs_include_recorded_post_launch_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runs_root = root / "runs"
+            run_dir = runs_root / "output-run"
+            output_dir = root / "Downloads"
+            run_dir.mkdir(parents=True)
+            output_dir.mkdir()
+            report = output_dir / "output-run-report.md"
+            report.write_text("# Customer Report\n")
+            (run_dir / "job.json").write_text(json.dumps({"job_id": "job-output"}))
+            (run_dir / "post_launch_hook.json").write_text(json.dumps({"ok": True}))
+            (run_dir / "post_launch_materialized.json").write_text(json.dumps({
+                "ok": True,
+                "output_files": [
+                    {"kind": "report_markdown", "path": str(report)}
+                ],
+            }))
+
+            with (
+                patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}),
+                patch("mn_api.routes.runs.sys.platform", "darwin"),
+                patch("mn_api.routes.runs.subprocess.Popen") as mock_popen,
+            ):
+                artifacts = self.client.get("/api/v1/runs/output-run/artifacts")
+                outputs = self.client.get("/api/v1/runs/output-run/outputs")
+                downloaded = self.client.get("/api/v1/runs/output-run/outputs/0")
+                revealed = self.client.post("/api/v1/runs/output-run/outputs/0/reveal")
+                missing = self.client.get("/api/v1/runs/output-run/outputs/99")
+
+        self.assertEqual(artifacts.status_code, 200)
+        artifact_ids = {artifact["artifact_id"] for artifact in artifacts.json()["artifacts"]}
+        self.assertIn("job_json", artifact_ids)
+        self.assertIn("post_launch_hook_json", artifact_ids)
+        self.assertIn("output_0_report_markdown", artifact_ids)
+        output_ref = next(
+            artifact for artifact in artifacts.json()["artifacts"]
+            if artifact["artifact_id"] == "output_0_report_markdown"
+        )
+        self.assertEqual(output_ref["source"], "post_launch_output")
+        self.assertTrue(output_ref["external"])
+        self.assertEqual(output_ref["name"], "output-run-report.md")
+        self.assertEqual(outputs.status_code, 200)
+        self.assertEqual(outputs.json()["outputs"][0]["url"], "/api/v1/runs/output-run/outputs/0")
+        self.assertEqual(downloaded.status_code, 200)
+        self.assertIn("# Customer Report", downloaded.text)
+        self.assertEqual(revealed.status_code, 200)
+        self.assertTrue(revealed.json()["path"].endswith("output-run-report.md"))
+        self.assertEqual(missing.status_code, 404)
+        mock_popen.assert_called_once()
+
     @patch('mn_api.state.client')
     def test_submit_by_unknown_bundle_path_is_rejected_before_sdk_call(self, mock_client):
         response = self.client.post(
@@ -2070,7 +2121,9 @@ class TestAPI(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             runs_root = Path(tmp)
             run_dir = runs_root / "compact-run"
+            output_dir = runs_root / "external-outputs"
             run_dir.mkdir()
+            output_dir.mkdir()
             (run_dir / "job.json").write_text(json.dumps({
                 "job_id": "job-large",
                 "run_id": "compact-run",
@@ -2096,6 +2149,14 @@ class TestAPI(unittest.TestCase):
             }))
             (run_dir / "report.md").write_text("# Draft Review Packet\n")
             (run_dir / "tax-review-packet.pdf").write_bytes(b"%PDF-1.4\n")
+            external_report = output_dir / "compact-run-report.md"
+            external_report.write_text("# Customer Output\n")
+            (run_dir / "post_launch_materialized.json").write_text(json.dumps({
+                "ok": True,
+                "output_files": [
+                    {"kind": "report_markdown", "path": str(external_report)}
+                ],
+            }))
 
             huge_log = "x" * (5 * 1024 * 1024)
             mock_client.get_job.side_effect = AssertionError("default job details should not call full gRPC get_job")
@@ -2127,7 +2188,11 @@ class TestAPI(unittest.TestCase):
         artifact_ids = {artifact["artifact_id"] for artifact in body["artifacts"]}
         self.assertIn("result_json", artifact_ids)
         self.assertIn("final_artifact_json", artifact_ids)
+        self.assertIn("output_0_report_markdown", artifact_ids)
         self.assertTrue(any(artifact["content_type"] == "application/pdf" for artifact in body["artifacts"]))
+        output_ref = next(artifact for artifact in body["output_files"] if artifact["artifact_id"] == "output_0_report_markdown")
+        self.assertEqual(output_ref["source"], "post_launch_output")
+        self.assertEqual(output_ref["url"], "/api/v1/runs/compact-run/outputs/0")
 
     @patch('mn_api.state.client')
     def test_get_job_compact_upgrades_legacy_failure_reason(self, mock_client):
