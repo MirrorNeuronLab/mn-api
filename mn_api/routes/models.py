@@ -5,7 +5,7 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
@@ -170,8 +170,17 @@ def _resolve_entry_or_external(
     }
 
 
-def _stream_chat_benchmark(*, api_model: str, prompt: str, max_tokens: int) -> dict[str, Any]:
-    started = time.perf_counter()
+def _stream_chat_benchmark(
+    *,
+    api_model: str,
+    prompt: str,
+    max_tokens: int,
+    opener: Callable[..., Any] | None = None,
+    clock: Callable[[], float] | None = None,
+) -> dict[str, Any]:
+    open_url = opener or urllib.request.urlopen
+    now = clock or time.perf_counter
+    started = now()
     first_token_at: float | None = None
     chunks: list[str] = []
     request = urllib.request.Request(
@@ -190,7 +199,7 @@ def _stream_chat_benchmark(*, api_model: str, prompt: str, max_tokens: int) -> d
     )
 
     try:
-        with urllib.request.urlopen(request, timeout=180) as response:
+        with open_url(request, timeout=180) as response:
             for raw_line in response:
                 line = raw_line.decode("utf-8", errors="replace").strip()
                 if not line or line.startswith(":"):
@@ -202,7 +211,7 @@ def _stream_chat_benchmark(*, api_model: str, prompt: str, max_tokens: int) -> d
                 if not content:
                     continue
                 if first_token_at is None:
-                    first_token_at = time.perf_counter()
+                    first_token_at = now()
                 chunks.append(content)
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace").strip()
@@ -216,7 +225,7 @@ def _stream_chat_benchmark(*, api_model: str, prompt: str, max_tokens: int) -> d
             detail=f"Docker Model Runner benchmark failed: {exc}",
         ) from exc
 
-    finished = time.perf_counter()
+    finished = now()
     text = "".join(chunks)
     token_count = _estimate_token_count(text)
     generation_seconds = max(finished - (first_token_at or started), 0.001)
@@ -282,10 +291,16 @@ def _local_node_name() -> str:
     return "local"
 
 
-def _installed_model_names() -> dict[str, Any]:
-    result = _docker(["model", "list", "--format", "json"], timeout=60)
+def _installed_model_names(
+    *,
+    docker_runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+    api_model_lister: Callable[..., set[str]] | None = None,
+) -> dict[str, Any]:
+    run_docker = docker_runner or _docker
+    list_api_models = api_model_lister or dmr_api_list_models
+    result = run_docker(["model", "list", "--format", "json"], timeout=60)
     if result.returncode != 0:
-        result = _docker(["model", "list"], timeout=60)
+        result = run_docker(["model", "list"], timeout=60)
     if result.returncode == 0:
         return {
             "available": True,
@@ -296,7 +311,7 @@ def _installed_model_names() -> dict[str, Any]:
     try:
         return {
             "available": True,
-            "models": dmr_api_list_models(timeout=60),
+            "models": list_api_models(timeout=60),
             "warnings": [detail] if detail else [],
         }
     except Exception as exc:

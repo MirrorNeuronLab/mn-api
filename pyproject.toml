@@ -16,7 +16,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["httpx>=0.27.0"]
+test = [
+    "httpx>=0.27.0",
+    "pytest>=8.0.0",
+]
 
 [project.scripts]
 mn-api = "mn_api.main:start"

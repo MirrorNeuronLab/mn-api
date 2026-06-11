@@ -5,7 +5,7 @@ import re
 import socket
 from numbers import Number
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import APIRouter, Depends, HTTPException
 import grpc
@@ -318,11 +318,13 @@ def network_handshake_with_fallback(
     token: str,
     grpc_ports: list[int],
     local_host: str,
+    remote_client_factory: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
+    client_factory = remote_client_factory or Client
     last_error: Exception | None = None
     for grpc_port in grpc_ports:
         try:
-            remote = Client(target=f"{host}:{grpc_port}", auth_token="", timeout=10)
+            remote = client_factory(target=f"{host}:{grpc_port}", auth_token="", timeout=10)
             return remote.network_handshake(
                 token,
                 node_name=network_node_name(local_host),

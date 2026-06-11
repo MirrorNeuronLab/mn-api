@@ -12,7 +12,7 @@ import urllib.request
 import hashlib
 from collections import deque
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
@@ -447,15 +447,21 @@ def _positive_port(value: Any) -> int | None:
     return port if 1 <= port <= 65535 else None
 
 
-def _web_ui_url_status(url: str, *, timeout_seconds: float = 0.75) -> str:
+def _web_ui_url_status(
+    url: str,
+    *,
+    timeout_seconds: float = 0.75,
+    opener: Callable[..., Any] | None = None,
+) -> str:
     if not isinstance(url, str) or not url:
         return "starting"
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme not in {"http", "https"}:
         return "available"
+    open_url = opener or urllib.request.urlopen
     try:
         request = urllib.request.Request(url, headers={"User-Agent": "mn-api-web-ui-probe/1.0"})
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+        with open_url(request, timeout=timeout_seconds) as response:
             status = getattr(response, "status", 200)
             return "running" if int(status) < 500 else "starting"
     except urllib.error.HTTPError as exc:
