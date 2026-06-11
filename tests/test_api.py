@@ -1933,6 +1933,110 @@ class TestAPI(unittest.TestCase):
         mock_client.stream_events.assert_called_once_with("job-progress", follow=False)
 
     @patch('mn_api.state.client')
+    def test_get_job_workflow_progress_enriches_step_and_agent_activity(self, mock_client):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs_root = Path(tmp)
+            run_dir = runs_root / "activity-run"
+            run_dir.mkdir()
+            (run_dir / "job.json").write_text(json.dumps({
+                "job_id": "job-activity",
+                "run_id": "activity-run",
+                "status": "running",
+            }))
+            (run_dir / "config.json").write_text(json.dumps({
+                "id": "activity-workflow",
+                "flow": {
+                    "entrypoint": "research",
+                    "steps": [{"id": "research", "label": "Research", "run": "research_team"}],
+                },
+                "runtime": {
+                    "bindings": {
+                        "research_team": {
+                            "workers": [{"id": "research:docs", "role": "Analyze docs"}]
+                        }
+                    }
+                },
+            }))
+            persisted_event = {
+                "type": "workflow_step_attempt_completed",
+                "timestamp": "2026-05-31T10:00:03Z",
+                "payload": {
+                    "step": "research",
+                    "worker": "research:docs",
+                    "tokens": 1200,
+                    "stdout": "x" * 5000,
+                },
+            }
+            (run_dir / "events.jsonl").write_text(json.dumps(persisted_event) + "\n")
+            mock_client.get_job.return_value = json.dumps({
+                "job": {
+                    "job_id": "job-activity",
+                    "run_id": "activity-run",
+                    "status": "running",
+                    "submitted_at": "2026-05-31T10:00:00Z",
+                },
+                "summary": {"status": "running"},
+                "agents": [],
+            })
+            mock_client.stream_events.return_value = [
+                json.dumps({
+                    "type": "workflow_step_attempt_started",
+                    "timestamp": "2026-05-31T10:00:01Z",
+                    "payload": {"step": "research", "worker": "research:docs", "message": "Reading source documents"},
+                }),
+            ]
+
+            with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
+                response = self.client.get("/api/v1/jobs/job-activity/workflow-progress")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        step = body["steps"][0]
+        self.assertEqual(step["last_activity"]["type"], "workflow_step_attempt_completed")
+        self.assertEqual(step["last_activity"]["agent_id"], "research:docs")
+        self.assertEqual(len(step["recent_events"]), 2)
+        self.assertTrue(step["last_activity"]["payload"]["stdout"]["omitted"])
+        self.assertEqual(step["activity_summary"], "Agent completed: research:docs")
+        agent = step["agents"][0]
+        self.assertEqual(agent["last_activity"]["type"], "workflow_step_attempt_completed")
+        self.assertEqual(agent["tokens"], 1200)
+        self.assertEqual(agent["activity_summary"], "Agent completed: research:docs")
+
+    @patch('mn_api.state.client')
+    def test_get_job_events_merges_persisted_run_events_without_duplicates(self, mock_client):
+        runtime_event = {
+            "type": "job_running",
+            "timestamp": "2026-05-31T10:00:01Z",
+            "payload": {"run_id": "events-run"},
+        }
+        persisted_event = {
+            "type": "workflow_step_completed",
+            "timestamp": "2026-05-31T10:00:02Z",
+            "payload": {"run_id": "events-run", "step": "research"},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            runs_root = Path(tmp)
+            run_dir = runs_root / "events-run"
+            run_dir.mkdir()
+            (run_dir / "job.json").write_text(json.dumps({
+                "job_id": "job-events",
+                "run_id": "events-run",
+                "status": "running",
+            }))
+            (run_dir / "events.jsonl").write_text("\n".join([
+                json.dumps(runtime_event),
+                json.dumps(persisted_event),
+            ]))
+            mock_client.stream_events.return_value = [json.dumps(runtime_event)]
+
+            with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
+                response = self.client.get("/api/v1/jobs/job-events/events?limit=10")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual([event["type"] for event in body["data"]], ["job_running", "workflow_step_completed"])
+
+    @patch('mn_api.state.client')
     def test_get_job_workflow_progress_prefers_run_store_workflow_manifest(self, mock_client):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp) / "video-run"
