@@ -43,7 +43,7 @@ def build_agent_graph(job_id: str, details: Dict[str, Any], events: list[Dict[st
 
     edge_counts: Dict[tuple[str, str, str], Dict[str, Any]] = {}
 
-    for edge in manifest.get("edges", []) if isinstance(manifest, dict) else []:
+    for edge in _manifest_agent_edges(manifest):
         source = edge.get("from_node")
         target = edge.get("to_node")
         message_type = edge.get("message_type") or "*"
@@ -177,6 +177,9 @@ def _manifest_agent_nodes(manifest: Dict[str, Any]) -> list[Dict[str, Any]]:
     if not isinstance(manifest, dict):
         return []
     nodes: list[Dict[str, Any]] = []
+    agents = manifest.get("agents") if isinstance(manifest.get("agents"), dict) else {}
+    agent_nodes = agents.get("nodes") if isinstance(agents.get("nodes"), list) else []
+    nodes.extend(node for node in agent_nodes if isinstance(node, dict))
     root_nodes = manifest.get("nodes")
     if isinstance(root_nodes, list):
         nodes.extend(node for node in root_nodes if isinstance(node, dict))
@@ -185,6 +188,19 @@ def _manifest_agent_nodes(manifest: Dict[str, Any]) -> list[Dict[str, Any]]:
     template_nodes = templates.get("nodes") if isinstance(templates.get("nodes"), list) else []
     nodes.extend(node for node in template_nodes if isinstance(node, dict))
     return nodes
+
+
+def _manifest_agent_edges(manifest: Dict[str, Any]) -> list[Dict[str, Any]]:
+    if not isinstance(manifest, dict):
+        return []
+    agents = manifest.get("agents") if isinstance(manifest.get("agents"), dict) else {}
+    agent_edges = agents.get("edges") if isinstance(agents.get("edges"), list) else []
+    if agent_edges:
+        return [edge for edge in agent_edges if isinstance(edge, dict)]
+    root_edges = manifest.get("edges")
+    if isinstance(root_edges, list):
+        return [edge for edge in root_edges if isinstance(edge, dict)]
+    return []
 
 
 def event_message_summary(event: Dict[str, Any]) -> Optional[Dict[str, Any]]:

@@ -420,7 +420,17 @@ def resolve_launch_source(req: BlueprintLaunchRequest) -> dict:
         manifest_json, payloads = load_uploaded_bundle(req.bundle_path, state.BUNDLE_UPLOAD_ROOT)
         manifest = json.loads(manifest_json)
         bundle_root = Path(req.bundle_path).expanduser().resolve()
-        blueprint_id = sanitize_blueprint_id(manifest.get("graph_id") or bundle_root.name, "uploaded_bundle")
+        workflow = manifest.get("workflow") if isinstance(manifest.get("workflow"), dict) else {}
+        workflow_manifest = manifest.get("apiVersion") == "mn.workflow/v1" or manifest.get("kind") == "Workflow" or isinstance(manifest.get("workflow"), dict)
+        blueprint_id = sanitize_blueprint_id(
+            manifest.get("id")
+            or manifest.get("blueprint_id")
+            or manifest.get("workflow_id")
+            or workflow.get("workflow_id")
+            or (None if workflow_manifest else manifest.get("graph_id"))
+            or bundle_root.name,
+            "uploaded_bundle",
+        )
         blueprint = {
             "id": blueprint_id,
             "name": manifest.get("job_name") or blueprint_id,

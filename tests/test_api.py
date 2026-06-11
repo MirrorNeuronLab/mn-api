@@ -1896,7 +1896,8 @@ class TestAPI(unittest.TestCase):
                 "submitted_at": "2026-05-31T10:00:00Z",
                 "manifest": {
                     "id": "workflow-blueprint",
-                    "flow": {
+                    "workflow": {
+                        "workflow_id": "workflow-blueprint_v1",
                         "entrypoint": "research",
                         "steps": [{"id": "research", "label": "Research", "run": "research_team"}],
                     },
@@ -1925,7 +1926,7 @@ class TestAPI(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
-        self.assertEqual(body["workflow_id"], "workflow-blueprint")
+        self.assertEqual(body["workflow_id"], "workflow-blueprint_v1")
         self.assertEqual(body["agent_count"]["done"], 1)
         self.assertEqual(body["agent_count"]["total"], 1)
         self.assertEqual(body["current_step_id"], "research")
@@ -1945,7 +1946,8 @@ class TestAPI(unittest.TestCase):
             }))
             (run_dir / "config.json").write_text(json.dumps({
                 "id": "activity-workflow",
-                "flow": {
+                "workflow": {
+                    "workflow_id": "activity-workflow_v1",
                     "entrypoint": "research",
                     "steps": [{"id": "research", "label": "Research", "run": "research_team"}],
                 },
@@ -2056,7 +2058,8 @@ class TestAPI(unittest.TestCase):
             (run_dir / "config.json").write_text(json.dumps({
                 "id": "video_watch_assistant",
                 "type": "service",
-                "flow": {
+                "workflow": {
+                    "workflow_id": "video_watch_assistant_v1",
                     "entrypoint": "start_video_monitor",
                     "steps": [
                         {
@@ -2125,7 +2128,7 @@ class TestAPI(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
-        self.assertEqual(body["workflow_id"], "video_watch_assistant")
+        self.assertEqual(body["workflow_id"], "video_watch_assistant_v1")
         self.assertEqual(body["trace_id"], "trc_video")
         self.assertEqual(body["observability_summary"]["trace_id"], "trc_video")
         self.assertEqual(body["steps"][0]["id"], "start_video_monitor")
@@ -2180,7 +2183,8 @@ class TestAPI(unittest.TestCase):
                 "submitted_at": "2026-05-31T10:00:00Z",
                 "manifest": {
                     "id": "workflow-blueprint",
-                    "flow": {
+                    "workflow": {
+                        "workflow_id": "workflow-blueprint_v1",
                         "entrypoint": "research",
                         "steps": [{"id": "research", "label": "Research", "run": "research_team"}],
                     },
@@ -2428,7 +2432,8 @@ class TestAPI(unittest.TestCase):
                 "status": "completed",
                 "manifest": {
                     "id": "invoice-blueprint",
-                    "flow": {
+                    "workflow": {
+                        "workflow_id": "invoice-blueprint_v1",
                         "entrypoint": "extract",
                         "steps": [{"id": "extract", "label": "Extract", "run": "extractor"}],
                     },

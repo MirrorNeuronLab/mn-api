@@ -330,7 +330,7 @@ def normalize_blueprint(entry: Any) -> Optional[Dict[str, Any]]:
         "summary": record.get("summary") or product.get("summary") or product.get("one_line") or "",
         "description": record.get("description") or product.get("description") or product.get("one_line") or "",
         "job_name": record.get("job_name") or record.get("jobName") or product.get("job_name") or "",
-        "graph_id": record.get("graph_id") or record.get("graphId") or product.get("graph_id") or "",
+        "workflow_id": record.get("workflow_id") or record.get("workflowId") or product.get("workflow_id") or "",
         "target_users": record.get("target_users") or record.get("targetUsers") or product.get("target_users") or "",
         "output": record.get("output") or product.get("output") or "",
         "agent_role": record.get("agent_role") or record.get("agentRole") or product.get("agent_role") or "",
@@ -576,11 +576,14 @@ def local_blueprint_from_path(path: str) -> tuple[Path, Dict[str, Any]]:
 
     metadata = as_dict(manifest.get("metadata"))
     identity = as_dict(manifest.get("identity"))
+    workflow_manifest = manifest.get("apiVersion") == "mn.workflow/v1" or manifest.get("kind") == "Workflow" or isinstance(manifest.get("workflow"), dict)
     raw_id = (
         metadata.get("blueprint_id")
         or identity.get("blueprint_id")
         or manifest.get("blueprint_id")
-        or manifest.get("graph_id")
+        or manifest.get("id")
+        or manifest.get("workflow_id")
+        or (None if workflow_manifest else manifest.get("graph_id"))
         or bundle_root.name
     )
     blueprint_id = sanitize_blueprint_id(raw_id)
@@ -804,6 +807,7 @@ def load_blueprint_bundle(
         metadata["blueprint_revision"] = blueprint["revision"]
     manifest["run_id"] = run_id
     render_agent_templates_for_submission(manifest)
+    materialize_agent_topology_for_runtime(manifest)
     prepare_openshell_custom_images(bundle_root, manifest)
     runs_root = shared_runs_root()
     config = with_shared_run_store_config(
@@ -909,14 +913,37 @@ def stage_local_input_payloads_for_manifest(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+def manifest_agent_nodes(manifest: Dict[str, Any]) -> list[Dict[str, Any]]:
+    agents = manifest.get("agents") if isinstance(manifest.get("agents"), dict) else {}
+    agent_nodes = agents.get("nodes") if isinstance(agents.get("nodes"), list) else None
+    if isinstance(agent_nodes, list):
+        return [node for node in agent_nodes if isinstance(node, dict)]
+    root_nodes = manifest.get("nodes")
+    if isinstance(root_nodes, list):
+        return [node for node in root_nodes if isinstance(node, dict)]
+    return []
+
+
+def materialize_agent_topology_for_runtime(manifest: Dict[str, Any]) -> None:
+    if isinstance(manifest.get("nodes"), list):
+        return
+    agents = manifest.get("agents") if isinstance(manifest.get("agents"), dict) else {}
+    agent_nodes = agents.get("nodes") if isinstance(agents.get("nodes"), list) else None
+    if not isinstance(agent_nodes, list) or not agent_nodes:
+        return
+    manifest["nodes"] = agent_nodes
+    agent_edges = agents.get("edges") if isinstance(agents.get("edges"), list) else []
+    manifest["edges"] = agent_edges
+    agent_entrypoints = agents.get("entrypoints") if isinstance(agents.get("entrypoints"), list) else []
+    manifest["entrypoints"] = agent_entrypoints
+
+
 def prepare_openshell_custom_images(bundle_root: Path, manifest: Dict[str, Any]) -> None:
-    nodes = manifest.get("nodes")
-    if not isinstance(nodes, list):
+    nodes = manifest_agent_nodes(manifest)
+    if not nodes:
         return
 
     for node in nodes:
-        if not isinstance(node, dict):
-            continue
         config = node.get("config")
         if not isinstance(config, dict):
             continue
@@ -1054,8 +1081,8 @@ def build_openshell_sandbox_image(source_path: Path) -> str:
 
 
 def render_agent_templates_for_submission(manifest: Dict[str, Any]) -> None:
-    nodes = manifest.get("nodes")
-    if not isinstance(nodes, list) or not any(isinstance(node, dict) and "uses" in node for node in nodes):
+    nodes = manifest_agent_nodes(manifest)
+    if not nodes or not any(isinstance(node, dict) and "uses" in node for node in nodes):
         return
     inject_local_blueprint_support_path()
     try:
@@ -2233,9 +2260,7 @@ def load_blueprint_config_overwrites(
 
 
 def inject_node_environment(manifest: Dict[str, Any], env: Dict[str, str]) -> None:
-    for node in manifest.get("nodes") or []:
-        if not isinstance(node, dict):
-            continue
+    for node in manifest_agent_nodes(manifest):
         node_config = node.setdefault("config", {})
         if not isinstance(node_config, dict):
             continue

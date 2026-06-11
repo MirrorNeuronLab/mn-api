@@ -876,8 +876,8 @@ def _first_manifest(*candidates: Any) -> dict[str, Any]:
 
 
 def _manifest_has_workflow_flow(manifest: dict[str, Any]) -> bool:
-    flow = manifest.get("flow") if isinstance(manifest, dict) else None
-    steps = flow.get("steps") if isinstance(flow, dict) else None
+    workflow = manifest.get("workflow") if isinstance(manifest, dict) else None
+    steps = workflow.get("steps") if isinstance(workflow, dict) else None
     return isinstance(steps, list) and bool(steps)
 
 
