@@ -448,22 +448,31 @@ class TestBlueprintServices(unittest.TestCase):
                 )
             )
 
-            manifest_json, payload_bytes = load_blueprint_bundle(
-                repo.resolve(),
-                {"id": "tax_worker", "path": "tax_worker"},
-                "tax-run-1",
-                config_overrides={"tax_documents": {"folder_path": str(host_docs)}},
-            )
+            with patch.dict(
+                os.environ,
+                {
+                    "MN_SHARED_STORAGE_ROOT": str(repo / "shared"),
+                    "MN_RUNTIME_SHARED_STORAGE_ROOT": "/runtime/shared",
+                },
+            ):
+                manifest_json, payload_bytes = load_blueprint_bundle(
+                    repo.resolve(),
+                    {"id": "tax_worker", "path": "tax_worker"},
+                    "tax-run-1",
+                    config_overrides={"tax_documents": {"folder_path": str(host_docs)}},
+                )
 
         manifest = json.loads(manifest_json)
         env = manifest["nodes"][0]["config"]["environment"]
         injected_config = json.loads(env["MN_BLUEPRINT_CONFIG_JSON"])
-        self.assertEqual(injected_config["tax_documents"]["folder_path"], "mn_local_inputs/tax_documents")
-        self.assertEqual(injected_config["inputs"]["payload"]["document_folder"], "mn_local_inputs/tax_documents")
+        expected_input = "/runtime/shared/submissions"
+        self.assertTrue(injected_config["tax_documents"]["folder_path"].startswith(expected_input))
+        self.assertTrue(injected_config["tax_documents"]["folder_path"].endswith("/inputs/tax_workflow/mn_local_inputs/tax_documents"))
         self.assertEqual(
-            payload_bytes["tax_workflow/mn_local_inputs/tax_documents/w2.txt"],
-            b"box 1 wages 100\n",
+            injected_config["inputs"]["payload"]["document_folder"],
+            injected_config["tax_documents"]["folder_path"],
         )
+        self.assertNotIn("tax_workflow/mn_local_inputs/tax_documents/w2.txt", payload_bytes)
         self.assertNotIn("tax_workflow/mn_local_inputs/tax_documents/ignore.csv", payload_bytes)
         self.assertEqual(manifest["metadata"]["mn_local_inputs"]["folders"][0]["file_count"], 1)
 

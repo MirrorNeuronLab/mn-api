@@ -23,6 +23,7 @@ from mn_sdk import (
     load_model_catalog,
     load_model_ownership,
     make_validation_report,
+    prepare_job_submission,
     record_model_owner,
     required_blueprint_models,
     resolve_llm_environment,
@@ -844,10 +845,14 @@ def load_blueprint_bundle(
             if payload_path.is_file():
                 payloads[payload_path.relative_to(payloads_path).as_posix()] = payload_path.read_bytes()
     payloads.update(runtime_web_ui_support_payloads_for_manifest(manifest))
-    if blueprint_local_inputs_enabled(config):
-        stage_local_input_payloads_for_manifest(manifest, payloads, bundle_dir=bundle_root)
+    prepared = prepare_job_submission(
+        manifest,
+        payloads,
+        bundle_dir=bundle_root,
+        run_id=run_id,
+    )
 
-    return json.dumps(manifest), payloads
+    return prepared.manifest_json, prepared.payloads
 
 
 def inject_runtime_web_ui_service_for_submission(

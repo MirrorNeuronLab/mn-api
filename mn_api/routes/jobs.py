@@ -18,6 +18,7 @@ from fastapi.responses import StreamingResponse
 from mn_sdk import (
     BlueprintWorkflowProgress,
     make_validation_report,
+    prepare_job_submission,
     run_input_validation,
     validate_input_validation_spec_issues,
     validate_requirements_spec_issues,
@@ -74,8 +75,10 @@ _ARTIFACT_CONTENT_TYPES = {
 @router.post("/jobs")
 def submit_job(req: SubmitJobRequest, _auth=Depends(require_auth)):
     try:
+        bundle_dir: str | None = None
         if req.bundle_path:
             manifest_json, payloads_bytes = load_uploaded_bundle(req.bundle_path, state.BUNDLE_UPLOAD_ROOT)
+            bundle_dir = req.bundle_path
             state.close_client()
             validation_response = _validate_job_bundle(req.bundle_path, manifest_json, force=req.force)
             if validation_response is not None:
@@ -96,6 +99,15 @@ def submit_job(req: SubmitJobRequest, _auth=Depends(require_auth)):
                 status_code=422,
                 detail="manifest_json or _bundle_path is required",
             )
+
+        prepared = prepare_job_submission(
+            manifest_json,
+            payloads_bytes,
+            bundle_dir=bundle_dir,
+            run_id=_submission_run_id(manifest_json),
+        )
+        manifest_json = prepared.manifest_json
+        payloads_bytes = prepared.payloads
 
         if req.force:
             job_id = state.client.submit_job(manifest_json, payloads_bytes, force=True)
@@ -166,6 +178,35 @@ def _decode_manifest(manifest_json: str) -> dict:
     if not isinstance(manifest, dict):
         raise HTTPException(status_code=400, detail="manifest_json must be an object")
     return manifest
+
+
+def _submission_run_id(manifest_json: str) -> str | None:
+    try:
+        manifest = json.loads(manifest_json)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(manifest, dict):
+        return None
+    metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
+    for value in (
+        manifest.get("run_id"),
+        metadata.get("blueprint_run_id"),
+        metadata.get("run_id"),
+        _nested_get(metadata, ["mn_cli", "blueprint_run_id"]),
+        _nested_get(metadata, ["mn_cli", "run_id"]),
+    ):
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _nested_get(value: dict[str, Any], path: list[str]) -> Any:
+    cursor: Any = value
+    for key in path:
+        if not isinstance(cursor, dict):
+            return None
+        cursor = cursor.get(key)
+    return cursor
 
 
 @router.get("/jobs")

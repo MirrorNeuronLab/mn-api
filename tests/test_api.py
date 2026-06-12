@@ -1286,7 +1286,11 @@ class TestAPI(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"id": "job-123", "status": "pending"})
-        mock_client.submit_job.assert_called_once_with('{"graph_id": "g"}', {"a.txt": b"hello"})
+        manifest_json, payloads = mock_client.submit_job.call_args.args
+        manifest = json.loads(manifest_json)
+        self.assertEqual(manifest["graph_id"], "g")
+        self.assertIn("mn_storage", manifest["metadata"])
+        self.assertEqual(payloads, {"a.txt": b"hello"})
 
     @patch('mn_api.state.client')
     def test_upload_bundle_and_submit_by_bundle_path(self, mock_client):
@@ -1313,10 +1317,11 @@ class TestAPI(unittest.TestCase):
         )
         self.assertEqual(submit_response.status_code, 200)
         self.assertEqual(submit_response.json(), {"id": "job-zip", "status": "pending"})
-        mock_client.submit_job.assert_called_once_with(
-            json.dumps(manifest),
-            {"a.txt": b"hello"},
-        )
+        manifest_json, payloads = mock_client.submit_job.call_args.args
+        submitted_manifest = json.loads(manifest_json)
+        self.assertEqual(submitted_manifest["graph_id"], "zip_graph")
+        self.assertIn("mn_storage", submitted_manifest["metadata"])
+        self.assertEqual(payloads, {"a.txt": b"hello"})
 
     def test_upload_bundle_accepts_single_nested_bundle_root(self):
         archive = io.BytesIO()
@@ -2861,7 +2866,14 @@ class TestAPI(unittest.TestCase):
             }))
             original = self._set_blueprint_config(repo)
             try:
-                with patch.dict('os.environ', {"MN_RUNS_ROOT": str(runs_root)}):
+                with patch.dict(
+                    'os.environ',
+                    {
+                        "MN_RUNS_ROOT": str(runs_root),
+                        "MN_SHARED_STORAGE_ROOT": str(repo / "shared"),
+                        "MN_RUNTIME_SHARED_STORAGE_ROOT": str(repo / "shared"),
+                    },
+                ):
                     response = self.client.post(
                         "/api/v1/blueprints/worker_one/runs",
                         json={"run_id": "run-123"},
@@ -2881,10 +2893,11 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(manifest["metadata"]["blueprint_run_id"], "run-123")
         env = manifest["nodes"][0]["config"]["environment"]
         self.assertEqual(env["MN_RUN_ID"], "run-123")
-        self.assertEqual(env["MN_RUNS_ROOT"], str(runs_root))
+        self.assertTrue(env["MN_RUNS_ROOT"].startswith(str(repo / "shared" / "submissions" / "run-123-")))
+        self.assertTrue(env["MN_RUNS_ROOT"].endswith("/outputs/runs"))
         injected_config = json.loads(env["MN_BLUEPRINT_CONFIG_JSON"])
         self.assertEqual(injected_config["identity"]["run_id"], "run-123")
-        self.assertEqual(injected_config["outputs"]["run_root"], str(runs_root))
+        self.assertEqual(injected_config["outputs"]["run_root"], env["MN_RUNS_ROOT"])
         self.assertEqual(job_mapping["job_id"], "job-blueprint-1")
         self.assertEqual(job_mapping["blueprint_id"], "worker_one")
         self.assertFalse((repo / "blueprints" / "worker_one" / "runs").exists())
