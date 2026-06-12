@@ -9,10 +9,10 @@ runtime calls to the core through the Python SDK gRPC client.
 Install locally and run tests:
 
 ```bash
-python3 -m venv .venv
+python3.11 -m venv .venv
 . .venv/bin/activate
-python3 -m pip install -e ".[test]"
-python3 -m pytest -q
+.venv/bin/python -m pip install -e ".[test]"
+.venv/bin/python -m pytest -q
 ```
 
 Start the local API:
