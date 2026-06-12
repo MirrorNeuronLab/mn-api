@@ -56,6 +56,24 @@ class TestApiConfig(unittest.TestCase):
         self.assertEqual(config.grpc_auth_token, "auth-from-configured-file")
         self.assertEqual(config.grpc_admin_token, "admin-from-configured-file")
 
+    def test_runtime_endpoints_override_stale_runtime_grpc_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp) / ".mn"
+            state_dir.mkdir()
+            (state_dir / "docker-compose.env").write_text(
+                "MN_CORE_GRPC_TARGET=localhost:55051\n",
+                encoding="utf-8",
+            )
+            (state_dir / "runtime-endpoints.json").write_text(
+                '{"grpc":{"target":"192.168.4.20:55051"}}\n',
+                encoding="utf-8",
+            )
+
+            with patch.dict(os.environ, {"HOME": tmp}, clear=True):
+                config = ApiConfig.from_env()
+
+        self.assertEqual(config.grpc_target, "192.168.4.20:55051")
+
 
 if __name__ == "__main__":
     unittest.main()

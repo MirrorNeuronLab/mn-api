@@ -93,6 +93,26 @@ class TestAPI(unittest.TestCase):
         self.assertIn("blueprint_repo", body)
         self.assertIn("runs_root", body)
 
+    @patch("mn_api.routes.system.collect_runtime_status")
+    def test_runtime_status_route_returns_sdk_payload(self, mock_collect):
+        mock_collect.return_value = {
+            "overall": "passing",
+            "checked_at": "2026-06-03T00:00:00Z",
+            "runtime": {"mode": "local"},
+            "endpoints": {"core_grpc": "localhost:55051"},
+            "components": [],
+            "nodes": {"available": True, "total": 1},
+            "jobs": {"available": True, "active": 0},
+            "shared_storage": {"host_root": "/tmp/mn-shared", "runtime_root": "/tmp/mn-shared"},
+        }
+
+        response = self.client.get("/api/v1/runtime/status")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["overall"], "passing")
+        self.assertEqual(response.json()["endpoints"]["core_grpc"], "localhost:55051")
+        self.assertIn("client", mock_collect.call_args.kwargs)
+
     @patch('mn_api.routes.models.assess_model_compatibility')
     @patch('mn_api.routes.models.load_model_ownership')
     @patch('mn_api.routes.models.state.client')

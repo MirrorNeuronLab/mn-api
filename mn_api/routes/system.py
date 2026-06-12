@@ -9,7 +9,7 @@ from typing import Any, Callable
 
 from fastapi import APIRouter, Depends, HTTPException
 import grpc
-from mn_sdk import Client
+from mn_sdk import Client, RuntimeConfig, collect_runtime_status
 
 from mn_api import state
 from mn_api.blueprints import is_git_repo_url, shared_runs_root
@@ -50,6 +50,16 @@ def health():
         "dev_local_blueprint_repo_active": bool(dev_repo and dev_repo == blueprint_repo),
         "runs_root": shared_runs_root(),
     }
+
+
+@router.get("/runtime/status")
+def runtime_status(timeout: float = 3.0, _auth=Depends(require_auth)):
+    return collect_runtime_status(
+        config=RuntimeConfig.from_env(),
+        client=state.client,
+        timeout=timeout,
+        web_ui_installed=None,
+    )
 
 
 @router.get("/system/summary")

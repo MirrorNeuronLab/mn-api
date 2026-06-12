@@ -1,8 +1,17 @@
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+for parent in Path(__file__).resolve().parents:
+    sdk_path = parent / "mn-python-sdk"
+    if (sdk_path / "mn_sdk" / "runtime_config.py").exists() and str(sdk_path) not in sys.path:
+        sys.path.insert(0, str(sdk_path))
+        break
+
+from mn_sdk.runtime_config import RuntimeConfig, read_env_file
 
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
@@ -34,11 +43,9 @@ class ApiConfig:
 
     @classmethod
     def from_env(cls) -> "ApiConfig":
-        runtime_env = _read_env_file(_mn_home() / "docker-compose.env")
+        runtime_config = RuntimeConfig.from_env()
+        runtime_env = runtime_config.runtime_env
         env = os.getenv("MN_ENV", "dev")
-        timeout = _optional_float("MN_GRPC_TIMEOUT_SECONDS", "10")
-        core_host = os.getenv("MN_CORE_HOST") or runtime_env.get("MN_CORE_HOST") or "localhost"
-        grpc_port = os.getenv("MN_GRPC_PORT") or runtime_env.get("MN_GRPC_PORT") or "55051"
         configured_blueprint_repo = _env_value("MN_BLUEPRINT_REPO", runtime_env, _default_blueprint_repo(runtime_env))
         dev_local_blueprint_repo = _dev_local_blueprint_repo(runtime_env)
         blueprint_repo = (
@@ -50,29 +57,10 @@ class ApiConfig:
             env=env,
             host=os.getenv("MN_API_HOST") or runtime_env.get("MN_API_HOST") or "localhost",
             port=_int_value(os.getenv("MN_API_PORT") or runtime_env.get("MN_API_PORT") or "54001", "MN_API_PORT"),
-            grpc_target=os.getenv(
-                "MN_GRPC_TARGET",
-                os.getenv(
-                    "MN_CORE_GRPC_TARGET",
-                    runtime_env.get("MN_GRPC_TARGET")
-                    or runtime_env.get("MN_CORE_GRPC_TARGET")
-                    or f"{core_host}:{grpc_port}",
-                ),
-            ),
-            grpc_timeout_seconds=timeout,
-            grpc_auth_token=_token_from_env_or_file(
-                "MN_GRPC_AUTH_TOKEN",
-                _mn_home() / "grpc_auth.token",
-                legacy_path=Path.home() / ".mirror_neuron" / "grpc_auth.token",
-                runtime_env=runtime_env,
-            ),
-            grpc_admin_token=_token_from_env_or_file(
-                "MN_GRPC_ADMIN_TOKEN",
-                _mn_home() / "grpc_admin.token",
-                legacy_path=Path.home() / ".mirror_neuron" / "grpc_admin.token",
-                runtime_env=runtime_env,
-                aliases=("MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN",),
-            ),
+            grpc_target=runtime_config.grpc_target,
+            grpc_timeout_seconds=runtime_config.grpc_timeout_seconds,
+            grpc_auth_token=runtime_config.grpc_auth_token,
+            grpc_admin_token=runtime_config.grpc_admin_token,
             api_token=os.getenv("MN_API_TOKEN", ""),
             request_size_limit_bytes=_int(
                 "MN_API_REQUEST_SIZE_LIMIT_BYTES",
@@ -152,23 +140,11 @@ def _csv(value: str) -> list[str]:
 
 
 def _read_env_file(path: Path) -> dict[str, str]:
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return {}
-
-    values: dict[str, str] = {}
-    for line in lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        key, value = stripped.split("=", 1)
-        values[key] = value
-    return values
+    return read_env_file(path)
 
 
 def runtime_env_values() -> dict[str, str]:
-    return _read_env_file(_mn_home() / "docker-compose.env")
+    return RuntimeConfig.from_env().runtime_env
 
 
 def _token_from_env_or_file(
