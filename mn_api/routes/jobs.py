@@ -1018,15 +1018,39 @@ def _humanize_event_type(event_type: Any) -> str:
     return " ".join(text.split()).capitalize()
 
 
+def _compact_activity_text(value: Any, limit: int = 320) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: max(limit - 15, 0)].rstrip() + " [truncated]"
+
+
+def _event_category(event: dict[str, Any], payload: dict[str, Any], failure: dict[str, Any] | None = None) -> str:
+    category = _first_string(payload.get("category"), event.get("category"))
+    if category in {"agent", "tool", "system", "artifact", "error"}:
+        return category
+    event_type = str(event.get("type") or "").lower()
+    if failure or "failed" in event_type or "error" in event_type or "timed_out" in event_type or "retry" in event_type:
+        return "error"
+    if event_type.startswith("tool_") or "tool_call" in event_type:
+        return "tool"
+    if event_type in {"artifact_written"} or "artifact" in event_type:
+        return "artifact"
+    if event_type.startswith("docker_worker_") or event_type.startswith("executor_") or event_type.startswith("workflow_") or event_type.startswith("sandbox_"):
+        return "system"
+    if event_type.startswith("financial_") or event_type in {"agent_activity", "blueprint_phase_started", "blueprint_phase_completed"}:
+        return "agent"
+    return "system"
+
+
 def _activity_message(event: dict[str, Any], *, step_id: str = "", agent_id: str = "") -> str:
     event_type = str(event.get("type") or "")
     payload = _event_payload(event)
     failure = failure_from_event(event)
-    if failure:
-        return _first_string(failure.get("desc"), failure.get("code"), "Failure")
     message = _first_string(
         payload.get("message"),
         event.get("message"),
+        payload.get("result_summary"),
         payload.get("working_on"),
         payload.get("task"),
         payload.get("reason"),
@@ -1036,8 +1060,22 @@ def _activity_message(event: dict[str, Any], *, step_id: str = "", agent_id: str
         event.get("status"),
     )
     if message:
-        return message[:_MAX_COMPACT_STRING]
+        return _compact_activity_text(message)
+    if failure:
+        return _compact_activity_text(_first_string(failure.get("desc"), failure.get("code"), "Failure"))
     normalized = re.sub(r"[^a-z0-9]+", "_", event_type.lower()).strip("_")
+    if normalized == "docker_worker_build_started":
+        return "DockerWorker image build started"
+    if normalized == "docker_worker_build_completed":
+        return "DockerWorker image build completed"
+    if normalized == "docker_worker_build_failed":
+        return "DockerWorker image build failed"
+    if normalized == "docker_worker_command_started":
+        return "DockerWorker command started"
+    if normalized == "docker_worker_command_completed":
+        return "DockerWorker command completed"
+    if normalized == "docker_worker_command_timed_out":
+        return "DockerWorker command timed out"
     if normalized in {"workflow_step_attempt_completed", "sandbox_job_completed"}:
         return f"Agent completed: {agent_id or _event_agent_id(event) or 'unknown'}"
     if normalized in {"workflow_worker_started", "workflow_step_attempt_started"}:
@@ -1055,21 +1093,27 @@ def _activity_message(event: dict[str, Any], *, step_id: str = "", agent_id: str
 
 def _compact_activity_event(event: dict[str, Any], *, step_id: str = "", agent_id: str = "") -> dict[str, Any]:
     payload = _event_payload(event)
+    failure = failure_from_event(event)
+    category = _event_category(event, payload, failure)
     compact = {
         "timestamp": event.get("timestamp") or event.get("ts"),
         "type": event.get("type"),
+        "category": category,
         "step_id": step_id or _event_step_id(event),
         "agent_id": agent_id or _event_agent_id(event),
         "status": _first_string(event.get("status"), payload.get("status")),
         "message": _activity_message(event, step_id=step_id, agent_id=agent_id),
     }
+    for key in ("tool_name", "target", "duration_ms", "result_summary", "details"):
+        value = payload.get(key)
+        if value not in (None, "", {}):
+            compact[key] = _compact_value(value) if key == "details" else _compact_activity_text(value) if isinstance(value, str) else value
     if payload:
         compact["payload"] = _compact_value(payload)
-    failure = failure_from_event(event)
     if failure:
         compact["failure"] = {
             "code": failure.get("code"),
-            "desc": failure.get("desc"),
+            "desc": _compact_activity_text(failure.get("desc")),
             "severity": failure.get("severity"),
         }
     return {key: value for key, value in compact.items() if value not in (None, "")}

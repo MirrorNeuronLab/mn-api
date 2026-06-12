@@ -2030,6 +2030,92 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(agent["activity_summary"], "Agent completed: research:docs")
 
     @patch('mn_api.state.client')
+    def test_get_job_workflow_progress_categorizes_structured_activity(self, mock_client):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs_root = Path(tmp)
+            run_dir = runs_root / "activity-categories"
+            run_dir.mkdir()
+            (run_dir / "job.json").write_text(json.dumps({
+                "job_id": "job-activity-categories",
+                "run_id": "activity-categories",
+                "status": "running",
+            }))
+            (run_dir / "config.json").write_text(json.dumps({
+                "id": "activity-workflow",
+                "workflow": {
+                    "workflow_id": "activity-workflow_v1",
+                    "entrypoint": "research",
+                    "steps": [{"id": "research", "label": "Research", "run": "research_team"}],
+                },
+                "runtime": {
+                    "bindings": {
+                        "research_team": {
+                            "workers": [{"id": "research:docs", "role": "Analyze docs"}]
+                        }
+                    }
+                },
+            }))
+            events = [
+                {
+                    "type": "agent_activity",
+                    "timestamp": "2026-05-31T10:00:01Z",
+                    "payload": {
+                        "step": "research",
+                        "worker": "research:docs",
+                        "category": "agent",
+                        "message": "Planning public research",
+                    },
+                },
+                {
+                    "type": "tool_call_completed",
+                    "timestamp": "2026-05-31T10:00:02Z",
+                    "payload": {
+                        "step": "research",
+                        "worker": "research:docs",
+                        "category": "tool",
+                        "message": "Browsed consumerfinance.gov",
+                        "tool_name": "w3m",
+                        "target": "https://www.consumerfinance.gov/consumer-tools/",
+                        "result_summary": "Consumer tools summary",
+                    },
+                },
+                {
+                    "type": "workflow_step_attempt_retry_scheduled",
+                    "timestamp": "2026-05-31T10:00:03Z",
+                    "payload": {
+                        "step": "research",
+                        "worker": "research:docs",
+                        "reason": "failed to build docker_worker image: " + ("x" * 5000),
+                    },
+                },
+            ]
+            (run_dir / "events.jsonl").write_text("\n".join(json.dumps(item) for item in events) + "\n")
+            mock_client.get_job.return_value = json.dumps({
+                "job": {
+                    "job_id": "job-activity-categories",
+                    "run_id": "activity-categories",
+                    "status": "running",
+                },
+                "summary": {"status": "running"},
+                "agents": [],
+            })
+            mock_client.stream_events.return_value = []
+
+            with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
+                response = self.client.get("/api/v1/jobs/job-activity-categories/workflow-progress")
+
+        self.assertEqual(response.status_code, 200)
+        activities = response.json()["steps"][0]["recent_events"]
+        tool_event = next(item for item in activities if item["type"] == "tool_call_completed")
+        self.assertEqual(tool_event["category"], "tool")
+        self.assertEqual(tool_event["tool_name"], "w3m")
+        self.assertEqual(tool_event["target"], "https://www.consumerfinance.gov/consumer-tools/")
+        retry_event = activities[-1]
+        self.assertEqual(retry_event["category"], "error")
+        self.assertLess(len(retry_event["message"]), 340)
+        self.assertIn("[truncated]", retry_event["message"])
+
+    @patch('mn_api.state.client')
     def test_get_job_events_merges_persisted_run_events_without_duplicates(self, mock_client):
         runtime_event = {
             "type": "job_running",
