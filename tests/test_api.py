@@ -72,6 +72,26 @@ class TestAPI(unittest.TestCase):
             ]
         }))
 
+    def _hard_gpu_manifest(self):
+        return {
+            "graph_id": "worker_one_graph",
+            "nodes": [],
+            "edges": [],
+            "metadata": {},
+            "requirements": {
+                "gpu": {
+                    "min_count": 1,
+                    "vendor": "nvidia",
+                    "driver": "cuda",
+                    "min_api_version": "12.0",
+                    "api_version_operator": ">",
+                    "min_memory_mb": 49152,
+                    "memory_operator": ">",
+                    "enforcement": "hard",
+                }
+            },
+        }
+
     def _set_blueprint_config(self, repo: Path, token: str = ""):
         original = state.config
         state.config = SimpleNamespace(
@@ -1865,6 +1885,34 @@ class TestAPI(unittest.TestCase):
         mock_client.submit_job.assert_not_called()
 
     @patch('mn_api.state.client')
+    def test_submit_job_hard_gpu_requirements_block_even_when_forced(self, mock_client):
+        mock_client.get_resource.return_value = json.dumps({
+            "nodes": [
+                {
+                    "name": "cpu-node",
+                    "status": "healthy",
+                    "scheduling_eligible": True,
+                    "devices": [],
+                }
+            ]
+        })
+
+        response = self.client.post(
+            "/api/v1/jobs",
+            json={
+                "manifest_json": json.dumps(self._hard_gpu_manifest()),
+                "payloads": {},
+                "force": True,
+            },
+        )
+
+        self.assertEqual(response.status_code, 412)
+        self.assertEqual(response.headers["content-type"], "application/problem+json")
+        self.assertEqual(response.json()["error"], "requirements_not_met")
+        self.assertEqual(response.json()["errors"][0]["code"], "requirements.gpu_node_unavailable")
+        mock_client.submit_job.assert_not_called()
+
+    @patch('mn_api.state.client')
     def test_submit_job_requirements_error_problem_details(self, mock_client):
         report = {
             "version": "validation.report/v1",
@@ -2080,6 +2128,17 @@ class TestAPI(unittest.TestCase):
                     },
                 },
                 {
+                    "type": "docker_worker_build_failed",
+                    "timestamp": "2026-05-31T10:00:02.500Z",
+                    "payload": {
+                        "step": "research",
+                        "worker": "research:docs",
+                        "category": "error",
+                        "message": "DockerWorker image build failed",
+                        "result_summary": "long docker setup " + ("x" * 5000) + " ERROR: No matching distribution found for mirrorneuron-blueprint-support-skill",
+                    },
+                },
+                {
                     "type": "workflow_step_attempt_retry_scheduled",
                     "timestamp": "2026-05-31T10:00:03Z",
                     "payload": {
@@ -2110,6 +2169,10 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(tool_event["category"], "tool")
         self.assertEqual(tool_event["tool_name"], "w3m")
         self.assertEqual(tool_event["target"], "https://www.consumerfinance.gov/consumer-tools/")
+        build_event = next(item for item in activities if item["type"] == "docker_worker_build_failed")
+        self.assertEqual(build_event["category"], "error")
+        self.assertIn("No matching distribution found for mirrorneuron-blueprint-support-skill", build_event["result_summary"])
+        self.assertLess(len(build_event["result_summary"]), 340)
         retry_event = activities[-1]
         self.assertEqual(retry_event["category"], "error")
         self.assertLess(len(retry_event["message"]), 340)
@@ -3397,6 +3460,33 @@ class TestAPI(unittest.TestCase):
 
     @patch("mn_api.routes.blueprints.run_mn_blueprint_run")
     @patch("mn_api.routes.blueprints.run_mn_blueprint_validate")
+    @patch("mn_api.routes.blueprints.install_blueprint_runtime_models")
+    def test_blueprint_launch_run_hard_gpu_blocks_before_model_install(self, mock_install, mock_validate, mock_run):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            self._write_blueprint_repo(repo)
+            (repo / "worker_one" / "manifest.json").write_text(json.dumps(self._hard_gpu_manifest()))
+            original = self._set_blueprint_config(repo)
+            try:
+                with patch('mn_api.state.client') as mock_client:
+                    mock_client.get_resource.return_value = json.dumps({"nodes": []})
+                    response = self.client.post(
+                        "/api/v1/blueprints/launch/runs",
+                        json={"source": "catalog", "blueprint_id": "worker_one", "force": True},
+                    )
+            finally:
+                self._restore_config(original)
+
+        self.assertEqual(response.status_code, 412)
+        self.assertEqual(response.headers["content-type"], "application/problem+json")
+        self.assertEqual(response.json()["error"], "requirements_not_met")
+        self.assertEqual(response.json()["errors"][0]["code"], "requirements.gpu_node_unavailable")
+        mock_install.assert_not_called()
+        mock_validate.assert_not_called()
+        mock_run.assert_not_called()
+
+    @patch("mn_api.routes.blueprints.run_mn_blueprint_run")
+    @patch("mn_api.routes.blueprints.run_mn_blueprint_validate")
     def test_blueprint_launch_run_uses_mn_cli_for_filesystem_path(self, mock_validate, mock_run):
         mock_validate.return_value = {"ok": True, "status": "passed", "issues": [], "errors": []}
         mock_run.return_value = {"ok": True, "job_id": "job-path-cli", "command": "mn blueprint run --folder"}
@@ -3497,6 +3587,32 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(events, ["install", "validate"])
         self.assertEqual(response.json()["model_install"]["models"][0]["status"], "installed")
         self.assertEqual(response.json()["job_id"], "job-with-model")
+
+    @patch("mn_api.routes.blueprints.start_blueprint_pre_launch_hook")
+    @patch("mn_api.routes.blueprints.install_blueprint_runtime_models")
+    @patch('mn_api.state.client')
+    def test_blueprint_run_hard_gpu_blocks_before_model_install_prelaunch_and_submit(self, mock_client, mock_install, mock_prelaunch):
+        mock_client.get_resource.return_value = json.dumps({"nodes": []})
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            self._write_blueprint_repo(repo)
+            (repo / "worker_one" / "manifest.json").write_text(json.dumps(self._hard_gpu_manifest()))
+            original = self._set_blueprint_config(repo)
+            try:
+                response = self.client.post(
+                    "/api/v1/blueprints/worker_one/runs",
+                    json={"run_id": "run-hard-gpu", "force": True},
+                )
+            finally:
+                self._restore_config(original)
+
+        self.assertEqual(response.status_code, 412)
+        self.assertEqual(response.headers["content-type"], "application/problem+json")
+        self.assertEqual(response.json()["error"], "requirements_not_met")
+        self.assertEqual(response.json()["errors"][0]["code"], "requirements.gpu_node_unavailable")
+        mock_install.assert_not_called()
+        mock_prelaunch.assert_not_called()
+        mock_client.submit_job.assert_not_called()
 
     @patch('mn_api.state.client')
     def test_blueprint_run_validation_failure_blocks_submit_unless_forced(self, mock_client):

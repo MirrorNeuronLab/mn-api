@@ -28,6 +28,7 @@ from mn_sdk import (
     required_blueprint_models,
     resolve_llm_environment,
     resolve_model_entry,
+    run_hardware_requirements_validation,
     run_input_validation,
     run_model_validation,
     run_service_validation,
@@ -802,7 +803,7 @@ def load_blueprint_bundle(
         metadata["mn_validation"] = {
             "force": True,
             "status": "skipped",
-            "skipped_checks": ["input_validation", "requirements"],
+            "skipped_checks": ["input_validation", "soft_requirements"],
         }
     if blueprint.get("revision"):
         metadata["blueprint_revision"] = blueprint["revision"]
@@ -1959,6 +1960,13 @@ def validate_blueprint_inputs(
     if spec_issues:
         return make_validation_report(spec_issues)
 
+    hardware_result = run_hardware_requirements_validation(
+        manifest,
+        resource_report=runtime_resource_report,
+    )
+    if not hardware_result.get("ok"):
+        return hardware_result
+
     config = load_blueprint_config(bundle_root, config_overrides=config_overrides)
     env = blueprint_runtime_environment(
         bundle_root,
@@ -1981,6 +1989,36 @@ def validate_blueprint_inputs(
         return model_result
 
     return run_input_validation(bundle_root, manifest, config=config, env=env)
+
+
+def validate_blueprint_hardware_requirements(
+    repo_root: Path,
+    blueprint: Dict[str, Any],
+    *,
+    force: bool = False,
+) -> Dict[str, Any]:
+    bundle_root = validate_blueprint_bundle(repo_root, blueprint)
+    try:
+        manifest = json.loads((bundle_root / "manifest.json").read_text())
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=500, detail="blueprint manifest.json is malformed") from exc
+    if not isinstance(manifest, dict):
+        raise HTTPException(status_code=500, detail="blueprint manifest.json must be an object")
+    return run_hardware_requirements_validation(
+        manifest,
+        resource_report=runtime_resource_report,
+        force=force,
+    )
+
+
+def runtime_resource_report() -> dict[str, Any]:
+    try:
+        from mn_api import state
+
+        decoded = json.loads(state.client.get_resource())
+    except Exception:
+        return {"nodes": []}
+    return decoded if isinstance(decoded, dict) else {"nodes": []}
 
 
 def _runtime_service_resolver():

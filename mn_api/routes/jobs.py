@@ -19,9 +19,11 @@ from mn_sdk import (
     BlueprintWorkflowProgress,
     make_validation_report,
     prepare_job_submission,
+    run_hardware_requirements_validation,
     run_input_validation,
     validate_input_validation_spec_issues,
     validate_requirements_spec_issues,
+    validate_resource_spec_issues,
     failure_from_event,
     normalize_error,
     workflow_progress_snapshot,
@@ -30,6 +32,7 @@ from mn_sdk import (
 from mn_api import state
 from mn_api.agent_graph import build_agent_graph
 from mn_api.blueprints import cleanup_blueprint_processes_for_job
+from mn_api.blueprints import runtime_resource_report
 from mn_api.bundles import load_uploaded_bundle
 from mn_api.dependencies import require_auth
 from mn_api.errors import handle_grpc_error, validation_problem_response
@@ -121,10 +124,12 @@ def submit_job(req: SubmitJobRequest, _auth=Depends(require_auth)):
 
 
 def _validate_job_bundle(bundle_path: str, manifest_json: str, *, force: bool):
-    if force:
-        return None
     manifest = _decode_manifest(manifest_json)
-    spec_issues = validate_requirements_spec_issues(manifest) + validate_input_validation_spec_issues(manifest)
+    spec_issues = (
+        validate_requirements_spec_issues(manifest)
+        + validate_resource_spec_issues(manifest)
+        + validate_input_validation_spec_issues(manifest)
+    )
     if spec_issues:
         return validation_problem_response(
             make_validation_report(spec_issues),
@@ -133,6 +138,21 @@ def _validate_job_bundle(bundle_path: str, manifest_json: str, *, force: bool):
             title="Manifest validation failed",
             detail="Fix the highlighted manifest fields and submit again.",
         )
+    requirements = run_hardware_requirements_validation(
+        manifest,
+        resource_report=runtime_resource_report,
+        force=force,
+    )
+    if not requirements.get("ok"):
+        return validation_problem_response(
+            requirements,
+            status_code=412,
+            error="requirements_not_met",
+            title="Runtime node required",
+            detail="Add or connect a runtime node that meets this job's hardware requirements, then submit again.",
+        )
+    if force:
+        return None
     result = run_input_validation(Path(bundle_path), manifest)
     if not result.get("ok"):
         return validation_problem_response(
@@ -146,10 +166,12 @@ def _validate_job_bundle(bundle_path: str, manifest_json: str, *, force: bool):
 
 
 def _validate_job_manifest(manifest_json: str, *, force: bool):
-    if force:
-        return None
     manifest = _decode_manifest(manifest_json)
-    spec_issues = validate_requirements_spec_issues(manifest) + validate_input_validation_spec_issues(manifest)
+    spec_issues = (
+        validate_requirements_spec_issues(manifest)
+        + validate_resource_spec_issues(manifest)
+        + validate_input_validation_spec_issues(manifest)
+    )
     if spec_issues:
         return validation_problem_response(
             make_validation_report(spec_issues),
@@ -158,6 +180,21 @@ def _validate_job_manifest(manifest_json: str, *, force: bool):
             title="Manifest validation failed",
             detail="Fix the highlighted manifest fields and submit again.",
         )
+    requirements = run_hardware_requirements_validation(
+        manifest,
+        resource_report=runtime_resource_report,
+        force=force,
+    )
+    if not requirements.get("ok"):
+        return validation_problem_response(
+            requirements,
+            status_code=412,
+            error="requirements_not_met",
+            title="Runtime node required",
+            detail="Add or connect a runtime node that meets this job's hardware requirements, then submit again.",
+        )
+    if force:
+        return None
     validation = run_input_validation(Path.cwd(), manifest)
     if not validation.get("ok"):
         return validation_problem_response(
@@ -1018,10 +1055,13 @@ def _humanize_event_type(event_type: Any) -> str:
     return " ".join(text.split()).capitalize()
 
 
-def _compact_activity_text(value: Any, limit: int = 320) -> str:
+def _compact_activity_text(value: Any, limit: int = 320, *, prefer_tail: bool = False) -> str:
     text = " ".join(str(value or "").split())
     if len(text) <= limit:
         return text
+    if prefer_tail:
+        suffix = text[-max(limit - 15, 0) :].lstrip()
+        return "[truncated] " + suffix
     return text[: max(limit - 15, 0)].rstrip() + " [truncated]"
 
 
@@ -1107,7 +1147,12 @@ def _compact_activity_event(event: dict[str, Any], *, step_id: str = "", agent_i
     for key in ("tool_name", "target", "duration_ms", "result_summary", "details"):
         value = payload.get(key)
         if value not in (None, "", {}):
-            compact[key] = _compact_value(value) if key == "details" else _compact_activity_text(value) if isinstance(value, str) else value
+            if key == "details":
+                compact[key] = _compact_value(value)
+            elif isinstance(value, str):
+                compact[key] = _compact_activity_text(value, prefer_tail=key == "result_summary")
+            else:
+                compact[key] = value
     if payload:
         compact["payload"] = _compact_value(payload)
     if failure:

@@ -31,6 +31,7 @@ from mn_api.blueprints import (
     run_mn_blueprint_run,
     run_mn_blueprint_validate,
     sanitize_blueprint_id,
+    validate_blueprint_hardware_requirements,
     validate_blueprint_inputs,
     validate_blueprint_bundle,
     validate_run_id,
@@ -93,6 +94,8 @@ def validate_blueprint_launch(req: BlueprintLaunchRequest, _auth=Depends(require
     launch = resolve_launch_source(req)
     state.close_client()
     validation = run_mn_blueprint_validate(launch["bundle_root"])
+    if validation.get("ok"):
+        validation = validate_launch_hardware_requirements(launch, force=bool(req.force))
     response = {
         "source": launch["source"],
         "blueprint": launch["blueprint"],
@@ -135,6 +138,18 @@ def run_blueprint_launch(req: BlueprintLaunchRequest, _auth=Depends(require_auth
     force = bool(req.force)
     state.close_client()
     config_overrides = dict(req.config_overwrite or req.config_overrides or {})
+    record_launch_progress(progress_id, "requirements", "running", "Checking runtime hardware requirements.")
+    requirements_validation = validate_launch_hardware_requirements(launch, force=force)
+    if not requirements_validation.get("ok"):
+        record_launch_progress(progress_id, "requirements", "failed", "Runtime hardware requirements are not available.", {"validation": requirements_validation})
+        record_launch_progress(progress_id, "launch", "failed", "Blueprint launch needs a matching runtime node.")
+        return requirements_problem_response(
+            requirements_validation,
+            blueprint=launch["blueprint"],
+            source=launch["source"],
+            progress_id=progress_id,
+        )
+    record_launch_progress(progress_id, "requirements", "completed", "Runtime hardware requirements satisfied.", {"validation": requirements_validation})
     record_launch_progress(progress_id, "model_install", "running", "Ensuring required runtime models are installed.")
     try:
         model_install = install_blueprint_runtime_models(
@@ -253,6 +268,18 @@ def run_blueprint_record(
     env_overrides = runtime_blueprint_environment_overrides()
     force = bool(req.force) if req else False
     state.close_client()
+    record_launch_progress(progress_id, "requirements", "running", "Checking runtime hardware requirements.", {"run_id": run_id})
+    requirements_validation = validate_blueprint_hardware_requirements(repo_root, blueprint, force=force)
+    if not requirements_validation.get("ok"):
+        record_launch_progress(progress_id, "requirements", "failed", "Runtime hardware requirements are not available.", {"run_id": run_id, "validation": requirements_validation})
+        record_launch_progress(progress_id, "launch", "failed", "Blueprint launch needs a matching runtime node.", {"run_id": run_id})
+        return requirements_problem_response(
+            requirements_validation,
+            blueprint=blueprint,
+            run_id=run_id,
+            progress_id=progress_id,
+        )
+    record_launch_progress(progress_id, "requirements", "completed", "Runtime hardware requirements satisfied.", {"run_id": run_id, "validation": requirements_validation})
     record_launch_progress(progress_id, "model_install", "running", "Ensuring required runtime models are installed.")
     try:
         model_install = install_blueprint_runtime_models(
@@ -569,6 +596,39 @@ def submit_uploaded_bundle_launch(launch: dict, req: BlueprintLaunchRequest, val
         "validation": validation,
         "command": run_result.get("command"),
     }
+
+
+def validate_launch_hardware_requirements(launch: dict, *, force: bool = False) -> dict[str, Any]:
+    return validate_blueprint_hardware_requirements(
+        launch["repo_root"],
+        launch["blueprint"],
+        force=force,
+    )
+
+
+def requirements_problem_response(
+    validation: dict,
+    *,
+    blueprint: dict,
+    source: str | None = None,
+    run_id: str | None = None,
+    progress_id: str | None = None,
+) -> JSONResponse:
+    extra: dict[str, Any] = {"blueprint": blueprint}
+    if source:
+        extra["source"] = source
+    if run_id:
+        extra["run_id"] = run_id
+    if progress_id:
+        extra["progress_id"] = progress_id
+    return validation_problem_response(
+        validation,
+        status_code=412,
+        error="requirements_not_met",
+        title="Runtime node required",
+        detail="Add or connect a runtime node that meets this blueprint's hardware requirements, then launch again.",
+        extra=extra,
+    )
 
 
 def model_install_problem_response(
