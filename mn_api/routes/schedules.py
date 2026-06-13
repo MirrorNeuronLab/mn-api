@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import json
-
 from fastapi import APIRouter, Depends, HTTPException
 
 from mn_api import state
 from mn_api.bundles import load_uploaded_bundle
 from mn_api.dependencies import require_auth
 from mn_api.errors import handle_grpc_error
+from mn_api.routes.client_json import client_json_response
 from mn_api.schemas import (
     CreateScheduleRequest,
     DispatchScheduleRequest,
@@ -23,89 +22,69 @@ router = APIRouter(prefix="/api/v1")
 def create_schedule(req: CreateScheduleRequest, _auth=Depends(require_auth)):
     try:
         manifest_json, payloads = _manifest_and_payloads(req)
-        result = state.client.create_schedule(
-            manifest_json,
-            payloads,
-            schedule=req.schedule,
-            source=req.source or {"api": "create_schedule"},
-        )
-        return json.loads(result)
     except HTTPException:
         raise
     except Exception as exc:
         return handle_grpc_error(exc)
 
+    return client_json_response(
+        lambda: state.client.create_schedule(
+            manifest_json,
+            payloads,
+            schedule=req.schedule,
+            source=req.source or {"api": "create_schedule"},
+        ),
+        preserve_http_exceptions=True,
+    )
+
 
 @router.get("/schedules")
 def list_schedules(kind: str | None = None, status: str | None = None, _auth=Depends(require_auth)):
-    try:
-        return json.loads(state.client.list_schedules(kind=kind, status=status))
-    except Exception as exc:
-        return handle_grpc_error(exc)
+    return client_json_response(lambda: state.client.list_schedules(kind=kind, status=status))
 
 
 @router.get("/schedules/{schedule_id}")
 def get_schedule(schedule_id: str, _auth=Depends(require_auth)):
-    try:
-        return json.loads(state.client.get_schedule(schedule_id))
-    except Exception as exc:
-        return handle_grpc_error(exc)
+    return client_json_response(lambda: state.client.get_schedule(schedule_id))
 
 
 @router.patch("/schedules/{schedule_id}")
 def update_schedule(schedule_id: str, req: ScheduleUpdateRequest, _auth=Depends(require_auth)):
-    try:
-        return json.loads(state.client.update_schedule(schedule_id, req.attrs, reason=req.reason))
-    except Exception as exc:
-        return handle_grpc_error(exc)
+    return client_json_response(lambda: state.client.update_schedule(schedule_id, req.attrs, reason=req.reason))
 
 
 @router.post("/schedules/{schedule_id}/pause")
 def pause_schedule(schedule_id: str, req: ScheduleUpdateRequest | None = None, _auth=Depends(require_auth)):
-    try:
-        return json.loads(state.client.pause_schedule(schedule_id, reason=(req.reason if req else "")))
-    except Exception as exc:
-        return handle_grpc_error(exc)
+    return client_json_response(lambda: state.client.pause_schedule(schedule_id, reason=(req.reason if req else "")))
 
 
 @router.post("/schedules/{schedule_id}/resume")
 def resume_schedule(schedule_id: str, req: ScheduleUpdateRequest | None = None, _auth=Depends(require_auth)):
-    try:
-        return json.loads(state.client.resume_schedule(schedule_id, reason=(req.reason if req else "")))
-    except Exception as exc:
-        return handle_grpc_error(exc)
+    return client_json_response(lambda: state.client.resume_schedule(schedule_id, reason=(req.reason if req else "")))
 
 
 @router.delete("/schedules/{schedule_id}")
 def delete_schedule(schedule_id: str, reason: str = "", _auth=Depends(require_auth)):
-    try:
-        return json.loads(state.client.delete_schedule(schedule_id, reason=reason))
-    except Exception as exc:
-        return handle_grpc_error(exc)
+    return client_json_response(lambda: state.client.delete_schedule(schedule_id, reason=reason))
 
 
 @router.post("/schedules/{schedule_id}/dispatch")
 def dispatch_schedule(schedule_id: str, req: DispatchScheduleRequest, _auth=Depends(require_auth)):
-    try:
-        return json.loads(state.client.dispatch_schedule(schedule_id, payload=req.payload, reason=req.reason))
-    except Exception as exc:
-        return handle_grpc_error(exc)
+    return client_json_response(
+        lambda: state.client.dispatch_schedule(schedule_id, payload=req.payload, reason=req.reason)
+    )
 
 
 @router.post("/events")
 def emit_event(req: EmitEventRequest, _auth=Depends(require_auth)):
-    try:
-        return json.loads(state.client.emit_trigger_event(req.event_type, payload=req.payload, source=req.source))
-    except Exception as exc:
-        return handle_grpc_error(exc)
+    return client_json_response(
+        lambda: state.client.emit_trigger_event(req.event_type, payload=req.payload, source=req.source)
+    )
 
 
 @router.get("/events")
 def list_events(limit: int = 100, _auth=Depends(require_auth)):
-    try:
-        return json.loads(state.client.list_trigger_events(limit=limit))
-    except Exception as exc:
-        return handle_grpc_error(exc)
+    return client_json_response(lambda: state.client.list_trigger_events(limit=limit))
 
 
 def _manifest_and_payloads(req: CreateScheduleRequest):

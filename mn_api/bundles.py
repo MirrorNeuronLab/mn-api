@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import tempfile
-from typing import Any, Dict
+from typing import Any
 import zipfile
 
 from fastapi import HTTPException, UploadFile
@@ -11,7 +11,7 @@ from fastapi import HTTPException, UploadFile
 from mn_api.path_utils import inside_path
 
 
-async def save_uploaded_bundle(bundle: UploadFile, upload_root: Path) -> Dict[str, Any]:
+async def save_uploaded_bundle(bundle: UploadFile, upload_root: Path) -> dict[str, Any]:
     if not bundle.filename or not bundle.filename.lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="bundle must be a .zip file")
 
@@ -42,7 +42,7 @@ async def save_uploaded_bundle(bundle: UploadFile, upload_root: Path) -> Dict[st
 
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise HTTPException(status_code=400, detail="bundle manifest.json is malformed") from exc
     if not isinstance(manifest, dict):
         raise HTTPException(status_code=400, detail="bundle manifest.json must be an object")
@@ -53,7 +53,7 @@ async def save_uploaded_bundle(bundle: UploadFile, upload_root: Path) -> Dict[st
     }
 
 
-def load_uploaded_bundle(bundle_path: str, upload_root: Path) -> tuple[str, Dict[str, bytes]]:
+def load_uploaded_bundle(bundle_path: str, upload_root: Path) -> tuple[str, dict[str, bytes]]:
     bundle_root = Path(bundle_path).resolve()
     root = upload_root.resolve()
     if not inside_path(bundle_root, root) or not bundle_root.is_dir():

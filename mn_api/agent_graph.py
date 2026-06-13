@@ -1,20 +1,20 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
 import json
 import logging
 from pathlib import Path
+from typing import Any
 
 
 logger = logging.getLogger("mn-api")
 DISPLAY_KEYS = ("alias", "display_name", "label", "name", "role")
 
 
-def build_agent_graph(job_id: str, details: Dict[str, Any], events: list[Dict[str, Any]]):
+def build_agent_graph(job_id: str, details: dict[str, Any], events: list[dict[str, Any]]):
     agents = details.get("agents", []) or []
     job = details.get("job", {}) or {}
     manifest = job.get("topology") or load_manifest_for_job(job)
-    agent_by_id: Dict[str, Dict[str, Any]] = {}
+    agent_by_id: dict[str, dict[str, Any]] = {}
 
     for agent in agents:
         agent_id = agent.get("agent_id") or agent.get("node_id")
@@ -41,7 +41,7 @@ def build_agent_graph(job_id: str, details: Dict[str, Any], events: list[Dict[st
             )
             _copy_display_metadata(existing, node)
 
-    edge_counts: Dict[tuple[str, str, str], Dict[str, Any]] = {}
+    edge_counts: dict[tuple[str, str, str], dict[str, Any]] = {}
 
     for edge in _manifest_agent_edges(manifest):
         source = edge.get("from_node")
@@ -154,10 +154,10 @@ def build_agent_graph(job_id: str, details: Dict[str, Any], events: list[Dict[st
     }
 
 
-def load_manifest_for_job(job: Dict[str, Any]) -> Dict[str, Any]:
-    manifest_ref = job.get("manifest_ref") or {}
+def load_manifest_for_job(job: dict[str, Any]) -> dict[str, Any]:
+    manifest_ref = job.get("manifest_ref") if isinstance(job.get("manifest_ref"), dict) else {}
     manifest_path = manifest_ref.get("manifest_path")
-    if not manifest_path:
+    if not isinstance(manifest_path, str) or not manifest_path:
         return {}
 
     path = Path(manifest_path)
@@ -165,18 +165,18 @@ def load_manifest_for_job(job: Dict[str, Any]) -> Dict[str, Any]:
         return {}
 
     try:
-        manifest = json.loads(path.read_text())
-    except Exception:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         logger.exception("Failed to load manifest for graph from %s", manifest_path)
         return {}
 
     return manifest if isinstance(manifest, dict) else {}
 
 
-def _manifest_agent_nodes(manifest: Dict[str, Any]) -> list[Dict[str, Any]]:
+def _manifest_agent_nodes(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(manifest, dict):
         return []
-    nodes: list[Dict[str, Any]] = []
+    nodes: list[dict[str, Any]] = []
     agents = manifest.get("agents") if isinstance(manifest.get("agents"), dict) else {}
     agent_nodes = agents.get("nodes") if isinstance(agents.get("nodes"), list) else []
     nodes.extend(node for node in agent_nodes if isinstance(node, dict))
@@ -190,7 +190,7 @@ def _manifest_agent_nodes(manifest: Dict[str, Any]) -> list[Dict[str, Any]]:
     return nodes
 
 
-def _manifest_agent_edges(manifest: Dict[str, Any]) -> list[Dict[str, Any]]:
+def _manifest_agent_edges(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(manifest, dict):
         return []
     agents = manifest.get("agents") if isinstance(manifest.get("agents"), dict) else {}
@@ -203,7 +203,7 @@ def _manifest_agent_edges(manifest: Dict[str, Any]) -> list[Dict[str, Any]]:
     return []
 
 
-def event_message_summary(event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def event_message_summary(event: dict[str, Any]) -> dict[str, Any] | None:
     payload = event.get("payload")
     if event.get("type") == "agent_message_received" and isinstance(payload, dict):
         return payload
@@ -221,11 +221,11 @@ def event_message_summary(event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return None
 
 
-def ensure_graph_agent(agent_by_id: Dict[str, Dict[str, Any]], agent_id: str):
+def ensure_graph_agent(agent_by_id: dict[str, dict[str, Any]], agent_id: str):
     agent_by_id.setdefault(agent_id, _graph_agent_defaults(agent_id))
 
 
-def _graph_agent_defaults(agent_id: str) -> Dict[str, Any]:
+def _graph_agent_defaults(agent_id: str) -> dict[str, Any]:
     if agent_id == "runtime":
         return {
             "agent_id": agent_id,
@@ -249,7 +249,7 @@ def _graph_agent_defaults(agent_id: str) -> Dict[str, Any]:
     }
 
 
-def _normalize_infrastructure_agent(agent_id: str, agent: Dict[str, Any]) -> None:
+def _normalize_infrastructure_agent(agent_id: str, agent: dict[str, Any]) -> None:
     if agent_id != "runtime":
         return
     agent["agent_type"] = "system"
@@ -260,13 +260,13 @@ def _normalize_infrastructure_agent(agent_id: str, agent: Dict[str, Any]) -> Non
         agent["assigned_node"] = "system/runtime"
 
 
-def _copy_display_metadata(target: Dict[str, Any], source: Dict[str, Any]) -> None:
+def _copy_display_metadata(target: dict[str, Any], source: dict[str, Any]) -> None:
     for key in DISPLAY_KEYS:
         if source.get(key) not in (None, "") and target.get(key) in (None, ""):
             target[key] = source[key]
 
 
-def _graph_agent_label(agent_id: str, agent: Dict[str, Any]) -> str:
+def _graph_agent_label(agent_id: str, agent: dict[str, Any]) -> str:
     for key in ("alias", "display_name", "label", "role"):
         value = agent.get(key)
         if isinstance(value, str) and value.strip() and value.strip().lower() != "unknown":
@@ -276,7 +276,7 @@ def _graph_agent_label(agent_id: str, agent: Dict[str, Any]) -> str:
     return agent_id
 
 
-def _graph_assigned_node(agent_id: str, agent: Dict[str, Any]) -> str:
+def _graph_assigned_node(agent_id: str, agent: dict[str, Any]) -> str:
     value = agent.get("assigned_node")
     if isinstance(value, str) and value.strip() and value.strip().lower() not in {"unknown", "unassigned"}:
         return value.strip()

@@ -36,7 +36,7 @@ def read_json_file(path: Path, *, raise_on_error: bool = False, error_detail: st
         return {}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         if raise_on_error:
             raise RuntimeError(error_detail or f"failed to read {path.name}") from exc
         return {}

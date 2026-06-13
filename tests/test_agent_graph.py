@@ -111,9 +111,13 @@ class TestAgentGraphServices(unittest.TestCase):
             missing = Path(tmpdir) / "missing.json"
             scalar = Path(tmpdir) / "scalar.json"
             malformed = Path(tmpdir) / "malformed.json"
-            scalar.write_text(json.dumps(["not", "an", "object"]))
-            malformed.write_text("{not json")
+            invalid_encoding = Path(tmpdir) / "invalid-encoding.json"
+            scalar.write_text(json.dumps(["not", "an", "object"]), encoding="utf-8")
+            malformed.write_text("{not json", encoding="utf-8")
+            invalid_encoding.write_bytes(b"\xff")
 
             self.assertEqual(load_manifest_for_job({"manifest_ref": {"manifest_path": str(missing)}}), {})
             self.assertEqual(load_manifest_for_job({"manifest_ref": {"manifest_path": str(scalar)}}), {})
             self.assertEqual(load_manifest_for_job({"manifest_ref": {"manifest_path": str(malformed)}}), {})
+            self.assertEqual(load_manifest_for_job({"manifest_ref": {"manifest_path": str(invalid_encoding)}}), {})
+            self.assertEqual(load_manifest_for_job({"manifest_ref": "not-a-dict"}), {})
