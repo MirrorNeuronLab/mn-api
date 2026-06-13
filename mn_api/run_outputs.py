@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-import json
 import re
 import urllib.parse
 from pathlib import Path
 from typing import Any
 
 from mn_api.artifacts import ARTIFACT_CONTENT_TYPES, file_sha256
+from mn_api.run_store import first_string as _first_string
+from mn_api.run_store import read_json_file as _read_json
 
 
 OUTPUT_CONTENT_TYPES = ARTIFACT_CONTENT_TYPES
@@ -118,23 +119,6 @@ def _recorded_output_path(item: dict[str, Any]) -> Path | None:
     if not value:
         return None
     return Path(value).expanduser().resolve()
-
-
-def _read_json(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {}
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return value if isinstance(value, dict) else {}
-
-
-def _first_string(*values: Any) -> str:
-    for value in values:
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return ""
 
 
 def _slug(value: str) -> str:

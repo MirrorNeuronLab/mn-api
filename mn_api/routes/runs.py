@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
-import re
 import subprocess
 import sys
 import time
@@ -20,47 +18,33 @@ from mn_api import state
 from mn_api.artifacts import artifact_content_type, artifact_ref, list_artifact_files
 from mn_api.dependencies import require_auth
 from mn_api.run_outputs import output_content_type, output_path_by_index, output_refs
+from mn_api.run_store import first_string as _first_string
+from mn_api.run_store import read_json_file as _read_json_object
+from mn_api.run_store import run_dir_from_id
+from mn_api.run_store import runs_root as _runs_root
 
 
 router = APIRouter(prefix="/api/v1")
-_SAFE_RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$")
-
-
-def _runs_root() -> Path:
-    return Path(os.getenv("MN_RUNS_ROOT") or "~/.mn/runs").expanduser().resolve()
 
 
 def _run_dir(run_id: str) -> Path:
-    if not _SAFE_RUN_ID.match(run_id):
-        raise HTTPException(status_code=400, detail="invalid run id")
-    root = _runs_root()
-    run_dir = (root / run_id).resolve()
-    if not run_dir.is_relative_to(root):
+    run_dir = run_dir_from_id(run_id, must_exist=False)
+    if run_dir is None:
         raise HTTPException(status_code=400, detail="invalid run id")
     return run_dir
 
 
 def _read_json_file(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {}
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise HTTPException(status_code=500, detail=f"failed to read {path.name}") from exc
-    return payload if isinstance(payload, dict) else {}
+        return _read_json_object(path, raise_on_error=True, error_detail=f"failed to read {path.name}")
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 def _read_required_json_file(path: Path, label: str) -> dict[str, Any]:
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"{label} not found")
     return _read_json_file(path)
-
-
-def _first_string(*values: Any) -> str:
-    for value in values:
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return ""
 
 
 def _artifact_ref(run_id: str, path: Path, run_dir: Path) -> dict[str, Any]:

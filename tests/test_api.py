@@ -1394,6 +1394,20 @@ class TestAPI(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 400)
 
+    def test_upload_bundle_rejects_malformed_manifest(self):
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as zip_file:
+            zip_file.writestr("manifest.json", "{not json")
+            zip_file.writestr("payloads/a.txt", "hello")
+        archive.seek(0)
+
+        response = self.client.post(
+            "/api/v1/bundles/upload",
+            files={"bundle": ("bundle.zip", archive, "application/zip")},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["detail"], "bundle manifest.json is malformed")
+
     def test_get_run_ui_reads_saved_run_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             runs_root = Path(tmp)

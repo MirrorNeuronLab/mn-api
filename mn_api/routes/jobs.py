@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import gzip
 import json
-import os
 import queue
 import re
 import threading
@@ -36,34 +34,22 @@ from mn_api.blueprints import runtime_resource_report
 from mn_api.bundles import load_uploaded_bundle
 from mn_api.dependencies import require_auth
 from mn_api.errors import handle_grpc_error, validation_problem_response
+from mn_api.job_activity import compact_event as _compact_event
+from mn_api.job_activity import compact_value as _compact_value
+from mn_api.job_activity import enrich_workflow_progress_activity as _enrich_workflow_progress_activity
 from mn_api.run_outputs import output_refs
+from mn_api.run_store import first_string as _first_string
+from mn_api.run_store import read_json_file as _read_json_file
+from mn_api.run_store import read_jsonl_file as _read_jsonl_file
+from mn_api.run_store import run_dir_from_id as _run_dir_from_id
+from mn_api.run_store import runs_root as _runs_root
+from mn_api.run_store import stream_jsonl_files as _stream_jsonl_files
 from mn_api.schemas import SubmitJobRequest
 
 
 router = APIRouter(prefix="/api/v1")
-_SAFE_RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$")
 _MAX_COMPACT_STRING = 2000
 _MAX_COMPACT_LIST = 25
-_MAX_COMPACT_DEPTH = 5
-_MAX_ACTIVITY_EVENTS = 8
-_BLOB_KEYS = {
-    "logs",
-    "log",
-    "stdout",
-    "stderr",
-    "content",
-    "file_data",
-    "fileData",
-    "pdf_bytes",
-    "pdfBytes",
-    "bytes",
-    "data_uri",
-    "base64",
-    "payloads_bytes",
-    "final_artifact",
-    "finalArtifact",
-    "result",
-}
 
 
 @router.post("/jobs")
@@ -286,10 +272,6 @@ def get_job(job_id: str, include: str = Query("compact"), _auth=Depends(require_
         return handle_grpc_error(exc)
 
 
-def _runs_root() -> Path:
-    return Path(os.getenv("MN_RUNS_ROOT") or "~/.mn/runs").expanduser().resolve()
-
-
 def _normalized_status(value: Any) -> str:
     return str(value or "").strip().lower()
 
@@ -340,65 +322,6 @@ def _reconcile_job_list_statuses(payload: Any) -> Any:
             for job in jobs
         ],
     }
-
-
-def _read_json_file(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {}
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return payload if isinstance(payload, dict) else {}
-
-
-def _read_jsonl_file(path: Path, *, limit: int = 5000) -> list[dict[str, Any]]:
-    if not path.exists() or limit <= 0:
-        return []
-    events: deque[dict[str, Any]] = deque(maxlen=limit)
-    try:
-        opener = gzip.open if path.suffix == ".gz" else Path.open
-        with opener(path, "rt", encoding="utf-8") as handle:
-            for line in handle:
-                stripped = line.strip()
-                if not stripped:
-                    continue
-                try:
-                    event = json.loads(stripped)
-                except json.JSONDecodeError:
-                    event = {"type": "unparseable_event", "payload": {"line": stripped[:_MAX_COMPACT_STRING]}}
-                if isinstance(event, dict):
-                    events.append(event)
-    except OSError:
-        return []
-    return list(events)
-
-
-def _stream_jsonl_files(run_dir: Path, file_name: str) -> list[Path]:
-    paths: list[Path] = []
-    index_path = run_dir / f"{Path(file_name).stem}.index.json"
-    if index_path.exists():
-        index = _read_json_file(index_path)
-        for segment in index.get("segments") or []:
-            if isinstance(segment, dict) and segment.get("path"):
-                segment_path = run_dir / str(segment["path"])
-                if not segment_path.exists() and segment_path.suffix != ".gz":
-                    compressed = segment_path.with_suffix(segment_path.suffix + ".gz")
-                    if compressed.exists():
-                        segment_path = compressed
-                paths.append(segment_path)
-    paths.append(run_dir / file_name)
-    return paths
-
-
-def _run_dir_from_id(run_id: str | None) -> Path | None:
-    if not run_id or not _SAFE_RUN_ID.match(run_id):
-        return None
-    root = _runs_root()
-    candidate = (root / run_id).resolve()
-    if not candidate.is_relative_to(root) or not candidate.exists():
-        return None
-    return candidate
 
 
 def _job_record_matches(job_record: dict[str, Any], job_id: str) -> bool:
@@ -462,13 +385,6 @@ def _merged_job_events(job_id: str, *, limit: int = 5000) -> tuple[list[dict[str
     return events, stream_error
 
 
-def _first_string(*values: Any) -> str:
-    for value in values:
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return ""
-
-
 def _extract_nested_string(value: Any, *keys: str) -> str:
     if isinstance(value, dict):
         for key in keys:
@@ -485,79 +401,6 @@ def _extract_nested_string(value: Any, *keys: str) -> str:
             if found:
                 return found
     return ""
-
-
-def _compact_blob(value: Any) -> dict[str, Any]:
-    if isinstance(value, str):
-        return {
-            "omitted": True,
-            "type": "string",
-            "chars": len(value),
-            "preview": value[:200],
-        }
-    if isinstance(value, bytes):
-        return {"omitted": True, "type": "bytes", "bytes": len(value)}
-    if isinstance(value, dict):
-        return {"omitted": True, "type": "object", "keys": sorted(str(key) for key in value.keys())[:25]}
-    if isinstance(value, list):
-        return {"omitted": True, "type": "array", "items": len(value)}
-    return {"omitted": True, "type": type(value).__name__}
-
-
-def _compact_value(value: Any, depth: int = 0) -> Any:
-    if depth > _MAX_COMPACT_DEPTH:
-        return _compact_blob(value)
-    if isinstance(value, str):
-        if len(value) > _MAX_COMPACT_STRING:
-            return {
-                "truncated": True,
-                "chars": len(value),
-                "preview": value[:_MAX_COMPACT_STRING],
-            }
-        return value
-    if isinstance(value, (int, float, bool)) or value is None:
-        return value
-    if isinstance(value, bytes):
-        return {"omitted": True, "type": "bytes", "bytes": len(value)}
-    if isinstance(value, list):
-        items = [_compact_value(item, depth + 1) for item in value[:_MAX_COMPACT_LIST]]
-        if len(value) > _MAX_COMPACT_LIST:
-            items.append({"omitted_items": len(value) - _MAX_COMPACT_LIST})
-        return items
-    if isinstance(value, dict):
-        compact: dict[str, Any] = {}
-        for key, item in value.items():
-            key_text = str(key)
-            if key_text in _BLOB_KEYS:
-                compact[key_text] = _compact_blob(item)
-            else:
-                compact[key_text] = _compact_value(item, depth + 1)
-        return compact
-    return str(value)
-
-
-def _compact_event(event: dict[str, Any]) -> dict[str, Any]:
-    failure = failure_from_event(event)
-    compact = {
-        "type": event.get("type"),
-        "timestamp": event.get("timestamp") or event.get("ts"),
-        "agent_id": event.get("agent_id") or event.get("node_id"),
-        "status": event.get("status"),
-    }
-    if failure:
-        compact["failure"] = {
-            "schema_version": failure.get("schema_version"),
-            "code": failure.get("code"),
-            "desc": failure.get("desc"),
-            "severity": failure.get("severity"),
-            "details": _compact_value(failure.get("details")),
-            "remediation": failure.get("remediation"),
-            "links": failure.get("links"),
-        }
-    for key in ("message", "payload", "sandbox", "error", "reason"):
-        if key in event:
-            compact[key] = _compact_value(event[key])
-    return {key: value for key, value in compact.items() if value not in (None, "")}
 
 
 def _infer_status(events: list[dict[str, Any]], stored_job: dict[str, Any], run_record: dict[str, Any]) -> str:
@@ -937,245 +780,6 @@ def _merge_events(*event_groups: list[dict[str, Any]], limit: int = 5000) -> lis
             index += 1
     merged.sort(key=lambda item: (str(item[1].get("timestamp") or item[1].get("ts") or ""), item[0]))
     return [event for _index, event in merged[-limit:]]
-
-
-def _event_payload(event: dict[str, Any]) -> dict[str, Any]:
-    payload = event.get("payload")
-    return payload if isinstance(payload, dict) else {}
-
-
-def _event_step_id(event: dict[str, Any]) -> str:
-    payload = _event_payload(event)
-    return _first_string(
-        payload.get("step"),
-        payload.get("step_id"),
-        payload.get("phase"),
-        payload.get("phase_id"),
-        event.get("step"),
-        event.get("step_id"),
-        event.get("phase"),
-        event.get("phase_id"),
-    )
-
-
-def _event_agent_id(event: dict[str, Any]) -> str:
-    payload = _event_payload(event)
-    return _first_string(
-        payload.get("worker"),
-        payload.get("agent_id"),
-        payload.get("node_id"),
-        event.get("worker"),
-        event.get("agent_id"),
-        event.get("node_id"),
-    )
-
-
-def _humanize_event_type(event_type: Any) -> str:
-    text = re.sub(r"[_-]+", " ", str(event_type or "")).strip()
-    return " ".join(text.split()).capitalize()
-
-
-def _compact_activity_text(value: Any, limit: int = 320, *, prefer_tail: bool = False) -> str:
-    text = " ".join(str(value or "").split())
-    if len(text) <= limit:
-        return text
-    if prefer_tail:
-        suffix = text[-max(limit - 15, 0) :].lstrip()
-        return "[truncated] " + suffix
-    return text[: max(limit - 15, 0)].rstrip() + " [truncated]"
-
-
-def _event_category(event: dict[str, Any], payload: dict[str, Any], failure: dict[str, Any] | None = None) -> str:
-    category = _first_string(payload.get("category"), event.get("category"))
-    if category in {"agent", "tool", "system", "artifact", "error"}:
-        return category
-    event_type = str(event.get("type") or "").lower()
-    if failure or "failed" in event_type or "error" in event_type or "timed_out" in event_type or "retry" in event_type:
-        return "error"
-    if event_type.startswith("tool_") or "tool_call" in event_type:
-        return "tool"
-    if event_type in {"artifact_written"} or "artifact" in event_type:
-        return "artifact"
-    if event_type.startswith("docker_worker_") or event_type.startswith("executor_") or event_type.startswith("workflow_") or event_type.startswith("sandbox_"):
-        return "system"
-    if event_type.startswith("financial_") or event_type in {"agent_activity", "blueprint_phase_started", "blueprint_phase_completed"}:
-        return "agent"
-    return "system"
-
-
-def _activity_message(event: dict[str, Any], *, step_id: str = "", agent_id: str = "") -> str:
-    event_type = str(event.get("type") or "")
-    payload = _event_payload(event)
-    failure = failure_from_event(event)
-    message = _first_string(
-        payload.get("message"),
-        event.get("message"),
-        payload.get("result_summary"),
-        payload.get("working_on"),
-        payload.get("task"),
-        payload.get("reason"),
-        event.get("reason"),
-        payload.get("status_reason"),
-        payload.get("status"),
-        event.get("status"),
-    )
-    if message:
-        return _compact_activity_text(message)
-    if failure:
-        return _compact_activity_text(_first_string(failure.get("desc"), failure.get("code"), "Failure"))
-    normalized = re.sub(r"[^a-z0-9]+", "_", event_type.lower()).strip("_")
-    if normalized == "docker_worker_build_started":
-        return "DockerWorker image build started"
-    if normalized == "docker_worker_build_completed":
-        return "DockerWorker image build completed"
-    if normalized == "docker_worker_build_failed":
-        return "DockerWorker image build failed"
-    if normalized == "docker_worker_command_started":
-        return "DockerWorker command started"
-    if normalized == "docker_worker_command_completed":
-        return "DockerWorker command completed"
-    if normalized == "docker_worker_command_timed_out":
-        return "DockerWorker command timed out"
-    if normalized in {"workflow_step_attempt_completed", "sandbox_job_completed"}:
-        return f"Agent completed: {agent_id or _event_agent_id(event) or 'unknown'}"
-    if normalized in {"workflow_worker_started", "workflow_step_attempt_started"}:
-        return f"Agent working: {agent_id or _event_agent_id(event) or 'unknown'}"
-    if normalized in {"workflow_step_completed", "blueprint_phase_completed"}:
-        return f"Step completed: {step_id or _event_step_id(event) or 'step'}"
-    if normalized in {"workflow_step_started", "blueprint_phase_started"}:
-        return f"Step started: {step_id or _event_step_id(event) or 'step'}"
-    if normalized in {"workflow_step_attempt_retry_scheduled", "workflow_step_attempt_timed_out"}:
-        return f"Retry pending: {step_id or _event_step_id(event) or 'step'}"
-    if normalized == "workflow_step_blocked":
-        return f"Blocked: {step_id or _event_step_id(event) or 'step'}"
-    return _humanize_event_type(event_type or "event")
-
-
-def _compact_activity_event(event: dict[str, Any], *, step_id: str = "", agent_id: str = "") -> dict[str, Any]:
-    payload = _event_payload(event)
-    failure = failure_from_event(event)
-    category = _event_category(event, payload, failure)
-    compact = {
-        "timestamp": event.get("timestamp") or event.get("ts"),
-        "type": event.get("type"),
-        "category": category,
-        "step_id": step_id or _event_step_id(event),
-        "agent_id": agent_id or _event_agent_id(event),
-        "status": _first_string(event.get("status"), payload.get("status")),
-        "message": _activity_message(event, step_id=step_id, agent_id=agent_id),
-    }
-    for key in ("tool_name", "target", "duration_ms", "result_summary", "details"):
-        value = payload.get(key)
-        if value not in (None, "", {}):
-            if key == "details":
-                compact[key] = _compact_value(value)
-            elif isinstance(value, str):
-                compact[key] = _compact_activity_text(value, prefer_tail=key == "result_summary")
-            else:
-                compact[key] = value
-    if payload:
-        compact["payload"] = _compact_value(payload)
-    if failure:
-        compact["failure"] = {
-            "code": failure.get("code"),
-            "desc": _compact_activity_text(failure.get("desc")),
-            "severity": failure.get("severity"),
-        }
-    return {key: value for key, value in compact.items() if value not in (None, "")}
-
-
-def _agent_ids_match(known: str, observed: str) -> bool:
-    if known == observed:
-        return True
-    known_tail = known.split(":")[-1]
-    observed_tail = observed.split(":")[-1]
-    return known_tail == observed_tail or known.endswith(f":{observed}") or observed.endswith(f":{known}")
-
-
-def _agent_step_id(agent_to_step: dict[str, str], agent_id: str) -> str:
-    if not agent_id:
-        return ""
-    if agent_id in agent_to_step:
-        return agent_to_step[agent_id]
-    for known_agent_id, step_id in agent_to_step.items():
-        if _agent_ids_match(known_agent_id, agent_id):
-            return step_id
-    return ""
-
-
-def _enrich_workflow_progress_activity(snapshot: dict[str, Any], events: list[dict[str, Any]]) -> None:
-    steps = snapshot.get("steps")
-    if not isinstance(steps, list) or not steps:
-        return
-
-    steps_by_id: dict[str, dict[str, Any]] = {}
-    agent_to_step: dict[str, str] = {}
-    for step in steps:
-        if not isinstance(step, dict):
-            continue
-        step_id = _first_string(step.get("id"))
-        if not step_id:
-            continue
-        steps_by_id[step_id] = step
-        agents = step.get("agents")
-        if isinstance(agents, list):
-            for agent in agents:
-                if not isinstance(agent, dict):
-                    continue
-                agent_id = _first_string(agent.get("id"), agent.get("agent_id"))
-                if agent_id:
-                    agent_to_step[agent_id] = step_id
-
-    step_events: dict[str, list[dict[str, Any]]] = {step_id: [] for step_id in steps_by_id}
-    agent_events: dict[tuple[str, str], list[dict[str, Any]]] = {}
-    for event in events:
-        if not isinstance(event, dict):
-            continue
-        step_id = _event_step_id(event)
-        agent_id = _event_agent_id(event)
-        if step_id not in steps_by_id and agent_id:
-            step_id = _agent_step_id(agent_to_step, agent_id)
-        if not step_id or step_id not in steps_by_id:
-            continue
-        compact = _compact_activity_event(event, step_id=step_id, agent_id=agent_id)
-        step_events.setdefault(step_id, []).append(compact)
-        if agent_id:
-            agent_events.setdefault((step_id, agent_id), []).append(compact)
-
-    for step_id, step in steps_by_id.items():
-        recent = step_events.get(step_id, [])[-_MAX_ACTIVITY_EVENTS:]
-        if recent:
-            step["recent_events"] = recent
-            step["last_activity"] = recent[-1]
-            step["activity_summary"] = _first_string(recent[-1].get("message"), recent[-1].get("type"))
-        agents = step.get("agents")
-        if not isinstance(agents, list):
-            continue
-        for agent in agents:
-            if not isinstance(agent, dict):
-                continue
-            agent_id = _first_string(agent.get("id"), agent.get("agent_id"))
-            if not agent_id:
-                continue
-            recent_agent_events: list[dict[str, Any]] = []
-            for (event_step_id, event_agent_id), values in agent_events.items():
-                if event_step_id == step_id and _agent_ids_match(agent_id, event_agent_id):
-                    recent_agent_events.extend(values)
-            recent_agent_events = recent_agent_events[-_MAX_ACTIVITY_EVENTS:]
-            if recent_agent_events:
-                agent["recent_events"] = recent_agent_events
-                agent["last_activity"] = recent_agent_events[-1]
-                agent["activity_summary"] = _first_string(
-                    recent_agent_events[-1].get("message"),
-                    recent_agent_events[-1].get("type"),
-                )
-
-    current_step = snapshot.get("current_step")
-    if isinstance(current_step, dict):
-        step_id = _first_string(current_step.get("id"))
-        enriched = steps_by_id.get(step_id)
-        if enriched:
-            snapshot["current_step"] = {**enriched, "current": current_step.get("current", enriched.get("current", True))}
 
 
 def _apply_default_assigned_node(snapshot: dict[str, Any], details: dict[str, Any]) -> None:

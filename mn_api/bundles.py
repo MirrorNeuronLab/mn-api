@@ -40,9 +40,16 @@ async def save_uploaded_bundle(bundle: UploadFile, upload_root: Path) -> Dict[st
             detail="bundle zip must contain manifest.json and payloads/",
         )
 
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="bundle manifest.json is malformed") from exc
+    if not isinstance(manifest, dict):
+        raise HTTPException(status_code=400, detail="bundle manifest.json must be an object")
+
     return {
         "bundle_path": str(bundle_root),
-        "manifest": json.loads(manifest_path.read_text(encoding="utf-8")),
+        "manifest": manifest,
     }
 
 

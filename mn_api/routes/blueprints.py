@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import os
 import re
@@ -46,6 +47,11 @@ from mn_api.schemas import BlueprintLaunchRequest, BlueprintRunRequest
 router = APIRouter(prefix="/api/v1")
 PROGRESS_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,220}$")
 TERMINAL_LAUNCH_PROGRESS_STATUSES = {"completed", "failed"}
+
+
+@dataclass(frozen=True)
+class LaunchPreflight:
+    model_install: dict[str, Any]
 
 
 @router.get("/blueprints")
@@ -138,44 +144,17 @@ def run_blueprint_launch(req: BlueprintLaunchRequest, _auth=Depends(require_auth
     force = bool(req.force)
     state.close_client()
     config_overrides = dict(req.config_overwrite or req.config_overrides or {})
-    record_launch_progress(progress_id, "requirements", "running", "Checking runtime hardware requirements.")
-    requirements_validation = validate_launch_hardware_requirements(launch, force=force)
-    if not requirements_validation.get("ok"):
-        record_launch_progress(progress_id, "requirements", "failed", "Runtime hardware requirements are not available.", {"validation": requirements_validation})
-        record_launch_progress(progress_id, "launch", "failed", "Blueprint launch needs a matching runtime node.")
-        return requirements_problem_response(
-            requirements_validation,
-            blueprint=launch["blueprint"],
-            source=launch["source"],
-            progress_id=progress_id,
-        )
-    record_launch_progress(progress_id, "requirements", "completed", "Runtime hardware requirements satisfied.", {"validation": requirements_validation})
-    record_launch_progress(progress_id, "model_install", "running", "Ensuring required runtime models are installed.")
-    try:
-        model_install = install_blueprint_runtime_models(
-            launch["repo_root"],
-            launch["blueprint"],
-            force=force,
-            config_overrides=config_overrides,
-        )
-    except HTTPException:
-        record_launch_progress(progress_id, "model_install", "failed", "Runtime model install failed.")
-        record_launch_progress(progress_id, "launch", "failed", "Blueprint launch failed before validation.")
-        raise
-    except Exception as exc:
-        record_launch_progress(progress_id, "model_install", "failed", str(exc))
-        record_launch_progress(progress_id, "launch", "failed", "Blueprint launch failed before validation.")
-        raise
-    if not model_install.get("ok", True):
-        record_launch_progress(progress_id, "model_install", "failed", "Runtime model install failed.", {"model_install": model_install})
-        record_launch_progress(progress_id, "launch", "failed", "Blueprint launch failed before validation.")
-        return model_install_problem_response(
-            model_install,
-            blueprint=launch["blueprint"],
-            source=launch["source"],
-            progress_id=progress_id,
-        )
-    record_launch_progress(progress_id, "model_install", "completed", model_install_progress_message(model_install), {"model_install": model_install})
+    preflight = run_launch_preflight(
+        launch["repo_root"],
+        launch["blueprint"],
+        progress_id=progress_id,
+        force=force,
+        config_overrides=config_overrides,
+        source=launch["source"],
+    )
+    if isinstance(preflight, JSONResponse):
+        return preflight
+    model_install = preflight.model_install
     validation = {"ok": True, "status": "skipped" if force else "passed", "issues": [], "errors": []}
     if not force:
         record_launch_progress(progress_id, "validation", "running", "Validating blueprint.")
@@ -268,39 +247,17 @@ def run_blueprint_record(
     env_overrides = runtime_blueprint_environment_overrides()
     force = bool(req.force) if req else False
     state.close_client()
-    record_launch_progress(progress_id, "requirements", "running", "Checking runtime hardware requirements.", {"run_id": run_id})
-    requirements_validation = validate_blueprint_hardware_requirements(repo_root, blueprint, force=force)
-    if not requirements_validation.get("ok"):
-        record_launch_progress(progress_id, "requirements", "failed", "Runtime hardware requirements are not available.", {"run_id": run_id, "validation": requirements_validation})
-        record_launch_progress(progress_id, "launch", "failed", "Blueprint launch needs a matching runtime node.", {"run_id": run_id})
-        return requirements_problem_response(
-            requirements_validation,
-            blueprint=blueprint,
-            run_id=run_id,
-            progress_id=progress_id,
-        )
-    record_launch_progress(progress_id, "requirements", "completed", "Runtime hardware requirements satisfied.", {"run_id": run_id, "validation": requirements_validation})
-    record_launch_progress(progress_id, "model_install", "running", "Ensuring required runtime models are installed.")
-    try:
-        model_install = install_blueprint_runtime_models(
-            repo_root,
-            blueprint,
-            force=force,
-            config_overrides=config_overrides,
-        )
-    except HTTPException:
-        record_launch_progress(progress_id, "model_install", "failed", "Runtime model install failed.")
-        record_launch_progress(progress_id, "launch", "failed", "Blueprint launch failed before validation.", {"run_id": run_id})
-        raise
-    except Exception as exc:
-        record_launch_progress(progress_id, "model_install", "failed", str(exc))
-        record_launch_progress(progress_id, "launch", "failed", "Blueprint launch failed before validation.", {"run_id": run_id})
-        raise
-    if not model_install.get("ok", True):
-        record_launch_progress(progress_id, "model_install", "failed", "Runtime model install failed.", {"model_install": model_install})
-        record_launch_progress(progress_id, "launch", "failed", "Blueprint launch failed before validation.", {"run_id": run_id})
-        return model_install_problem_response(model_install, blueprint=blueprint, run_id=run_id, progress_id=progress_id)
-    record_launch_progress(progress_id, "model_install", "completed", model_install_progress_message(model_install), {"model_install": model_install})
+    preflight = run_launch_preflight(
+        repo_root,
+        blueprint,
+        progress_id=progress_id,
+        force=force,
+        config_overrides=config_overrides,
+        run_id=run_id,
+    )
+    if isinstance(preflight, JSONResponse):
+        return preflight
+    model_install = preflight.model_install
     record_launch_progress(progress_id, "cleanup", "running", "Cleaning up stale blueprint run resources.")
     cleanup_stale_blueprint_run_processes(
         repo_root,
@@ -583,19 +540,112 @@ def model_install_progress_message(model_install: dict[str, Any]) -> str:
     return "Runtime models ready: " + ", ".join(parts) + "."
 
 
-def submit_uploaded_bundle_launch(launch: dict, req: BlueprintLaunchRequest, validation: dict):
-    run_result = run_launch_with_mn_cli(launch, req)
-    if not run_result.get("ok"):
-        raise HTTPException(status_code=500, detail=run_result.get("error") or "mn blueprint run failed")
-    return {
-        "job_id": run_result.get("job_id"),
-        "id": run_result.get("job_id"),
-        "run_id": run_result.get("run_id"),
-        "status": "pending",
-        "blueprint": launch["blueprint"],
-        "validation": validation,
-        "command": run_result.get("command"),
-    }
+def run_launch_preflight(
+    repo_root: Path,
+    blueprint: dict[str, Any],
+    *,
+    progress_id: str | None,
+    force: bool,
+    config_overrides: dict[str, Any],
+    source: str | None = None,
+    run_id: str | None = None,
+) -> LaunchPreflight | JSONResponse:
+    run_details = {"run_id": run_id} if run_id else None
+    record_launch_progress(
+        progress_id,
+        "requirements",
+        "running",
+        "Checking runtime hardware requirements.",
+        run_details,
+    )
+    requirements_validation = validate_blueprint_hardware_requirements(repo_root, blueprint, force=force)
+    if not requirements_validation.get("ok"):
+        failed_details = {"validation": requirements_validation}
+        if run_id:
+            failed_details["run_id"] = run_id
+        record_launch_progress(
+            progress_id,
+            "requirements",
+            "failed",
+            "Runtime hardware requirements are not available.",
+            failed_details,
+        )
+        record_launch_progress(
+            progress_id,
+            "launch",
+            "failed",
+            "Blueprint launch needs a matching runtime node.",
+            run_details,
+        )
+        return requirements_problem_response(
+            requirements_validation,
+            blueprint=blueprint,
+            source=source,
+            run_id=run_id,
+            progress_id=progress_id,
+        )
+    completed_details = {"validation": requirements_validation}
+    if run_id:
+        completed_details["run_id"] = run_id
+    record_launch_progress(
+        progress_id,
+        "requirements",
+        "completed",
+        "Runtime hardware requirements satisfied.",
+        completed_details,
+    )
+    record_launch_progress(progress_id, "model_install", "running", "Ensuring required runtime models are installed.")
+    try:
+        model_install = install_blueprint_runtime_models(
+            repo_root,
+            blueprint,
+            force=force,
+            config_overrides=config_overrides,
+        )
+    except HTTPException:
+        record_launch_progress(progress_id, "model_install", "failed", "Runtime model install failed.")
+        record_launch_progress(
+            progress_id,
+            "launch",
+            "failed",
+            "Blueprint launch failed before validation.",
+            run_details,
+        )
+        raise
+    except Exception as exc:
+        record_launch_progress(progress_id, "model_install", "failed", str(exc))
+        record_launch_progress(
+            progress_id,
+            "launch",
+            "failed",
+            "Blueprint launch failed before validation.",
+            run_details,
+        )
+        raise
+    if not model_install.get("ok", True):
+        record_launch_progress(progress_id, "model_install", "failed", "Runtime model install failed.", {"model_install": model_install})
+        record_launch_progress(
+            progress_id,
+            "launch",
+            "failed",
+            "Blueprint launch failed before validation.",
+            run_details,
+        )
+        return model_install_problem_response(
+            model_install,
+            blueprint=blueprint,
+            source=source,
+            run_id=run_id,
+            progress_id=progress_id,
+        )
+    record_launch_progress(
+        progress_id,
+        "model_install",
+        "completed",
+        model_install_progress_message(model_install),
+        {"model_install": model_install},
+    )
+    return LaunchPreflight(model_install=model_install)
 
 
 def validate_launch_hardware_requirements(launch: dict, *, force: bool = False) -> dict[str, Any]:

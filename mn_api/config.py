@@ -11,18 +11,12 @@ for parent in Path(__file__).resolve().parents:
         sys.path.insert(0, str(sdk_path))
         break
 
-from mn_sdk.runtime_config import RuntimeConfig, read_env_file
+from mn_sdk.runtime_config import RuntimeConfig
 
 
-TRUE_VALUES = {"1", "true", "yes", "on"}
 DEFAULT_BLUEPRINT_REPO = "https://github.com/MirrorNeuronLab/mn-blueprints.git"
 DEV_LOCAL_BLUEPRINT_REPO_ENV = "MN_DEV_LOCAL_BLUEPRINT_REPO"
 DEV_LOCAL_BLUEPRINT_REPO_ALIAS_ENV = "DEV_LOCAL_BLUEPRINT_REPO"
-
-
-def _mn_home() -> Path:
-    configured_home = os.getenv("MN_HOME") or os.getenv("MIRROR_NEURON_HOME")
-    return Path(configured_home).expanduser() if configured_home else Path.home() / ".mn"
 
 
 @dataclass(frozen=True)
@@ -125,67 +119,12 @@ def _int_value(value: str, name: str) -> int:
         raise ValueError(f"{name} must be an integer") from exc
 
 
-def _optional_float(name: str, default: str) -> float | None:
-    value = os.getenv(name, default)
-    if value.lower() in {"", "0", "none"}:
-        return None
-    try:
-        return float(value)
-    except ValueError as exc:
-        raise ValueError(f"{name} must be a number, 0, or none") from exc
-
-
 def _csv(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
-def _read_env_file(path: Path) -> dict[str, str]:
-    return read_env_file(path)
-
-
 def runtime_env_values() -> dict[str, str]:
     return RuntimeConfig.from_env().runtime_env
-
-
-def _token_from_env_or_file(
-    name: str,
-    path: Path,
-    *,
-    legacy_path: Path | None = None,
-    runtime_env: dict[str, str] | None = None,
-    aliases: tuple[str, ...] = (),
-) -> str:
-    for env_name in (name, *aliases):
-        token = os.getenv(env_name)
-        if token:
-            return token
-
-    configured_file = os.getenv(f"{name}_FILE", "").strip()
-    if configured_file:
-        token = _read_token_file(Path(configured_file).expanduser())
-        if token:
-            return token
-
-    for token_path in (path, legacy_path):
-        token = _read_token_file(token_path)
-        if token:
-            return token
-
-    for env_name in (name, *aliases):
-        token = (runtime_env or {}).get(env_name, "")
-        if token:
-            return token
-
-    return ""
-
-
-def _read_token_file(path: Path | None) -> str:
-    if path is None:
-        return ""
-    try:
-        return path.read_text(encoding="utf-8").strip()
-    except OSError:
-        return ""
 
 
 def auth_enabled(config: ApiConfig) -> bool:

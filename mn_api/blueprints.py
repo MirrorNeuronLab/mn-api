@@ -125,13 +125,6 @@ def blueprint_web_ui_enabled(config: Dict[str, Any] | None) -> bool:
     return isinstance(web_ui, dict) and web_ui.get("enabled") is True
 
 
-def blueprint_local_inputs_enabled(config: Dict[str, Any] | None) -> bool:
-    local_inputs = config.get("local_inputs") if isinstance(config, dict) else None
-    if not isinstance(local_inputs, dict):
-        return False
-    return bool(local_inputs.get("folders") or local_inputs.get("files"))
-
-
 def as_dict(value: Any) -> Dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
