@@ -1,22 +1,15 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import urllib.parse
 from pathlib import Path
 from typing import Any
 
+from mn_api.artifacts import ARTIFACT_CONTENT_TYPES, file_sha256
 
-OUTPUT_CONTENT_TYPES = {
-    ".json": "application/json",
-    ".jsonl": "application/x-ndjson",
-    ".md": "text/markdown; charset=utf-8",
-    ".pdf": "application/pdf",
-    ".txt": "text/plain; charset=utf-8",
-    ".log": "text/plain; charset=utf-8",
-    ".gz": "application/gzip",
-}
+
+OUTPUT_CONTENT_TYPES = ARTIFACT_CONTENT_TYPES
 
 
 def output_content_type(path: Path) -> str:
@@ -58,7 +51,7 @@ def _output_ref(run_id: str, index: int, path: Path, item: dict[str, Any]) -> di
         "source": "post_launch_output",
         "external": True,
         "size_bytes": stat.st_size,
-        "sha256": _sha256_file(path),
+        "sha256": file_sha256(path),
         "content_type": output_content_type(path),
         "url": f"/api/v1/runs/{quoted_run_id}/outputs/{index}",
         "reveal_url": f"/api/v1/runs/{quoted_run_id}/outputs/{index}/reveal",
@@ -135,14 +128,6 @@ def _read_json(path: Path) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         return {}
     return value if isinstance(value, dict) else {}
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _first_string(*values: Any) -> str:

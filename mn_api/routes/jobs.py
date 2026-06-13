@@ -1,18 +1,17 @@
 from __future__ import annotations
 
+import gzip
 import json
 import os
 import queue
 import re
 import threading
 import urllib.parse
-import hashlib
-import gzip
-import grpc
 from collections import Counter, deque
 from pathlib import Path
 from typing import Any
 
+import grpc
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from mn_sdk import (
@@ -31,6 +30,7 @@ from mn_sdk import (
 
 from mn_api import state
 from mn_api.agent_graph import build_agent_graph
+from mn_api.artifacts import artifact_ref, list_artifact_files
 from mn_api.blueprints import cleanup_blueprint_processes_for_job
 from mn_api.blueprints import runtime_resource_report
 from mn_api.bundles import load_uploaded_bundle
@@ -63,15 +63,6 @@ _BLOB_KEYS = {
     "final_artifact",
     "finalArtifact",
     "result",
-}
-_ARTIFACT_CONTENT_TYPES = {
-    ".json": "application/json",
-    ".jsonl": "application/x-ndjson",
-    ".md": "text/markdown; charset=utf-8",
-    ".pdf": "application/pdf",
-    ".txt": "text/plain; charset=utf-8",
-    ".log": "text/plain; charset=utf-8",
-    ".gz": "application/gzip",
 }
 
 
@@ -674,84 +665,13 @@ def _agent_summaries(stored_job: dict[str, Any], events: list[dict[str, Any]]) -
     ]
 
 
-def _artifact_content_type(path: Path) -> str:
-    return _ARTIFACT_CONTENT_TYPES.get(path.suffix.lower(), "application/octet-stream")
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _artifact_id(path: Path, run_dir: Path) -> str:
-    rel = path.relative_to(run_dir).as_posix()
-    known = {
-        "result.json": "result_json",
-        "final_artifact.json": "final_artifact_json",
-        "events.jsonl": "events_jsonl",
-        "logs.jsonl": "logs_jsonl",
-        "errors.jsonl": "errors_jsonl",
-        "timeline.jsonl": "timeline_jsonl",
-        "timeline.json": "timeline_json",
-        "observability_summary.json": "observability_summary_json",
-        "events.log": "events_log",
-        "errors.log": "errors_log",
-        "events.index.json": "events_index_json",
-        "resources.jsonl": "resources_jsonl",
-        "errors.index.json": "errors_index_json",
-        "human.jsonl": "human_events_jsonl",
-        "job.json": "job_json",
-        "run.json": "run_json",
-        "ui.json": "ui_json",
-        "web_ui.json": "web_ui_json",
-    }
-    if rel in known:
-        return known[rel]
-    rotated_id = _rotated_artifact_id(rel)
-    if rotated_id:
-        return rotated_id
-    normalized = re.sub(r"[^A-Za-z0-9]+", "_", rel).strip("_").lower()
-    return normalized or "artifact"
-
-
-def _rotated_artifact_id(rel: str) -> str | None:
-    name = Path(rel).name
-    match = re.match(r"^(events|logs|errors)\.(\d{3})\.jsonl(?:\.gz)?$", name)
-    if not match:
-        return None
-    return f"{match.group(1)}_jsonl_{match.group(2)}"
-
-
-def _artifact_ref(run_id: str, path: Path, run_dir: Path) -> dict[str, Any]:
-    stat = path.stat()
-    rel = path.relative_to(run_dir).as_posix()
-    artifact_path = urllib.parse.quote(rel, safe="/")
-    return {
-        "artifact_id": _artifact_id(path, run_dir),
-        "path": str(path),
-        "relative_path": rel,
-        "size_bytes": stat.st_size,
-        "sha256": _sha256_file(path),
-        "content_type": _artifact_content_type(path),
-        "url": f"/api/v1/runs/{urllib.parse.quote(run_id)}/artifacts/{artifact_path}",
-        "reveal_url": f"/api/v1/runs/{urllib.parse.quote(run_id)}/artifacts/{artifact_path}/reveal",
-    }
-
-
 def _run_artifacts(run_id: str | None, run_dir: Path | None) -> list[dict[str, Any]]:
     if not run_id or not run_dir or not run_dir.exists():
         return []
     artifacts: list[dict[str, Any]] = []
-    for path in sorted(run_dir.rglob("*"), key=lambda item: item.relative_to(run_dir).as_posix()):
-        if not path.is_file() or path.name.startswith("."):
-            continue
-        if path.suffix.lower() not in _ARTIFACT_CONTENT_TYPES and path.name not in {"result.json", "final_artifact.json"}:
-            continue
+    for path in list_artifact_files(run_dir):
         try:
-            artifacts.append(_artifact_ref(run_id, path, run_dir))
+            artifacts.append(artifact_ref(run_id, path, run_dir))
         except OSError:
             continue
     seen_paths = {artifact.get("path") for artifact in artifacts}

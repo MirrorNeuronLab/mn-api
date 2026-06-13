@@ -3614,6 +3614,67 @@ class TestAPI(unittest.TestCase):
         mock_prelaunch.assert_not_called()
         mock_client.submit_job.assert_not_called()
 
+    @patch("mn_api.routes.blueprints.start_blueprint_pre_launch_hook")
+    @patch("mn_api.routes.blueprints.validate_blueprint_inputs")
+    @patch("mn_api.routes.blueprints.install_blueprint_runtime_models")
+    @patch('mn_api.state.client')
+    def test_blueprint_run_hard_gpu_passes_with_dgx_spark_cluster_node(
+        self,
+        mock_client,
+        mock_install,
+        mock_validate,
+        mock_prelaunch,
+    ):
+        mock_client.get_resource.return_value = json.dumps({
+            "nodes": [
+                {
+                    "name": "spark",
+                    "status": "healthy",
+                    "scheduling_eligible": True,
+                    "devices": [
+                        {
+                            "kind": "gpu",
+                            "type": "nvidia/gpu",
+                            "vendor": "nvidia",
+                            "driver": "cuda",
+                            "name": "NVIDIA GB10",
+                            "api_version": "13.0",
+                            "memory_total_mb": 131072,
+                            "capabilities": ["gpu", "nvidia", "cuda", "nvidia-gb10", "nvidia-dgx-spark"],
+                        }
+                    ],
+                }
+            ]
+        })
+        mock_install.return_value = {
+            "ok": True,
+            "models": [{"id": "video-vlm:default", "model": "hf.co/acme/video-vlm", "status": "cluster_provided"}],
+            "errors": [],
+        }
+        mock_validate.return_value = {"ok": True, "status": "passed", "issues": [], "errors": []}
+        mock_client.submit_job.return_value = "job-spark"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            runs_root = (repo / "runs").resolve()
+            self._write_blueprint_repo(repo)
+            (repo / "worker_one" / "manifest.json").write_text(json.dumps(self._hard_gpu_manifest()))
+            original = self._set_blueprint_config(repo)
+            try:
+                with patch.dict('os.environ', {"MN_RUNS_ROOT": str(runs_root)}):
+                    response = self.client.post(
+                        "/api/v1/blueprints/worker_one/runs",
+                        json={"run_id": "run-dgx-spark"},
+                    )
+            finally:
+                self._restore_config(original)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["job_id"], "job-spark")
+        self.assertEqual(response.json()["model_install"]["models"][0]["status"], "cluster_provided")
+        mock_install.assert_called_once()
+        mock_prelaunch.assert_called_once()
+        mock_client.submit_job.assert_called_once()
+
     @patch('mn_api.state.client')
     def test_blueprint_run_validation_failure_blocks_submit_unless_forced(self, mock_client):
         mock_client.submit_job.return_value = "job-forced"

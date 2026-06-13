@@ -227,6 +227,57 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertIn("install", mock_run.call_args.args[0])
         mock_record.assert_not_called()
 
+    @patch("mn_api.blueprints.record_model_owner")
+    @patch("mn_api.blueprints.load_model_catalog")
+    @patch("mn_api.blueprints.load_model_ownership")
+    @patch("mn_api.blueprints.docker_model_installed")
+    @patch("mn_api.blueprints.subprocess.run")
+    def test_install_blueprint_runtime_models_cluster_provided_skips_local_install(
+        self,
+        mock_run,
+        mock_installed,
+        mock_ledger,
+        mock_catalog,
+        mock_record,
+    ):
+        mock_catalog.return_value = {
+            "video-vlm:default": {
+                "id": "video-vlm:default",
+                "model": "hf.co/acme/video-vlm",
+                "provider": "docker_model_runner",
+                "backend": "llama.cpp",
+            }
+        }
+        mock_ledger.return_value = {"version": 1, "models": {}}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            bundle = repo / "worker_one"
+            bundle.mkdir()
+            (bundle / "manifest.json").write_text(json.dumps({
+                "metadata": {"blueprint_id": "worker_one"},
+                "nodes": [],
+                "edges": [],
+                "runtime": {
+                    "models": {
+                        "primary": {
+                            "provider": "docker_model_runner",
+                            "model": "video-vlm:default",
+                            "backend": "llama.cpp",
+                            "install_mode": "cluster_provided",
+                        }
+                    }
+                },
+            }))
+
+            summary = install_blueprint_runtime_models(repo.resolve(), {"id": "worker_one", "path": "worker_one"})
+
+        self.assertTrue(summary["ok"])
+        self.assertEqual(summary["models"][0]["status"], "cluster_provided")
+        self.assertEqual(summary["models"][0]["model"], "hf.co/acme/video-vlm")
+        mock_installed.assert_not_called()
+        mock_run.assert_not_called()
+        mock_record.assert_not_called()
+
     def test_catalog_loads_category_facets_and_filters_by_slug_or_name(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)

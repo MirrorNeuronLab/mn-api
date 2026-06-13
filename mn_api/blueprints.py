@@ -17,6 +17,7 @@ from urllib.parse import urlparse
 from fastapi import HTTPException
 from mn_sdk import (
     DOCKER_MODEL_RUNNER_CONTAINER_API_BASE,
+    cluster_provided_model,
     docker_cli_path_environment,
     docker_model_installed,
     docker_model_name,
@@ -520,6 +521,9 @@ def install_blueprint_runtime_models(
             "backend": backend,
             "path": requirement.get("path"),
         }
+        if cluster_provided_model(requirement):
+            results.append({**base_result, "status": "cluster_provided"})
+            continue
         if provider != "docker_model_runner":
             record_model_owner(
                 entry,

@@ -9,7 +9,6 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-import hashlib
 from collections import deque
 from pathlib import Path
 from typing import Any, Callable
@@ -18,21 +17,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 
 from mn_api import state
+from mn_api.artifacts import artifact_content_type, artifact_ref, list_artifact_files
 from mn_api.dependencies import require_auth
 from mn_api.run_outputs import output_content_type, output_path_by_index, output_refs
 
 
 router = APIRouter(prefix="/api/v1")
 _SAFE_RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$")
-_ARTIFACT_CONTENT_TYPES = {
-    ".json": "application/json",
-    ".jsonl": "application/x-ndjson",
-    ".md": "text/markdown; charset=utf-8",
-    ".pdf": "application/pdf",
-    ".txt": "text/plain; charset=utf-8",
-    ".log": "text/plain; charset=utf-8",
-    ".gz": "application/gzip",
-}
 
 
 def _runs_root() -> Path:
@@ -72,86 +63,11 @@ def _first_string(*values: Any) -> str:
     return ""
 
 
-def _artifact_content_type(path: Path) -> str:
-    return _ARTIFACT_CONTENT_TYPES.get(path.suffix.lower(), "application/octet-stream")
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
+def _artifact_ref(run_id: str, path: Path, run_dir: Path) -> dict[str, Any]:
     try:
-        with path.open("rb") as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(chunk)
+        return artifact_ref(run_id, path, run_dir)
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"failed to read {path.name}") from exc
-    return digest.hexdigest()
-
-
-def _artifact_id(path: Path, run_dir: Path) -> str:
-    rel = path.relative_to(run_dir).as_posix()
-    known = {
-        "result.json": "result_json",
-        "final_artifact.json": "final_artifact_json",
-        "events.jsonl": "events_jsonl",
-        "logs.jsonl": "logs_jsonl",
-        "errors.jsonl": "errors_jsonl",
-        "timeline.jsonl": "timeline_jsonl",
-        "timeline.json": "timeline_json",
-        "observability_summary.json": "observability_summary_json",
-        "events.log": "events_log",
-        "errors.log": "errors_log",
-        "events.index.json": "events_index_json",
-        "resources.jsonl": "resources_jsonl",
-        "errors.index.json": "errors_index_json",
-        "human.jsonl": "human_events_jsonl",
-        "job.json": "job_json",
-        "run.json": "run_json",
-        "ui.json": "ui_json",
-        "web_ui.json": "web_ui_json",
-    }
-    if rel in known:
-        return known[rel]
-    rotated_id = _rotated_artifact_id(rel)
-    if rotated_id:
-        return rotated_id
-    normalized = re.sub(r"[^A-Za-z0-9]+", "_", rel).strip("_").lower()
-    return normalized or "artifact"
-
-
-def _rotated_artifact_id(rel: str) -> str | None:
-    name = Path(rel).name
-    match = re.match(r"^(events|logs|errors)\.(\d{3})\.jsonl(?:\.gz)?$", name)
-    if not match:
-        return None
-    return f"{match.group(1)}_jsonl_{match.group(2)}"
-
-
-def _artifact_ref(run_id: str, path: Path, run_dir: Path) -> dict[str, Any]:
-    stat = path.stat()
-    rel = path.relative_to(run_dir).as_posix()
-    artifact_path = urllib.parse.quote(rel, safe="/")
-    return {
-        "artifact_id": _artifact_id(path, run_dir),
-        "path": str(path),
-        "relative_path": rel,
-        "size_bytes": stat.st_size,
-        "sha256": _sha256_file(path),
-        "content_type": _artifact_content_type(path),
-        "url": f"/api/v1/runs/{urllib.parse.quote(run_id)}/artifacts/{artifact_path}",
-        "reveal_url": f"/api/v1/runs/{urllib.parse.quote(run_id)}/artifacts/{artifact_path}/reveal",
-    }
-
-
-def _list_artifact_files(run_dir: Path) -> list[Path]:
-    if not run_dir.exists():
-        return []
-    files: list[Path] = []
-    for path in run_dir.rglob("*"):
-        if not path.is_file() or path.name.startswith("."):
-            continue
-        if path.suffix.lower() in _ARTIFACT_CONTENT_TYPES or path.name in {"result.json", "final_artifact.json"}:
-            files.append(path)
-    return sorted(files, key=lambda item: item.relative_to(run_dir).as_posix())
 
 
 def _artifact_file_path(run_dir: Path, artifact_path: str) -> Path:
@@ -248,7 +164,7 @@ def get_run_final_artifact(run_id: str, _auth=Depends(require_auth)):
 @router.get("/runs/{run_id}/artifacts")
 def list_run_artifacts(run_id: str, _auth=Depends(require_auth)):
     run_dir = _ensure_run_exists(run_id)
-    artifacts = [_artifact_ref(run_id, path, run_dir) for path in _list_artifact_files(run_dir)]
+    artifacts = [_artifact_ref(run_id, path, run_dir) for path in list_artifact_files(run_dir)]
     artifacts.extend(output_refs(run_id, run_dir))
     return {"run_id": run_id, "run_dir": str(run_dir), "artifacts": artifacts}
 
@@ -268,7 +184,7 @@ def reveal_run_artifact(run_id: str, artifact_path: str, _auth=Depends(require_a
 def get_run_artifact(run_id: str, artifact_path: str, _auth=Depends(require_auth)):
     run_dir = _ensure_run_exists(run_id)
     path = _artifact_file_path(run_dir, artifact_path)
-    return FileResponse(path, media_type=_artifact_content_type(path))
+    return FileResponse(path, media_type=artifact_content_type(path))
 
 
 @router.get("/runs/{run_id}/outputs")
