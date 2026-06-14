@@ -38,6 +38,7 @@ from mn_sdk import (
     validate_resource_spec_issues,
     validate_service_spec_issues,
 )
+from mn_sdk.blueprint_source import is_git_repo_url
 
 from mn_api.config import ApiConfig, runtime_env_values
 from mn_api.path_utils import inside_path
@@ -74,7 +75,7 @@ BLUEPRINT_RUNTIME_ENV_KEYS = (
 
 
 def workspace_root() -> Path:
-    for name in ("MN_WORKSPACE_ROOT", "MIRROR_NEURON_WORKSPACE", "OTTERDESK_MIRROR_NEURON_WORKSPACE"):
+    for name in ("MN_WORKSPACE_ROOT",):
         value = os.getenv(name)
         if value:
             return Path(value).expanduser().resolve()
@@ -86,14 +87,11 @@ def runtime_path_environment() -> Dict[str, str]:
     membrane_project_path = Path(os.getenv("MN_MEMBRANE_PROJECT_PATH") or root / "Membrane").expanduser()
     membrane_sdk_path = Path(
         os.getenv("MN_MEMBRANE_SDK_PATH")
-        or os.getenv("MN_CONTEXT_PYTHON_SDK_PATH")
         or membrane_project_path / "mn-context-engine-python-sdk" / "src"
     ).expanduser()
     skills_root = Path(os.getenv("MN_SKILLS_ROOT") or root / "mn-skills").expanduser()
     env = {
         "MN_WORKSPACE_ROOT": str(root),
-        "MIRROR_NEURON_WORKSPACE": str(root),
-        "OTTERDESK_MIRROR_NEURON_WORKSPACE": str(root),
         "MN_MEMBRANE_PROJECT_PATH": str(membrane_project_path),
         "MN_MEMBRANE_SDK_PATH": str(membrane_sdk_path),
         "MN_SKILLS_ROOT": str(skills_root),
@@ -181,17 +179,6 @@ def create_blueprint_run_id(blueprint_id: str) -> str:
     return f"{blueprint_id}-{stamp}"
 
 
-def is_git_repo_url(value: str) -> bool:
-    value = (value or "").strip()
-    if re.fullmatch(r"[\w.-]+@[\w.-]+:[^\s]+", value):
-        return True
-    try:
-        parsed = urlparse(value)
-    except Exception:
-        return False
-    return parsed.scheme in {"http", "https", "ssh", "git"} and bool(parsed.netloc)
-
-
 def cached_git_repo_path(repo_url: str) -> Path:
     parsed = urlparse(repo_url)
     name = Path(parsed.path.rstrip("/")).stem or "blueprints"
@@ -246,16 +233,26 @@ def ensure_git_blueprint_repo(repo_url: str) -> Path:
 
 
 def blueprint_repo_root(config: ApiConfig) -> Path:
-    repo_value = getattr(config, "blueprint_repo", "")
-    if not repo_value:
-        raise HTTPException(status_code=500, detail="MN_BLUEPRINT_REPO is not configured")
-
-    if is_git_repo_url(repo_value):
+    source = str(getattr(config, "blueprint_source", "") or "").strip().lower()
+    if source == "github":
+        repo_value = getattr(config, "blueprint_repo", "")
+        if not repo_value:
+            raise HTTPException(status_code=500, detail="MN_BLUEPRINT_REPO is not configured")
+        if not is_git_repo_url(repo_value):
+            raise HTTPException(status_code=500, detail="MN_BLUEPRINT_REPO must be a Git URL")
         return ensure_git_blueprint_repo(repo_value)
 
-    repo_root = Path(repo_value).expanduser().resolve()
+    if source != "local":
+        raise HTTPException(status_code=500, detail="MN_BLUEPRINT_SOURCE must be github or local")
+
+    local_value = getattr(config, "blueprint_local", "") or getattr(config, "active_blueprint_location", "")
+    if not local_value:
+        raise HTTPException(status_code=500, detail="MN_BLUEPRINT_LOCAL is not configured")
+    repo_root = Path(local_value).expanduser().resolve()
     if not repo_root.is_dir():
-        raise HTTPException(status_code=500, detail="MN_BLUEPRINT_REPO is not a directory")
+        raise HTTPException(status_code=500, detail="MN_BLUEPRINT_LOCAL is not a directory")
+    if not (repo_root / "index.json").is_file():
+        raise HTTPException(status_code=500, detail="MN_BLUEPRINT_LOCAL index.json was not found")
     return repo_root
 
 

@@ -97,7 +97,10 @@ class TestAPI(unittest.TestCase):
         state.config = SimpleNamespace(
             api_token=token,
             request_size_limit_bytes=1024 * 1024,
-            blueprint_repo=str(repo),
+            blueprint_source="local",
+            blueprint_repo="",
+            blueprint_local=str(repo),
+            active_blueprint_location=str(repo),
         )
         return original
 
@@ -110,7 +113,10 @@ class TestAPI(unittest.TestCase):
         body = response.json()
         self.assertEqual(body["status"], "ok")
         self.assertEqual(body["auth"], "disabled")
+        self.assertIn("blueprint_source", body)
         self.assertIn("blueprint_repo", body)
+        self.assertIn("blueprint_local", body)
+        self.assertIn("active_blueprint_location", body)
         self.assertIn("runs_root", body)
 
     @patch("mn_api.routes.system.collect_runtime_status")
@@ -715,47 +721,58 @@ class TestAPI(unittest.TestCase):
 
         self.assertEqual(config.grpc_admin_token, "legacy-admin-secret")
 
-    def test_config_uses_dev_local_blueprint_repo_only_in_dev(self):
+    def test_config_uses_standard_local_blueprint_source(self):
         with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "index.json").write_text("[]", encoding="utf-8")
             with patch.dict(
                 os.environ,
                 {
                     "MN_ENV": "dev",
+                    "MN_BLUEPRINT_SOURCE": "local",
                     "MN_BLUEPRINT_REPO": "https://example.com/base-blueprints.git",
-                    "MN_DEV_LOCAL_BLUEPRINT_REPO": tmp,
+                    "MN_BLUEPRINT_LOCAL": tmp,
                 },
                 clear=False,
             ):
                 config = ApiConfig.from_env()
 
-        self.assertEqual(config.blueprint_repo, tmp)
-        self.assertEqual(config.configured_blueprint_repo, "https://example.com/base-blueprints.git")
-        self.assertEqual(config.dev_local_blueprint_repo, tmp)
+        self.assertEqual(config.blueprint_source, "local")
+        self.assertEqual(config.blueprint_repo, "https://example.com/base-blueprints.git")
+        self.assertEqual(config.blueprint_local, str(Path(tmp).resolve()))
+        self.assertEqual(config.active_blueprint_location, str(Path(tmp).resolve()))
 
     def test_config_ignores_blank_persisted_blueprint_repo(self):
         with tempfile.TemporaryDirectory() as tmp:
             state_dir = Path(tmp) / ".mn"
             state_dir.mkdir()
-            (state_dir / "docker-compose.env").write_text("MN_BLUEPRINT_REPO=\nMN_DEV_LOCAL_BLUEPRINT_REPO=\n")
+            (state_dir / "docker-compose.env").write_text(
+                "MN_BLUEPRINT_SOURCE=\nMN_BLUEPRINT_REPO=\nMN_BLUEPRINT_LOCAL=\n",
+                encoding="utf-8",
+            )
 
             with patch.dict(os.environ, {"HOME": tmp}, clear=True):
                 config = ApiConfig.from_env()
 
+        self.assertEqual(config.blueprint_source, "github")
         self.assertEqual(config.blueprint_repo, "https://github.com/MirrorNeuronLab/mn-blueprints.git")
 
-    def test_config_rejects_dev_local_blueprint_repo_in_prod(self):
+    def test_config_allows_explicit_local_blueprint_source_in_prod(self):
         with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "index.json").write_text("[]", encoding="utf-8")
             with patch.dict(
                 os.environ,
                 {
                     "MN_ENV": "prod",
                     "MN_API_TOKEN": "api-secret",
-                    "MN_DEV_LOCAL_BLUEPRINT_REPO": tmp,
+                    "MN_BLUEPRINT_SOURCE": "local",
+                    "MN_BLUEPRINT_LOCAL": tmp,
                 },
                 clear=False,
             ):
-                with self.assertRaisesRegex(ValueError, "MN_DEV_LOCAL_BLUEPRINT_REPO"):
-                    ApiConfig.from_env()
+                config = ApiConfig.from_env()
+
+        self.assertEqual(config.blueprint_source, "local")
+        self.assertEqual(config.active_blueprint_location, str(Path(tmp).resolve()))
 
     def test_config_uses_local_grpc_token_files(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -769,7 +786,6 @@ class TestAPI(unittest.TestCase):
                 {
                     "HOME": tmp,
                     "MN_HOME": "",
-                    "MIRROR_NEURON_HOME": "",
                     "MN_GRPC_AUTH_TOKEN": "",
                     "MN_GRPC_ADMIN_TOKEN": "",
                     "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN": "",
@@ -833,7 +849,7 @@ class TestAPI(unittest.TestCase):
                         "MN_API_HOST=127.0.0.1",
                         "MN_API_PORT=54111",
                         "MN_GRPC_PORT=55111",
-                        "MN_CORE_GRPC_TARGET=127.0.0.1:55111",
+                        "MN_GRPC_TARGET=127.0.0.1:55111",
                         "MN_GRPC_AUTH_TOKEN=auth-from-state",
                         "MN_GRPC_ADMIN_TOKEN=admin-from-state",
                     ]

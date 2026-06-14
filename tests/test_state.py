@@ -104,9 +104,10 @@ class TestStateClient(unittest.TestCase):
             api_token="",
             request_size_limit_bytes=1024 * 1024,
             cors_allow_origins=[],
-            blueprint_repo="/tmp/blueprints",
-            configured_blueprint_repo="/tmp/blueprints",
-            dev_local_blueprint_repo="",
+            blueprint_source="local",
+            blueprint_repo="",
+            blueprint_local="/tmp/blueprints",
+            active_blueprint_location="/tmp/blueprints",
         )
         refreshed = ApiConfig(
             env="dev",
@@ -119,9 +120,10 @@ class TestStateClient(unittest.TestCase):
             api_token="",
             request_size_limit_bytes=1024 * 1024,
             cors_allow_origins=[],
-            blueprint_repo="/tmp/blueprints",
-            configured_blueprint_repo="/tmp/blueprints",
-            dev_local_blueprint_repo="",
+            blueprint_source="local",
+            blueprint_repo="",
+            blueprint_local="/tmp/blueprints",
+            active_blueprint_location="/tmp/blueprints",
         )
 
         class CurrentClient:
@@ -173,9 +175,10 @@ class TestStateClient(unittest.TestCase):
             api_token="",
             request_size_limit_bytes=1024 * 1024,
             cors_allow_origins=[],
-            blueprint_repo="/tmp/blueprints",
-            configured_blueprint_repo="/tmp/blueprints",
-            dev_local_blueprint_repo="",
+            blueprint_source="local",
+            blueprint_repo="",
+            blueprint_local="/tmp/blueprints",
+            active_blueprint_location="/tmp/blueprints",
         )
         refreshed = ApiConfig(
             env="dev",
@@ -188,9 +191,10 @@ class TestStateClient(unittest.TestCase):
             api_token="",
             request_size_limit_bytes=1024 * 1024,
             cors_allow_origins=[],
-            blueprint_repo="/tmp/blueprints",
-            configured_blueprint_repo="/tmp/blueprints",
-            dev_local_blueprint_repo="",
+            blueprint_source="local",
+            blueprint_repo="",
+            blueprint_local="/tmp/blueprints",
+            active_blueprint_location="/tmp/blueprints",
         )
 
         class ExistingChannel:

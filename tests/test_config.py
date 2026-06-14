@@ -61,7 +61,7 @@ class TestApiConfig(unittest.TestCase):
             state_dir = Path(tmp) / ".mn"
             state_dir.mkdir()
             (state_dir / "docker-compose.env").write_text(
-                "MN_CORE_GRPC_TARGET=localhost:55051\n",
+                "MN_GRPC_TARGET=localhost:55051\n",
                 encoding="utf-8",
             )
             (state_dir / "runtime-endpoints.json").write_text(

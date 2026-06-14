@@ -137,7 +137,14 @@ class TestBlueprintServices(unittest.TestCase):
                 )
             )
 
-            repo_root, blueprints = load_blueprint_catalog(SimpleNamespace(blueprint_repo=str(repo)))
+            repo_root, blueprints = load_blueprint_catalog(
+                SimpleNamespace(
+                    blueprint_source="local",
+                    blueprint_repo="",
+                    blueprint_local=str(repo),
+                    active_blueprint_location=str(repo),
+                )
+            )
 
         self.assertEqual(repo_root, repo.resolve())
         self.assertEqual(len(blueprints), 1)
@@ -301,7 +308,14 @@ class TestBlueprintServices(unittest.TestCase):
                 )
             )
 
-            repo_root, blueprints = load_blueprint_catalog(SimpleNamespace(blueprint_repo=str(repo)))
+            repo_root, blueprints = load_blueprint_catalog(
+                SimpleNamespace(
+                    blueprint_source="local",
+                    blueprint_repo="",
+                    blueprint_local=str(repo),
+                    active_blueprint_location=str(repo),
+                )
+            )
             categories = load_blueprint_categories(repo_root, blueprints)
 
         self.assertEqual(
@@ -326,7 +340,14 @@ class TestBlueprintServices(unittest.TestCase):
             (repo / "index.json").write_text(json.dumps({"blueprints": {"id": "not-a-list"}}))
 
             with self.assertRaises(HTTPException) as raised:
-                load_blueprint_catalog(SimpleNamespace(blueprint_repo=str(repo)))
+                load_blueprint_catalog(
+                    SimpleNamespace(
+                        blueprint_source="local",
+                        blueprint_repo="",
+                        blueprint_local=str(repo),
+                        active_blueprint_location=str(repo),
+                    )
+                )
 
         self.assertEqual(raised.exception.status_code, 500)
         self.assertEqual(raised.exception.detail, "blueprint repo index.json must be a list")

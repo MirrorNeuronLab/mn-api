@@ -11,12 +11,8 @@ for parent in Path(__file__).resolve().parents:
         sys.path.insert(0, str(sdk_path))
         break
 
+from mn_sdk.blueprint_source import resolve_blueprint_source_config
 from mn_sdk.runtime_config import RuntimeConfig
-
-
-DEFAULT_BLUEPRINT_REPO = "https://github.com/MirrorNeuronLab/mn-blueprints.git"
-DEV_LOCAL_BLUEPRINT_REPO_ENV = "MN_DEV_LOCAL_BLUEPRINT_REPO"
-DEV_LOCAL_BLUEPRINT_REPO_ALIAS_ENV = "DEV_LOCAL_BLUEPRINT_REPO"
 
 
 @dataclass(frozen=True)
@@ -31,22 +27,17 @@ class ApiConfig:
     api_token: str
     request_size_limit_bytes: int
     cors_allow_origins: list[str]
+    blueprint_source: str
     blueprint_repo: str
-    configured_blueprint_repo: str
-    dev_local_blueprint_repo: str
+    blueprint_local: str
+    active_blueprint_location: str
 
     @classmethod
     def from_env(cls) -> "ApiConfig":
         runtime_config = RuntimeConfig.from_env()
         runtime_env = runtime_config.runtime_env
-        env = os.getenv("MN_ENV", "dev")
-        configured_blueprint_repo = _env_value("MN_BLUEPRINT_REPO", runtime_env, _default_blueprint_repo(runtime_env))
-        dev_local_blueprint_repo = _dev_local_blueprint_repo(runtime_env)
-        blueprint_repo = (
-            dev_local_blueprint_repo
-            if env in {"dev", "test"} and dev_local_blueprint_repo
-            else configured_blueprint_repo
-        )
+        env = _env_value("MN_ENV", runtime_env, "dev")
+        blueprint_source = resolve_blueprint_source_config(runtime_env=runtime_env)
         config = cls(
             env=env,
             host=os.getenv("MN_API_HOST") or runtime_env.get("MN_API_HOST") or "localhost",
@@ -63,9 +54,10 @@ class ApiConfig:
             cors_allow_origins=_csv(
                 os.getenv("MN_API_CORS_ALLOW_ORIGINS", "")
             ),
-            blueprint_repo=blueprint_repo,
-            configured_blueprint_repo=configured_blueprint_repo,
-            dev_local_blueprint_repo=dev_local_blueprint_repo,
+            blueprint_source=blueprint_source.source,
+            blueprint_repo=blueprint_source.repo,
+            blueprint_local=blueprint_source.local,
+            active_blueprint_location=blueprint_source.active_location,
         )
         config.validate()
         return config
@@ -83,28 +75,16 @@ class ApiConfig:
             raise ValueError("MN_API_REQUEST_SIZE_LIMIT_BYTES must be > 0")
         if self.prod and not self.api_token:
             raise ValueError("MN_API_TOKEN is required when MN_ENV=prod")
-        if not self.blueprint_repo:
-            raise ValueError("MN_BLUEPRINT_REPO must be a non-empty path")
-        if self.prod and self.dev_local_blueprint_repo:
-            raise ValueError(f"{DEV_LOCAL_BLUEPRINT_REPO_ENV} can only be used when MN_ENV=dev or MN_ENV=test")
+        if self.blueprint_source not in {"github", "local"}:
+            raise ValueError("MN_BLUEPRINT_SOURCE must be one of github or local")
+        if self.blueprint_source == "github" and not self.blueprint_repo:
+            raise ValueError("MN_BLUEPRINT_REPO is required when MN_BLUEPRINT_SOURCE=github")
+        if self.blueprint_source == "local" and not self.blueprint_local:
+            raise ValueError("MN_BLUEPRINT_LOCAL is required when MN_BLUEPRINT_SOURCE=local")
 
 
 def _env_value(name: str, runtime_env: dict[str, str], default: str = "") -> str:
     return (os.getenv(name, "").strip() or str(runtime_env.get(name) or "").strip() or default)
-
-
-def _default_blueprint_repo(runtime_env: dict[str, str]) -> str:
-    return _env_value("MN_DEFAULT_BLUEPRINT_REPO", runtime_env, DEFAULT_BLUEPRINT_REPO)
-
-
-def _dev_local_blueprint_repo(runtime_env: dict[str, str] | None = None) -> str:
-    runtime_env = runtime_env or {}
-    return (
-        os.getenv(DEV_LOCAL_BLUEPRINT_REPO_ENV, "").strip()
-        or os.getenv(DEV_LOCAL_BLUEPRINT_REPO_ALIAS_ENV, "").strip()
-        or str(runtime_env.get(DEV_LOCAL_BLUEPRINT_REPO_ENV) or "").strip()
-        or str(runtime_env.get(DEV_LOCAL_BLUEPRINT_REPO_ALIAS_ENV) or "").strip()
-    )
 
 
 def _int(name: str, default: str) -> int:
