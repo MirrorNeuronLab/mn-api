@@ -350,6 +350,7 @@ def normalize_blueprint(entry: Any) -> Optional[Dict[str, Any]]:
             "rate": pricing_rate,
             "unit": pricing_unit,
         },
+        "requirements": record.get("requirements") if isinstance(record.get("requirements"), dict) else {},
         "rate_label": rate_label,
         "hourly_rate": hourly_rate,
         "capabilities": as_list(capabilities),
@@ -2082,6 +2083,9 @@ def enrich_blueprint_from_manifest(repo_root: Path, blueprint: Dict[str, Any]) -
     if not manifest:
         return enriched
     enriched["type"] = manifest.get("type") or "batch"
+    requirements = manifest.get("requirements")
+    if isinstance(requirements, dict):
+        enriched["requirements"] = {**as_dict(enriched.get("requirements")), **requirements}
     init_config_review = manifest_init_config_review(manifest)
     if init_config_review is not None:
         enriched["init_config_review"] = init_config_review

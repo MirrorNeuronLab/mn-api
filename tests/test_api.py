@@ -48,6 +48,18 @@ class TestAPI(unittest.TestCase):
             "nodes": [],
             "edges": [],
             "metadata": {},
+            "requirements": {
+                "gpu": {
+                    "min_count": 1,
+                    "vendor": "nvidia",
+                    "driver": "cuda",
+                    "min_api_version": "12.0",
+                    "api_version_operator": ">",
+                    "min_memory_mb": 49152,
+                    "memory_operator": ">",
+                    "enforcement": "hard",
+                }
+            },
         }))
         (repo / "index.json").write_text(json.dumps([
             {
@@ -56,6 +68,11 @@ class TestAPI(unittest.TestCase):
                 "path": "worker_one",
                 "category": "Business",
                 "description": "A test worker.",
+                "requirements": {
+                    "cpu": {
+                        "min_cores": 1,
+                    }
+                },
                 "product": {
                     "one_line": "A normalized test worker.",
                     "agent_role": "Test operator.",
@@ -2997,8 +3014,12 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(body["categories"][0], {"name": "Business", "slug": "business", "count": 1})
         self.assertEqual(body["blueprints"][0]["agent_role"], "Test operator.")
         self.assertEqual(body["blueprints"][0]["pricing"]["model"], "free")
+        self.assertEqual(body["blueprints"][0]["requirements"]["cpu"]["min_cores"], 1)
+        self.assertEqual(body["blueprints"][0]["requirements"]["gpu"]["vendor"], "nvidia")
+        self.assertEqual(body["blueprints"][0]["requirements"]["gpu"]["min_memory_mb"], 49152)
         self.assertEqual(detail_response.status_code, 200)
         self.assertEqual(detail_response.json()["blueprint"]["name"], "Worker One")
+        self.assertEqual(detail_response.json()["blueprint"]["requirements"]["gpu"]["min_api_version"], "12.0")
         self.assertEqual(install_response.status_code, 200)
         self.assertTrue(install_response.json()["installed"])
 
