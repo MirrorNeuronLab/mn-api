@@ -2033,7 +2033,9 @@ def _runtime_service_resolver():
 
 
 def shared_runs_root() -> str:
-    return str(os.getenv("MN_RUNS_ROOT") or DEFAULT_RUNS_ROOT)
+    runtime_env = runtime_env_values()
+    runs_root = os.getenv("MN_RUNS_ROOT") or runtime_env.get("MN_RUNS_ROOT") or DEFAULT_RUNS_ROOT
+    return str(Path(runs_root).expanduser().resolve())
 
 
 def with_shared_run_store_config(

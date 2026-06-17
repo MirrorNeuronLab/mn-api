@@ -136,6 +136,37 @@ class TestAPI(unittest.TestCase):
         self.assertIn("active_blueprint_location", body)
         self.assertIn("runs_root", body)
 
+    def test_health_expands_runs_root_from_runtime_env_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp) / ".mn"
+            state_dir.mkdir()
+            (state_dir / "docker-compose.env").write_text(
+                "MN_RUNS_ROOT=~/.mn/runs\n",
+                encoding="utf-8",
+            )
+
+            with patch.dict(os.environ, {"HOME": tmp}, clear=True):
+                response = self.client.get("/api/v1/health")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["runs_root"], str((Path(tmp) / ".mn" / "runs").resolve()))
+
+    def test_health_preserves_absolute_runs_root_from_runtime_env_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp) / ".mn"
+            runs_root = Path(tmp) / "runtime-runs"
+            state_dir.mkdir()
+            (state_dir / "docker-compose.env").write_text(
+                f"MN_RUNS_ROOT={runs_root}\n",
+                encoding="utf-8",
+            )
+
+            with patch.dict(os.environ, {"HOME": tmp}, clear=True):
+                response = self.client.get("/api/v1/health")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["runs_root"], str(runs_root.resolve()))
+
     @patch("mn_api.routes.system.collect_runtime_status")
     def test_runtime_status_route_returns_sdk_payload(self, mock_collect):
         mock_collect.return_value = {
