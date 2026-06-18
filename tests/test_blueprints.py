@@ -67,7 +67,7 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertTrue(is_git_repo_url("https://github.com/MirrorNeuronLab/otterdesk-blueprints.git"))
         self.assertTrue(is_git_repo_url("ssh://git@github.com/MirrorNeuronLab/otterdesk-blueprints.git"))
         self.assertTrue(is_git_repo_url("git@github.com:MirrorNeuronLab/otterdesk-blueprints.git"))
-        self.assertFalse(is_git_repo_url("/Users/homer/Projects/mirror-neuron-set/otterdesk-blueprints"))
+        self.assertFalse(is_git_repo_url("/tmp/mirror-neuron-set/otterdesk-blueprints"))
 
     def test_runtime_blueprint_environment_overrides_reads_persisted_web_ui_settings(self):
         with tempfile.TemporaryDirectory() as tmpdir:

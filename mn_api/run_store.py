@@ -2,21 +2,21 @@ from __future__ import annotations
 
 import gzip
 import json
-import os
 import re
 from collections import deque
 from pathlib import Path
 from typing import Any
 
+from mn_api.path_utils import default_runs_root
+
 
 SAFE_RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$")
-DEFAULT_RUNS_ROOT = "~/.mn/runs"
 DEFAULT_JSONL_LIMIT = 5000
 DEFAULT_MAX_LINE_CHARS = 2000
 
 
 def runs_root() -> Path:
-    return Path(os.getenv("MN_RUNS_ROOT") or DEFAULT_RUNS_ROOT).expanduser().resolve()
+    return default_runs_root().resolve()
 
 
 def run_dir_from_id(run_id: str | None, *, must_exist: bool = True) -> Path | None:

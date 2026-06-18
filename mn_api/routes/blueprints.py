@@ -41,6 +41,7 @@ from mn_api.blueprints import (
 from mn_api.bundles import load_uploaded_bundle
 from mn_api.dependencies import require_auth
 from mn_api.errors import handle_grpc_error, validation_problem_response
+from mn_api.path_utils import resolve_mn_home
 from mn_api.schemas import BlueprintLaunchRequest, BlueprintRunRequest
 
 
@@ -457,7 +458,7 @@ def launch_progress_root() -> Path:
     configured = os.getenv("MN_LAUNCH_PROGRESS_DIR")
     if configured:
         return Path(configured).expanduser()
-    return Path.home() / ".mn" / "launch_progress"
+    return resolve_mn_home() / "launch_progress"
 
 
 def launch_progress_path(progress_id: str) -> Path:

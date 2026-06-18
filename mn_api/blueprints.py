@@ -41,7 +41,7 @@ from mn_sdk import (
 from mn_sdk.blueprint_source import is_git_repo_url
 
 from mn_api.config import ApiConfig, runtime_env_values
-from mn_api.path_utils import inside_path
+from mn_api.path_utils import default_runs_root, inside_path
 
 
 BLUEPRINT_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,160}$")
@@ -49,7 +49,6 @@ RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,220}$")
 CATEGORY_SLUG_PATTERN = re.compile(r"[^a-z0-9]+")
 ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-9;]*m")
 DEFAULT_CATEGORY = "General"
-DEFAULT_RUNS_ROOT = "~/.mn/runs"
 DEFAULT_BLUEPRINT_REPO_CACHE = "~/.cache/mirror-neuron/blueprint-repos"
 PRE_LAUNCH_SCRIPT = Path("scripts/pre-launch.sh")
 POST_LAUNCH_SCRIPT = Path("scripts/post-launch.sh")
@@ -2033,9 +2032,7 @@ def _runtime_service_resolver():
 
 
 def shared_runs_root() -> str:
-    runtime_env = runtime_env_values()
-    runs_root = os.getenv("MN_RUNS_ROOT") or runtime_env.get("MN_RUNS_ROOT") or DEFAULT_RUNS_ROOT
-    return str(Path(runs_root).expanduser().resolve())
+    return str(default_runs_root().resolve())
 
 
 def with_shared_run_store_config(

@@ -5,6 +5,8 @@ import os
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+from mn_api.path_utils import default_logs_root
+
 
 def configure_logging(name: str = "mn-api", default_file: str = "api.log") -> logging.Logger:
     logger = logging.getLogger(name)
@@ -20,7 +22,7 @@ def configure_logging(name: str = "mn-api", default_file: str = "api.log") -> lo
     log_path = Path(
         os.getenv(
             "MN_API_LOG_PATH",
-            str(Path.home() / ".mn" / "logs" / default_file),
+            str(default_logs_root() / default_file),
         )
     ).expanduser()
 
