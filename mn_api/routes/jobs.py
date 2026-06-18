@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import queue
 import re
+import sys
 import threading
 import urllib.parse
 from collections import Counter, deque
@@ -593,6 +594,9 @@ def _compact_job_detail(job_id: str) -> dict[str, Any]:
         summary["failure"] = failure
     if observability_summary:
         summary["observability_summary"] = _compact_value(observability_summary)
+    resource_usage = _read_run_resource_usage(run_id) if run_id else None
+    if resource_usage:
+        summary["resource_usage"] = _compact_value(resource_usage)
     if stream_error:
         summary["event_stream_warning"] = stream_error
     return {
@@ -600,6 +604,7 @@ def _compact_job_detail(job_id: str) -> dict[str, Any]:
         "summary": summary,
         "trace_id": trace_id or None,
         "observability_summary": observability_summary,
+        "resource_usage": resource_usage,
         "failure": failure,
         "agents": _agent_summaries(stored_job, events),
         "recent_events": recent_events,
@@ -615,6 +620,27 @@ def _full_job_detail(job_id: str) -> dict[str, Any]:
         return json.loads(job_json)
     except Exception:
         return _compact_job_detail(job_id)
+
+
+def _read_run_resource_usage(run_id: str | None) -> dict[str, Any] | None:
+    if not run_id:
+        return None
+    _ensure_blueprint_support_path()
+    try:
+        from mn_blueprint_support.observability import read_run_resources
+    except ModuleNotFoundError:
+        return None
+    try:
+        return read_run_resources(run_id, runs_root=_runs_root())
+    except Exception:
+        return None
+
+
+def _ensure_blueprint_support_path() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    support_src = repo_root / "mn-skills" / "blueprint_support_skill" / "src"
+    if support_src.exists() and str(support_src) not in sys.path:
+        sys.path.insert(0, str(support_src))
 
 
 def _workflow_progress_snapshot_for_job(job_id: str) -> dict[str, Any]:

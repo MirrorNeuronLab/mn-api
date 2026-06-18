@@ -6,6 +6,7 @@ import os
 import sys
 import tempfile
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 from fastapi.testclient import TestClient
 from types import SimpleNamespace
@@ -1613,6 +1614,9 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.json()["payload"]["approved"], True)
         self.assertEqual(resources.status_code, 200)
         self.assertEqual(resources.json()["sample_count"], 1)
+        self.assertEqual(resources.json()["llm"]["input_tokens"], 10)
+        self.assertEqual(resources.json()["llm"]["output_tokens"], 5)
+        self.assertEqual(resources.json()["llm"]["total_tokens"], 15)
 
     def test_run_artifact_endpoints_read_shared_run_store_files(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2501,6 +2505,14 @@ class TestAPI(unittest.TestCase):
                 "status": "completed",
                 "counts": {"events": 1, "logs": 0, "errors": 0, "timeline": 1},
             }))
+            (run_dir / "resources.jsonl").write_text(
+                json.dumps({
+                    "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    "run_id": "compact-run",
+                    "llm": {"input_tokens": 42, "output_tokens": 9, "total_tokens": 51, "calls": 1},
+                })
+                + "\n"
+            )
             (run_dir / "result.json").write_text(json.dumps({"ok": True}))
             (run_dir / "final_artifact.json").write_text(json.dumps({
                 "type": "prepared_1040_tax_packet",
@@ -2549,6 +2561,9 @@ class TestAPI(unittest.TestCase):
         self.assertIn("final_artifact_json", artifact_ids)
         self.assertIn("output_0_report_markdown", artifact_ids)
         self.assertTrue(any(artifact["content_type"] == "application/pdf" for artifact in body["artifacts"]))
+        self.assertEqual(body["resource_usage"]["llm"]["input_tokens"], 42)
+        self.assertEqual(body["resource_usage"]["llm"]["output_tokens"], 9)
+        self.assertEqual(body["resource_usage"]["llm"]["total_tokens"], 51)
         output_ref = next(artifact for artifact in body["output_files"] if artifact["artifact_id"] == "output_0_report_markdown")
         self.assertEqual(output_ref["source"], "post_launch_output")
         self.assertEqual(output_ref["url"], "/api/v1/runs/compact-run/outputs/0")
