@@ -42,4 +42,5 @@ select = ["E4", "E7", "E9", "F"]
 
 [tool.ruff.lint.per-file-ignores]
 "mn_api/config.py" = ["E402"]
+"mn_api/path_utils.py" = ["E402", "F401"]
 "mn_api/state.py" = ["E402"]
