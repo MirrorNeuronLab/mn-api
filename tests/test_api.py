@@ -2085,7 +2085,7 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(body["agent_count"]["total"], 1)
         self.assertEqual(body["current_step_id"], "research")
         self.assertEqual(body["steps"][0]["agents"][0]["tokens"], 1200)
-        mock_client.stream_events.assert_called_once_with("job-progress", follow=False)
+        mock_client.stream_events.assert_called_once_with("job-progress", follow=False, limit=25)
 
     @patch('mn_api.state.client')
     def test_get_job_workflow_progress_enriches_step_and_agent_activity(self, mock_client):
@@ -2989,6 +2989,7 @@ class TestAPI(unittest.TestCase):
         response = self.client.get("/api/v1/jobs/test_job_123/dead-letters")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["data"][0]["reason"], "queue full")
+        mock_client.stream_events.assert_called_once_with("test_job_123", follow=False, limit=25)
 
     @patch('mn_api.state.client')
     def test_replay_job_dead_letter_reports_not_exposed_without_backend_call(self, mock_client):

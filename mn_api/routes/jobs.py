@@ -51,6 +51,18 @@ from mn_api.schemas import SubmitJobRequest
 router = APIRouter(prefix="/api/v1")
 _MAX_COMPACT_STRING = 2000
 _MAX_COMPACT_LIST = 25
+_MAX_STATUS_RUNTIME_EVENTS = 25
+_LIST_STATUS_REFRESH_STATUSES = {
+    "pending",
+    "planned",
+    "validated",
+    "scheduled",
+    "queued",
+    "starting",
+    "preparing",
+    "running",
+    "paused",
+}
 
 
 @router.post("/jobs")
@@ -289,7 +301,8 @@ def _clear_success_failure(snapshot: dict[str, Any]) -> None:
 
 def _should_reconcile_job_list_status(job: dict[str, Any]) -> bool:
     job_id = _first_string(job.get("job_id"), job.get("id"))
-    return bool(job_id and job_id != "unknown")
+    status = re.sub(r"[^a-z0-9]+", "_", _normalized_status(job.get("status"))).strip("_")
+    return bool(job_id and job_id != "unknown" and status in _LIST_STATUS_REFRESH_STATUSES)
 
 
 def _status_from_workflow_progress(snapshot: dict[str, Any]) -> str:
@@ -358,7 +371,7 @@ def _find_run_dir_for_job(job_id: str) -> tuple[Path | None, dict[str, Any]]:
 def _stream_job_events(job_id: str, *, limit: int = 200) -> tuple[list[dict[str, Any]], str | None]:
     events: deque[dict[str, Any]] = deque(maxlen=limit)
     try:
-        for event_json in state.client.stream_events(job_id, follow=False):
+        for event_json in state.client.stream_events(job_id, follow=False, limit=limit):
             try:
                 event = json.loads(event_json)
             except json.JSONDecodeError:
@@ -645,9 +658,13 @@ def _ensure_blueprint_support_path() -> None:
 
 def _workflow_progress_snapshot_for_job(job_id: str) -> dict[str, Any]:
     details = _full_job_detail(job_id)
-    events, stream_error = _stream_job_events(job_id, limit=5000)
+    events, stream_error = _stream_job_events(job_id, limit=_MAX_STATUS_RUNTIME_EVENTS)
     run_dir = _run_dir_for_details(details, events, job_id=job_id)
-    events = _merge_events(events, _run_store_events(run_dir, limit=5000), limit=5000)
+    events = _merge_events(
+        events,
+        _run_store_events(run_dir, limit=_MAX_STATUS_RUNTIME_EVENTS),
+        limit=_MAX_STATUS_RUNTIME_EVENTS,
+    )
     observability_summary = _read_json_file(run_dir / "observability_summary.json") if run_dir else {}
     snapshot = workflow_progress_snapshot(
         _manifest_from_job_details(details, run_dir=run_dir),
@@ -905,9 +922,13 @@ def _sse_event(event_name: str, payload: dict[str, Any]) -> str:
 def get_job_agent_graph(job_id: str, _auth=Depends(require_auth)):
     try:
         details = _full_job_detail(job_id)
-        events, _stream_error = _stream_job_events(job_id, limit=5000)
+        events, _stream_error = _stream_job_events(job_id, limit=_MAX_STATUS_RUNTIME_EVENTS)
         run_dir = _run_dir_for_details(details, events, job_id=job_id)
-        events = _merge_events(events, _run_store_events(run_dir, limit=5000), limit=5000)
+        events = _merge_events(
+            events,
+            _run_store_events(run_dir, limit=_MAX_STATUS_RUNTIME_EVENTS),
+            limit=_MAX_STATUS_RUNTIME_EVENTS,
+        )
         return build_agent_graph(job_id, details, events)
     except Exception as exc:
         return handle_grpc_error(exc)
@@ -922,8 +943,9 @@ def get_job_events(
 ):
     try:
         if include in {"compact", "summary"}:
-            events, stream_error = _merged_job_events(job_id, limit=limit)
-            response: dict[str, Any] = {"data": [_compact_event(event) for event in events[-limit:]]}
+            stream_limit = min(limit, _MAX_STATUS_RUNTIME_EVENTS)
+            events, stream_error = _merged_job_events(job_id, limit=stream_limit)
+            response: dict[str, Any] = {"data": [_compact_event(event) for event in events[-stream_limit:]]}
             if stream_error:
                 response["warning"] = stream_error
             return response
@@ -958,10 +980,14 @@ def stream_job_workflow_progress(
         stop = threading.Event()
         event_queue: queue.Queue[tuple[str, str | None]] = queue.Queue()
         details = _full_job_detail(job_id)
-        events, stream_error = _stream_job_events(job_id, limit=5000)
+        events, stream_error = _stream_job_events(job_id, limit=_MAX_STATUS_RUNTIME_EVENTS)
         run_dir = _run_dir_for_details(details, events, job_id=job_id)
         manifest = _manifest_from_job_details(details, run_dir=run_dir)
-        events = _merge_events(events, _run_store_events(run_dir, limit=5000), limit=5000)
+        events = _merge_events(
+            events,
+            _run_store_events(run_dir, limit=_MAX_STATUS_RUNTIME_EVENTS),
+            limit=_MAX_STATUS_RUNTIME_EVENTS,
+        )
         activity_events = list(events)
         observability_summary = _read_json_file(run_dir / "observability_summary.json") if run_dir else {}
         tracker = BlueprintWorkflowProgress(
@@ -1045,7 +1071,7 @@ def stream_job_workflow_progress(
                 if len(seen) > 10_000:
                     seen.clear()
 
-                activity_events = _merge_events(activity_events, [event], limit=5000)
+                activity_events = _merge_events(activity_events, [event], limit=_MAX_STATUS_RUNTIME_EVENTS)
                 tracker.update(event)
                 if event_type in {"job_completed", "job_failed", "job_cancelled"}:
                     details = _full_job_detail(job_id)
@@ -1070,7 +1096,9 @@ def stream_job_workflow_progress(
 def get_job_dead_letters(job_id: str, _auth=Depends(require_auth)):
     try:
         dead_letters = []
-        for event_index, event_json in enumerate(state.client.stream_events(job_id, follow=False)):
+        for event_index, event_json in enumerate(
+            state.client.stream_events(job_id, follow=False, limit=_MAX_STATUS_RUNTIME_EVENTS)
+        ):
             event = json.loads(event_json)
             if event.get("type") == "dead_letter":
                 dead_letters.append(
