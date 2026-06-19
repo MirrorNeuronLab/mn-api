@@ -100,6 +100,13 @@ jobs:
             python -m pip install "mirrorneuron-python-sdk @ git+https://github.com/MirrorNeuronLab/mn-python-sdk.git"
           fi
 
+          if [[ "$GITHUB_REPOSITORY" == "MirrorNeuronLab/mn-api" ]]; then
+            python -m pip install \
+              --index-url https://us-central1-python.pkg.dev/mirrorneuron-public-packages/agent-skills/simple/ \
+              --extra-index-url https://pypi.org/simple \
+              "mirrorneuron-blueprint-support-skill>=1.2.1,<2"
+          fi
+
           if [[ "$GITHUB_REPOSITORY" == "MirrorNeuronLab/mn-blueprints" ]]; then
             python -m pip install "mirrorneuron-python-sdk @ git+https://github.com/MirrorNeuronLab/mn-python-sdk.git"
             python -m pip install "mirrorneuron-blueprint-support-skill @ git+https://github.com/MirrorNeuronLab/mn-skills.git#subdirectory=blueprint_support_skill"
