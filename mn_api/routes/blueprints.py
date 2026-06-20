@@ -517,7 +517,8 @@ def read_launch_progress(progress_id: str | None) -> list[dict[str, Any]]:
 
 def model_install_progress_message(model_install: dict[str, Any]) -> str:
     models = model_install.get("models") or []
-    if not models:
+    services = model_install.get("services") or []
+    if not models and not services:
         return "No runtime model dependencies declared."
     counts: dict[str, int] = {}
     for item in models:
@@ -538,6 +539,9 @@ def model_install_progress_message(model_install: dict[str, Any]) -> str:
     remaining = sum(count for status, count in counts.items() if status not in labels)
     if remaining:
         parts.append(f"{remaining} checked")
+    service_count = len(services)
+    if service_count:
+        parts.append(f"{service_count} service{'s' if service_count != 1 else ''} ready")
     return "Runtime models ready: " + ", ".join(parts) + "."
 
 

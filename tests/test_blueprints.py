@@ -15,6 +15,7 @@ from unittest.mock import patch
 from fastapi import HTTPException
 
 from mn_api.blueprints import (
+    blueprint_requires_context_engine,
     blueprint_bundle_root,
     cached_git_repo_path,
     cleanup_blueprint_run_processes,
@@ -198,6 +199,60 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertIn("--context-size", command)
         self.assertIn("2048", command)
         mock_record.assert_called_once()
+
+    def test_blueprint_requires_context_engine_from_enabled_memory_layer(self):
+        manifest = {
+            "metadata": {
+                "memory_layer": {
+                    "enabled": True,
+                    "enabled_env": "MN_CONTEXT_MEMORY_ENABLED",
+                    "sdk_import_package": "mn_context_engine_sdk",
+                }
+            }
+        }
+
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertTrue(blueprint_requires_context_engine(manifest, None))
+            self.assertFalse(
+                blueprint_requires_context_engine(
+                    manifest,
+                    {"memory_layer": {"enabled": False, "enabled_env": "MN_CONTEXT_MEMORY_ENABLED"}},
+                )
+            )
+
+    @patch("mn_api.blueprints.subprocess.run")
+    def test_install_blueprint_runtime_models_ensures_context_engine_when_required(self, mock_run):
+        mock_run.return_value = SimpleNamespace(returncode=0, stdout="", stderr="")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            bundle = repo / "worker_one"
+            config_dir = bundle / "config"
+            config_dir.mkdir(parents=True)
+            (config_dir / "default.json").write_text(
+                json.dumps(
+                    {
+                        "memory_layer": {
+                            "enabled": True,
+                            "enabled_env": "MN_CONTEXT_MEMORY_ENABLED",
+                            "sdk_import_package": "mn_context_engine_sdk",
+                        }
+                    }
+                )
+            )
+            (bundle / "manifest.json").write_text(json.dumps({
+                "metadata": {"blueprint_id": "worker_one"},
+                "nodes": [],
+                "edges": [],
+            }))
+
+            with patch.dict(os.environ, {}, clear=True):
+                summary = install_blueprint_runtime_models(repo.resolve(), {"id": "worker_one", "path": "worker_one"})
+
+        self.assertTrue(summary["ok"])
+        self.assertEqual(summary["services"][0]["name"], "membrane-context-engine")
+        self.assertEqual(summary["services"][0]["status"], "ready")
+        command = mock_run.call_args.args[0]
+        self.assertEqual(command[-2:], ["runtime", "ensure-context-engine"])
 
     @patch("mn_api.blueprints.record_model_owner")
     @patch("mn_api.blueprints.load_model_ownership")
