@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import queue
 import re
-import sys
 import threading
 import urllib.parse
 from collections import Counter, deque
@@ -26,6 +25,7 @@ from mn_sdk import (
     normalize_error,
     workflow_progress_snapshot,
 )
+from mn_sdk.blueprint_support.observability import read_run_resources
 
 from mn_api import state
 from mn_api.agent_graph import build_agent_graph
@@ -638,22 +638,10 @@ def _full_job_detail(job_id: str) -> dict[str, Any]:
 def _read_run_resource_usage(run_id: str | None) -> dict[str, Any] | None:
     if not run_id:
         return None
-    _ensure_blueprint_support_path()
-    try:
-        from mn_blueprint_support.observability import read_run_resources
-    except ModuleNotFoundError:
-        return None
     try:
         return read_run_resources(run_id, runs_root=_runs_root())
     except Exception:
         return None
-
-
-def _ensure_blueprint_support_path() -> None:
-    repo_root = Path(__file__).resolve().parents[3]
-    support_src = repo_root / "mn-skills" / "blueprint_support_skill" / "src"
-    if support_src.exists() and str(support_src) not in sys.path:
-        sys.path.insert(0, str(support_src))
 
 
 def _workflow_progress_snapshot_for_job(job_id: str) -> dict[str, Any]:

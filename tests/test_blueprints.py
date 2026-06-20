@@ -1,5 +1,4 @@
 import json
-import importlib.util
 import os
 import shutil
 import socket
@@ -22,7 +21,6 @@ from mn_api.blueprints import (
     cleanup_run_process,
     ensure_git_blueprint_repo,
     filter_blueprints_by_category,
-    inject_local_blueprint_support_path,
     install_blueprint_runtime_models,
     is_git_repo_url,
     load_blueprint_categories,
@@ -30,11 +28,6 @@ from mn_api.blueprints import (
     load_blueprint_catalog,
     runtime_blueprint_environment_overrides,
     validate_run_id,
-)
-
-requires_blueprint_support = unittest.skipIf(
-    importlib.util.find_spec("mn_blueprint_support") is None,
-    "mn_blueprint_support is not installed",
 )
 
 
@@ -529,7 +522,6 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertEqual(env["MN_LLM_MODEL"], "ai/gemma4:E2B")
         self.assertEqual(env["MN_LLM_API_BASE"], "http://localhost:12434/engines/v1")
 
-    @requires_blueprint_support
     def test_load_blueprint_bundle_stages_configured_local_input_folder(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
@@ -603,7 +595,6 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertNotIn("tax_workflow/mn_local_inputs/tax_documents/ignore.csv", payload_bytes)
         self.assertEqual(manifest["metadata"]["mn_local_inputs"]["folders"][0]["file_count"], 1)
 
-    @requires_blueprint_support
     def test_load_blueprint_bundle_injects_runtime_web_ui_service(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
@@ -646,7 +637,6 @@ class TestBlueprintServices(unittest.TestCase):
                 )
             )
 
-            inject_local_blueprint_support_path()
             with patch.dict(
                 os.environ,
                 {
@@ -654,7 +644,7 @@ class TestBlueprintServices(unittest.TestCase):
                     "MN_BLUEPRINT_WEB_UI_PORT_END": "61001",
                     "MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE": "prepublished",
                 },
-            ), patch("mn_blueprint_support.runtime_web_ui.web_ui_port_available", return_value=False):
+            ), patch("mn_sdk.blueprint_support.runtime_web_ui.web_ui_port_available", return_value=False):
                 manifest_json, payload_bytes = load_blueprint_bundle(
                     repo.resolve(),
                     {"id": "video_watch_assistant", "path": "video_watch_assistant"},
@@ -677,7 +667,7 @@ class TestBlueprintServices(unittest.TestCase):
             "http://localhost:61001",
         )
         self.assertIn(
-            "mn_runtime_web_ui/src/mn_blueprint_support/gradio_dashboard.py",
+            "mn_runtime_web_ui/src/mn_sdk/blueprint_support/gradio_dashboard.py",
             payload_bytes,
         )
 

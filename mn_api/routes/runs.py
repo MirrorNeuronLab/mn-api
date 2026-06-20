@@ -13,6 +13,18 @@ from typing import Any, Callable
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
+from mn_sdk.blueprint_support.observability import (
+    acknowledge_human_notice,
+    list_pending_human_requests,
+    read_human_events,
+    read_run_events,
+    read_run_logs,
+    read_run_observability_summary,
+    read_run_resources,
+    read_run_stream_records,
+    read_run_timeline,
+    record_human_response,
+)
 
 from mn_api import state
 from mn_api.artifacts import artifact_content_type, artifact_ref, list_artifact_files
@@ -649,22 +661,6 @@ def _ensure_run_exists(run_id: str) -> Path:
 
 
 def _observability_tools() -> dict[str, Any]:
-    _ensure_blueprint_support_path()
-    try:
-        from mn_blueprint_support.observability import (
-            acknowledge_human_notice,
-            list_pending_human_requests,
-            read_human_events,
-            read_run_events,
-            read_run_logs,
-            read_run_observability_summary,
-            read_run_resources,
-            read_run_stream_records,
-            read_run_timeline,
-            record_human_response,
-        )
-    except ModuleNotFoundError as exc:
-        raise HTTPException(status_code=500, detail="blueprint observability support is unavailable") from exc
     return {
         "acknowledge_human_notice": acknowledge_human_notice,
         "list_pending_human_requests": list_pending_human_requests,
@@ -677,13 +673,6 @@ def _observability_tools() -> dict[str, Any]:
         "read_run_timeline": read_run_timeline,
         "record_human_response": record_human_response,
     }
-
-
-def _ensure_blueprint_support_path() -> None:
-    repo_root = Path(__file__).resolve().parents[3]
-    support_src = repo_root / "mn-skills" / "blueprint_support_skill" / "src"
-    if support_src.exists() and str(support_src) not in sys.path:
-        sys.path.insert(0, str(support_src))
 
 
 def _duration_seconds(value: str) -> float:

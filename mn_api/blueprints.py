@@ -44,6 +44,13 @@ from mn_sdk.runtime_modules import (
     default_registered_modules_root,
     ensure_runtime_modules_for_manifest,
 )
+from mn_sdk.blueprint_support import (
+    inject_runtime_web_ui_service,
+    render_manifest_agent_templates,
+    runtime_web_ui_service_from_manifest as sdk_runtime_web_ui_service_from_manifest,
+    runtime_web_ui_support_payloads,
+    stage_local_input_payloads_for_manifest as stage_sdk_local_input_payloads,
+)
 
 from mn_api.config import ApiConfig, runtime_env_values
 from mn_api.path_utils import default_runs_root, inside_path
@@ -103,7 +110,6 @@ def runtime_path_environment() -> Dict[str, str]:
         "MN_SKILLS_ROOT": str(skills_root),
     }
     python_paths = [
-        skills_root / "blueprint_support_skill" / "src",
         skills_root / "llm_ocr_skill" / "src",
         skills_root / "pdf_extract_skill" / "src",
     ]
@@ -115,13 +121,6 @@ def runtime_path_environment() -> Dict[str, str]:
         env["PYTHONPATH"] = os.pathsep.join(resolved_python_paths)
     env["PATH"] = docker_cli_path_environment().get("PATH", os.getenv("PATH", ""))
     return env
-
-
-def inject_local_blueprint_support_path() -> None:
-    skills_root = Path(runtime_path_environment()["MN_SKILLS_ROOT"]).expanduser()
-    candidate = skills_root / "blueprint_support_skill" / "src"
-    if candidate.is_dir() and str(candidate) not in sys.path:
-        sys.path.insert(0, str(candidate))
 
 
 def ensure_runtime_modules_for_submission(
@@ -972,14 +971,6 @@ def inject_runtime_web_ui_service_for_submission(
     reserved_ports: set[int] | None = None,
 ) -> Dict[str, Any] | None:
     ensure_runtime_modules_for_submission(manifest, config)
-    inject_local_blueprint_support_path()
-    try:
-        from mn_blueprint_support import inject_runtime_web_ui_service
-    except ImportError as exc:
-        raise HTTPException(
-            status_code=500,
-            detail="blueprint web UI service injection requires mn_blueprint_support",
-        ) from exc
     try:
         return inject_runtime_web_ui_service(
             manifest,
@@ -996,12 +987,7 @@ def inject_runtime_web_ui_service_for_submission(
 
 def runtime_web_ui_support_payloads_for_manifest(manifest: Dict[str, Any]) -> Dict[str, bytes]:
     ensure_runtime_modules_for_submission(manifest)
-    inject_local_blueprint_support_path()
-    try:
-        from mn_blueprint_support import runtime_web_ui_service_from_manifest, runtime_web_ui_support_payloads
-    except ImportError:
-        return {}
-    if not runtime_web_ui_service_from_manifest(manifest):
+    if not sdk_runtime_web_ui_service_from_manifest(manifest):
         return {}
     return runtime_web_ui_support_payloads()
 
@@ -1013,16 +999,8 @@ def stage_local_input_payloads_for_manifest(
     bundle_dir: Path,
 ) -> Dict[str, Any]:
     ensure_runtime_modules_for_submission(manifest)
-    inject_local_blueprint_support_path()
     try:
-        from mn_blueprint_support import stage_local_input_payloads_for_manifest as stage_payloads
-    except ImportError as exc:
-        raise HTTPException(
-            status_code=500,
-            detail="local blueprint input staging requires mn_blueprint_support",
-        ) from exc
-    try:
-        return stage_payloads(manifest, payloads, bundle_dir=bundle_dir)
+        return stage_sdk_local_input_payloads(manifest, payloads, bundle_dir=bundle_dir)
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1199,11 +1177,6 @@ def render_agent_templates_for_submission(manifest: Dict[str, Any]) -> None:
     if not nodes or not any(isinstance(node, dict) and "uses" in node for node in nodes):
         return
     ensure_runtime_modules_for_submission(manifest)
-    inject_local_blueprint_support_path()
-    try:
-        from mn_blueprint_support import render_manifest_agent_templates
-    except ImportError as exc:
-        raise HTTPException(status_code=500, detail="blueprint uses agent templates but mn_blueprint_support is not installed") from exc
     rendered = render_manifest_agent_templates(manifest)
     manifest.clear()
     manifest.update(rendered)
@@ -1764,7 +1737,7 @@ def start_background_event_relay_if_needed(
     command = [
         sys.executable,
         "-m",
-        "mn_blueprint_support.event_relay",
+        "mn_sdk.blueprint_support.event_relay",
         "--job-id",
         job_id,
         "--run-dir",

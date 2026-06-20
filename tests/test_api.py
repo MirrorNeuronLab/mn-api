@@ -1,5 +1,4 @@
 import unittest
-import importlib.util
 import io
 import json
 import os
@@ -691,10 +690,6 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(runtime_blueprint_web_ui_reserved_ports(), {61000})
         mock_client.get_job.assert_not_called()
 
-    @unittest.skipIf(
-        importlib.util.find_spec("mn_blueprint_support") is None,
-        "mn_blueprint_support is not installed",
-    )
     @patch('mn_api.state.client')
     def test_blueprint_run_persists_runtime_web_ui_service_contract(self, mock_client):
         mock_client.list_jobs.return_value = json.dumps({"data": []})
@@ -1509,10 +1504,6 @@ class TestAPI(unittest.TestCase):
         response = self.client.get("/api/v1/runs/bad$id/ui")
         self.assertEqual(response.status_code, 400)
 
-    @unittest.skipIf(
-        importlib.util.find_spec("mn_blueprint_support") is None,
-        "mn_blueprint_support is not installed",
-    )
     def test_run_observability_endpoints_read_shared_artifacts(self):
         with tempfile.TemporaryDirectory() as tmp:
             runs_root = Path(tmp)
@@ -3227,12 +3218,12 @@ class TestAPI(unittest.TestCase):
                 self._restore_config(original)
 
         self.assertEqual(response.status_code, 200)
-        relay_commands = [command for command in popen_commands if "mn_blueprint_support.event_relay" in command]
+        relay_commands = [command for command in popen_commands if "mn_sdk.blueprint_support.event_relay" in command]
         self.assertEqual(len(relay_commands), 1)
         self.assertEqual(relay_commands[0][:9], [
             sys.executable,
             "-m",
-            "mn_blueprint_support.event_relay",
+            "mn_sdk.blueprint_support.event_relay",
             "--job-id",
             "job-post-launch",
             "--run-dir",
