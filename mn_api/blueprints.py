@@ -39,6 +39,11 @@ from mn_sdk import (
     validate_service_spec_issues,
 )
 from mn_sdk.blueprint_source import is_git_repo_url
+from mn_sdk.runtime_modules import (
+    RuntimeModuleInstallError,
+    default_registered_modules_root,
+    ensure_runtime_modules_for_manifest,
+)
 
 from mn_api.config import ApiConfig, runtime_env_values
 from mn_api.path_utils import default_runs_root, inside_path
@@ -83,12 +88,14 @@ def workspace_root() -> Path:
 
 def runtime_path_environment() -> Dict[str, str]:
     root = workspace_root()
+    runtime_modules_root = default_registered_modules_root(workspace_root=root)
+    runtime_env = runtime_env_values()
     membrane_project_path = Path(os.getenv("MN_MEMBRANE_PROJECT_PATH") or root / "Membrane").expanduser()
     membrane_sdk_path = Path(
         os.getenv("MN_MEMBRANE_SDK_PATH")
         or membrane_project_path / "mn-context-engine-python-sdk" / "src"
     ).expanduser()
-    skills_root = Path(os.getenv("MN_SKILLS_ROOT") or root / "mn-skills").expanduser()
+    skills_root = Path(os.getenv("MN_SKILLS_ROOT") or runtime_env.get("MN_SKILLS_ROOT") or runtime_modules_root).expanduser()
     env = {
         "MN_WORKSPACE_ROOT": str(root),
         "MN_MEMBRANE_PROJECT_PATH": str(membrane_project_path),
@@ -115,6 +122,16 @@ def inject_local_blueprint_support_path() -> None:
     candidate = skills_root / "blueprint_support_skill" / "src"
     if candidate.is_dir() and str(candidate) not in sys.path:
         sys.path.insert(0, str(candidate))
+
+
+def ensure_runtime_modules_for_submission(
+    manifest: Dict[str, Any],
+    config: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    try:
+        return ensure_runtime_modules_for_manifest(manifest, config, workspace_root=workspace_root())
+    except RuntimeModuleInstallError as exc:
+        raise HTTPException(status_code=500, detail=f"runtime module auto-install failed: {exc}") from exc
 
 
 def blueprint_web_ui_enabled(config: Dict[str, Any] | None) -> bool:
@@ -894,6 +911,7 @@ def load_blueprint_bundle(
     if blueprint.get("revision"):
         metadata["blueprint_revision"] = blueprint["revision"]
     manifest["run_id"] = run_id
+    ensure_runtime_modules_for_submission(manifest)
     render_agent_templates_for_submission(manifest)
     materialize_agent_topology_for_runtime(manifest)
     prepare_openshell_custom_images(bundle_root, manifest)
@@ -905,6 +923,7 @@ def load_blueprint_bundle(
     )
     if config is not None:
         apply_manifest_config_bindings(manifest, config)
+        ensure_runtime_modules_for_submission(manifest, config)
         if blueprint_web_ui_enabled(config):
             inject_runtime_web_ui_service_for_submission(
                 manifest,
@@ -952,6 +971,7 @@ def inject_runtime_web_ui_service_for_submission(
     env_overrides: Dict[str, str] | None = None,
     reserved_ports: set[int] | None = None,
 ) -> Dict[str, Any] | None:
+    ensure_runtime_modules_for_submission(manifest, config)
     inject_local_blueprint_support_path()
     try:
         from mn_blueprint_support import inject_runtime_web_ui_service
@@ -975,6 +995,7 @@ def inject_runtime_web_ui_service_for_submission(
 
 
 def runtime_web_ui_support_payloads_for_manifest(manifest: Dict[str, Any]) -> Dict[str, bytes]:
+    ensure_runtime_modules_for_submission(manifest)
     inject_local_blueprint_support_path()
     try:
         from mn_blueprint_support import runtime_web_ui_service_from_manifest, runtime_web_ui_support_payloads
@@ -991,6 +1012,7 @@ def stage_local_input_payloads_for_manifest(
     *,
     bundle_dir: Path,
 ) -> Dict[str, Any]:
+    ensure_runtime_modules_for_submission(manifest)
     inject_local_blueprint_support_path()
     try:
         from mn_blueprint_support import stage_local_input_payloads_for_manifest as stage_payloads
@@ -1176,6 +1198,7 @@ def render_agent_templates_for_submission(manifest: Dict[str, Any]) -> None:
     nodes = manifest_agent_nodes(manifest)
     if not nodes or not any(isinstance(node, dict) and "uses" in node for node in nodes):
         return
+    ensure_runtime_modules_for_submission(manifest)
     inject_local_blueprint_support_path()
     try:
         from mn_blueprint_support import render_manifest_agent_templates
