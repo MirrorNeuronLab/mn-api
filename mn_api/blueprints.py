@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import sys
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 from urllib.parse import urlparse
 
 from fastapi import HTTPException
@@ -493,6 +493,7 @@ def install_blueprint_runtime_models(
     *,
     force: bool = False,
     config_overrides: Dict[str, Any] | None = None,
+    service_progress: Callable[[str, dict[str, Any] | None], None] | None = None,
 ) -> Dict[str, Any]:
     bundle_root = validate_blueprint_bundle(repo_root, blueprint)
     try:
@@ -571,10 +572,16 @@ def install_blueprint_runtime_models(
         )
         results.append({**base_result, "status": "already_installed" if installed else "installed"})
     if not errors and blueprint_requires_context_engine(manifest, config):
+        if service_progress is not None:
+            service_progress("context_engine_needed", None)
         context_result = ensure_context_engine_for_blueprint(bundle_root, force=force)
         service_results.append(context_result)
         if context_result.get("status") == "failed":
+            if service_progress is not None:
+                service_progress("context_engine_failed", context_result)
             errors.append(str(context_result.get("error") or "context engine setup failed"))
+        elif service_progress is not None:
+            service_progress("context_engine_ready", context_result)
     return {"ok": not errors, "models": results, "services": service_results, "errors": errors}
 
 

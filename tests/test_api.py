@@ -3504,10 +3504,63 @@ class TestAPI(unittest.TestCase):
         self.assertTrue(progress_body["completed"])
         progress_phases = [event["phase"] for event in progress_body["events"]]
         self.assertIn("model_install", progress_phases)
+        self.assertIn("context_engine", progress_phases)
         self.assertIn("validation", progress_phases)
+        phase_by_id = {phase["id"]: phase for phase in progress_body["phases"]}
+        self.assertEqual(phase_by_id["model_install"]["label"], "Prepare runtime models")
+        self.assertEqual(phase_by_id["context_engine"]["status"], "skipped")
         self.assertEqual(progress_body["events"][-1]["phase"], "launch")
         self.assertEqual(progress_body["events"][-1]["status"], "completed")
         mock_run.assert_called_once()
+
+    @patch("mn_api.routes.blueprints.run_mn_blueprint_run")
+    @patch("mn_api.routes.blueprints.run_mn_blueprint_validate")
+    def test_blueprint_launch_progress_records_context_engine_when_required(self, mock_validate, mock_run):
+        mock_validate.return_value = {"ok": True, "status": "passed", "issues": [], "errors": []}
+        mock_run.return_value = {"ok": True, "job_id": "job-context", "run_id": "run-context", "command": "mn blueprint run"}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            self._write_blueprint_repo(repo)
+            config_dir = repo / "worker_one" / "config"
+            config_dir.mkdir()
+            (config_dir / "default.json").write_text(json.dumps({
+                "memory_layer": {
+                    "enabled": True,
+                    "enabled_env": "MN_CONTEXT_MEMORY_ENABLED",
+                    "sdk_import_package": "mn_context_engine_sdk",
+                }
+            }))
+            original = self._set_blueprint_config(repo)
+            try:
+                with patch.dict(os.environ, {"MN_LAUNCH_PROGRESS_DIR": str(repo / "progress")}):
+                    with patch(
+                        "mn_api.routes.blueprints.validate_blueprint_hardware_requirements",
+                        return_value={"ok": True, "status": "passed", "issues": [], "errors": []},
+                    ), patch(
+                        "mn_api.blueprints.subprocess.run",
+                        return_value=SimpleNamespace(returncode=0, stdout="", stderr=""),
+                    ):
+                        response = self.client.post(
+                            "/api/v1/blueprints/launch/runs",
+                            json={
+                                "source": "catalog",
+                                "blueprint_id": "worker_one",
+                                "progress_id": "launch-context-test",
+                            },
+                        )
+                    progress_response = self.client.get("/api/v1/blueprints/launch/progress/launch-context-test")
+            finally:
+                self._restore_config(original)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(progress_response.status_code, 200)
+        progress_body = progress_response.json()
+        context_events = [event for event in progress_body["events"] if event["phase"] == "context_engine"]
+        self.assertEqual([event["status"] for event in context_events], ["running", "completed"])
+        self.assertIn("First launch may download the context model", context_events[0]["expectation"])
+        phase_by_id = {phase["id"]: phase for phase in progress_body["phases"]}
+        self.assertEqual(phase_by_id["context_engine"]["label"], "Prepare context memory")
+        self.assertEqual(phase_by_id["context_engine"]["status"], "completed")
 
     def test_blueprint_launch_progress_rejects_invalid_progress_id(self):
         response = self.client.get("/api/v1/blueprints/launch/progress/not/valid")
