@@ -193,6 +193,73 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertIn("2048", command)
         mock_record.assert_called_once()
 
+    @patch("mn_api.blueprints.record_model_owner")
+    @patch("mn_api.blueprints.load_model_catalog")
+    @patch("mn_api.blueprints.load_model_ownership")
+    @patch("mn_api.blueprints.docker_model_installed")
+    @patch("mn_api.blueprints.subprocess.run")
+    def test_install_blueprint_runtime_models_deduplicates_same_docker_model(
+        self,
+        mock_run,
+        mock_installed,
+        mock_ledger,
+        mock_catalog,
+        mock_record,
+    ):
+        mock_run.return_value = SimpleNamespace(returncode=0, stdout="", stderr="")
+        mock_installed.return_value = False
+        mock_ledger.return_value = {"version": 1, "models": {}}
+        mock_catalog.return_value = {
+            "gemma4:e2b": {
+                "id": "gemma4:e2b",
+                "model": "ai/gemma4:E2B",
+                "provider": "docker_model_runner",
+                "aliases": ["default"],
+                "backend": "llama.cpp",
+            }
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            bundle = repo / "worker_one"
+            config_dir = bundle / "config"
+            config_dir.mkdir(parents=True)
+            (config_dir / "default.json").write_text(json.dumps({
+                "llm": {
+                    "enabled": True,
+                    "configs": {
+                        "primary": {
+                            "provider": "docker_model_runner",
+                            "model": "default",
+                        }
+                    },
+                    "default_config": "primary",
+                }
+            }))
+            (bundle / "manifest.json").write_text(json.dumps({
+                "metadata": {"blueprint_id": "worker_one"},
+                "nodes": [],
+                "edges": [],
+                "runtime": {
+                    "models": {
+                        "primary": {
+                            "provider": "docker_model_runner",
+                            "model": "gemma4:e2b",
+                            "backend": "llama.cpp",
+                        }
+                    }
+                },
+            }))
+
+            summary = install_blueprint_runtime_models(repo.resolve(), {"id": "worker_one", "path": "worker_one"})
+
+        self.assertTrue(summary["ok"])
+        self.assertEqual(len(summary["models"]), 2)
+        self.assertEqual(summary["models"][0]["status"], "installed")
+        self.assertEqual(summary["models"][1]["status"], "installed")
+        self.assertEqual(summary["models"][1]["duplicate_of"], "llm.configs.primary")
+        mock_run.assert_called_once()
+        mock_record.assert_called_once()
+
     def test_blueprint_requires_context_engine_from_enabled_memory_layer(self):
         manifest = {
             "metadata": {

@@ -509,6 +509,7 @@ def install_blueprint_runtime_models(
     results: list[dict[str, Any]] = []
     service_results: list[dict[str, Any]] = []
     errors: list[str] = []
+    prepared_docker_models: dict[str, dict[str, Any]] = {}
     blueprint_id = str(blueprint.get("id") or "")
     blueprint_revision = str(blueprint.get("revision") or "")
     for requirement in requirements:
@@ -543,6 +544,17 @@ def install_blueprint_runtime_models(
             )
             results.append({**base_result, "status": "service_required"})
             continue
+        previous_result = prepared_docker_models.get(target)
+        if previous_result is not None:
+            duplicate_result = {
+                **base_result,
+                "status": previous_result.get("status", "already_installed"),
+                "duplicate_of": previous_result.get("path"),
+            }
+            if previous_result.get("error"):
+                duplicate_result["error"] = previous_result["error"]
+            results.append(duplicate_result)
+            continue
         preexisting_record = ledger.get("models", {}).get(target)
         try:
             installed = docker_model_installed(target)
@@ -559,7 +571,9 @@ def install_blueprint_runtime_models(
             result = subprocess.run(command, cwd=str(bundle_root), capture_output=True, text=True, timeout=1200, check=False)
             if result.returncode != 0:
                 message = (result.stderr or result.stdout or "model install failed").strip()
-                results.append({**base_result, "status": "failed", "error": message})
+                failed_result = {**base_result, "status": "failed", "error": message}
+                prepared_docker_models[target] = failed_result
+                results.append(failed_result)
                 errors.append(message)
                 continue
         record_model_owner(
@@ -570,7 +584,9 @@ def install_blueprint_runtime_models(
             backend=backend,
             preexisting_manual=installed and not isinstance(preexisting_record, dict),
         )
-        results.append({**base_result, "status": "already_installed" if installed else "installed"})
+        ready_result = {**base_result, "status": "already_installed" if installed else "installed"}
+        prepared_docker_models[target] = ready_result
+        results.append(ready_result)
     if not errors and blueprint_requires_context_engine(manifest, config):
         if service_progress is not None:
             service_progress("context_engine_needed", None)
