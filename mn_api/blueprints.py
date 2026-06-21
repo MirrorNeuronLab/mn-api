@@ -39,6 +39,7 @@ from mn_sdk import (
     validate_service_spec_issues,
 )
 from mn_sdk.blueprint_source import is_git_repo_url
+from mn_sdk.context_engine import blueprint_requires_context_engine
 from mn_sdk.runtime_modules import (
     RuntimeModuleInstallError,
     default_registered_modules_root,
@@ -575,77 +576,6 @@ def install_blueprint_runtime_models(
         if context_result.get("status") == "failed":
             errors.append(str(context_result.get("error") or "context engine setup failed"))
     return {"ok": not errors, "models": results, "services": service_results, "errors": errors}
-
-
-def blueprint_requires_context_engine(
-    manifest: dict[str, Any] | None,
-    config: dict[str, Any] | None,
-) -> bool:
-    config_required = context_memory_sections_require_engine(context_memory_sections(config))
-    if config_required is not None:
-        return config_required
-    manifest_required = context_memory_sections_require_engine(context_memory_sections(manifest))
-    return bool(manifest_required)
-
-
-def context_memory_sections_require_engine(sections: list[dict[str, Any]]) -> bool | None:
-    saw_disabled = False
-    for section in sections:
-        required = context_memory_section_enabled(section)
-        if required is True:
-            return True
-        if required is False:
-            saw_disabled = True
-    return False if saw_disabled else None
-
-
-def context_memory_sections(value: Any) -> list[dict[str, Any]]:
-    sections: list[dict[str, Any]] = []
-    visited: set[int] = set()
-
-    def visit(item: Any) -> None:
-        marker = id(item)
-        if marker in visited:
-            return
-        visited.add(marker)
-        if isinstance(item, dict):
-            for key, child in item.items():
-                if key in {"memory_layer", "context_memory"} and isinstance(child, dict):
-                    sections.append(child)
-                if isinstance(child, (dict, list)):
-                    visit(child)
-        elif isinstance(item, list):
-            for child in item:
-                if isinstance(child, (dict, list)):
-                    visit(child)
-
-    visit(value)
-    return sections
-
-
-def context_memory_section_enabled(section: dict[str, Any]) -> bool | None:
-    env_name = str(section.get("enabled_env") or "").strip()
-    if env_name and env_name in os.environ:
-        return truthy_context_value(os.environ.get(env_name))
-    enabled = section.get("enabled")
-    if enabled is not None:
-        return truthy_context_value(enabled)
-    if section.get("requires_context_engine") is not None:
-        return truthy_context_value(section.get("requires_context_engine"))
-    if str(section.get("sdk_import_package") or "").strip() == "mn_context_engine_sdk":
-        return True
-    if any(key in section for key in ("context_addr_env", "python_sdk_path", "project_path")):
-        return True
-    return None
-
-
-def truthy_context_value(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    normalized = str(value).strip().lower()
-    if normalized in {"", "0", "false", "no", "off", "disabled", "none", "null"}:
-        return False
-    return True
 
 
 def ensure_context_engine_for_blueprint(bundle_root: Path, *, force: bool = False) -> dict[str, Any]:
