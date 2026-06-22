@@ -10,7 +10,7 @@ from mn_api.config import ApiConfig
 
 
 class TestApiConfig(unittest.TestCase):
-    def test_token_files_win_over_stale_runtime_env(self):
+    def test_fixed_tokens_win_over_stale_runtime_env_and_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             state_dir = Path(tmp) / ".mn"
             state_dir.mkdir()
@@ -25,10 +25,10 @@ class TestApiConfig(unittest.TestCase):
             with patch.dict(os.environ, {"HOME": tmp}, clear=True):
                 config = ApiConfig.from_env()
 
-        self.assertEqual(config.grpc_auth_token, "auth-from-file")
-        self.assertEqual(config.grpc_admin_token, "admin-from-file")
+        self.assertEqual(config.grpc_auth_token, "mirror_neuron_password")
+        self.assertEqual(config.grpc_admin_token, "mirror_neuron_password_admin")
 
-    def test_configured_token_file_env_wins_before_runtime_env(self):
+    def test_fixed_tokens_win_over_configured_token_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             state_dir = Path(tmp) / ".mn"
             state_dir.mkdir()
@@ -53,8 +53,8 @@ class TestApiConfig(unittest.TestCase):
             ):
                 config = ApiConfig.from_env()
 
-        self.assertEqual(config.grpc_auth_token, "auth-from-configured-file")
-        self.assertEqual(config.grpc_admin_token, "admin-from-configured-file")
+        self.assertEqual(config.grpc_auth_token, "mirror_neuron_password")
+        self.assertEqual(config.grpc_admin_token, "mirror_neuron_password_admin")
 
     def test_runtime_endpoints_override_stale_runtime_grpc_target(self):
         with tempfile.TemporaryDirectory() as tmp:

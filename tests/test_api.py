@@ -576,7 +576,7 @@ class TestAPI(unittest.TestCase):
         with patch.dict(os.environ, {"MN_GRPC_AUTH_TOKEN": "auth-secret"}, clear=False):
             config = ApiConfig.from_env()
 
-        self.assertEqual(config.grpc_auth_token, "auth-secret")
+        self.assertEqual(config.grpc_auth_token, "mirror_neuron_password")
 
     def test_service_ports_from_payload_extracts_valid_ports(self):
         self.assertEqual(
@@ -751,7 +751,7 @@ class TestAPI(unittest.TestCase):
         with patch.dict(os.environ, {"MN_GRPC_ADMIN_TOKEN": "admin-secret"}, clear=False):
             config = ApiConfig.from_env()
 
-        self.assertEqual(config.grpc_admin_token, "admin-secret")
+        self.assertEqual(config.grpc_admin_token, "mirror_neuron_password_admin")
 
     def test_config_ignores_legacy_grpc_admin_token(self):
         with patch.dict(
@@ -764,7 +764,7 @@ class TestAPI(unittest.TestCase):
         ):
             config = ApiConfig.from_env()
 
-        self.assertEqual(config.grpc_admin_token, "")
+        self.assertEqual(config.grpc_admin_token, "mirror_neuron_password_admin")
 
     def test_config_uses_standard_local_blueprint_source(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -838,8 +838,8 @@ class TestAPI(unittest.TestCase):
             ):
                 config = ApiConfig.from_env()
 
-        self.assertEqual(config.grpc_auth_token, "auth-from-file")
-        self.assertEqual(config.grpc_admin_token, "admin-from-file")
+        self.assertEqual(config.grpc_auth_token, "mirror_neuron_password")
+        self.assertEqual(config.grpc_admin_token, "mirror_neuron_password_admin")
 
     def test_config_uses_local_grpc_token_files_before_stale_runtime_env(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -855,8 +855,8 @@ class TestAPI(unittest.TestCase):
             with patch.dict(os.environ, {"HOME": tmp}, clear=True):
                 config = ApiConfig.from_env()
 
-        self.assertEqual(config.grpc_auth_token, "auth-from-file")
-        self.assertEqual(config.grpc_admin_token, "admin-from-file")
+        self.assertEqual(config.grpc_auth_token, "mirror_neuron_password")
+        self.assertEqual(config.grpc_admin_token, "mirror_neuron_password_admin")
 
     def test_config_uses_configured_grpc_token_files(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -879,8 +879,8 @@ class TestAPI(unittest.TestCase):
             ):
                 config = ApiConfig.from_env()
 
-        self.assertEqual(config.grpc_auth_token, "auth-from-configured-file")
-        self.assertEqual(config.grpc_admin_token, "admin-from-configured-file")
+        self.assertEqual(config.grpc_auth_token, "mirror_neuron_password")
+        self.assertEqual(config.grpc_admin_token, "mirror_neuron_password_admin")
 
     def test_config_uses_persisted_runtime_grpc_state(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -906,8 +906,8 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(config.host, "127.0.0.1")
         self.assertEqual(config.port, 54111)
         self.assertEqual(config.grpc_target, "127.0.0.1:55111")
-        self.assertEqual(config.grpc_auth_token, "auth-from-state")
-        self.assertEqual(config.grpc_admin_token, "admin-from-state")
+        self.assertEqual(config.grpc_auth_token, "mirror_neuron_password")
+        self.assertEqual(config.grpc_admin_token, "mirror_neuron_password_admin")
 
     def test_state_recreates_client_when_grpc_admin_token_changes(self):
         created = []
