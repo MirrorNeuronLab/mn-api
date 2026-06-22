@@ -130,6 +130,7 @@ class TestAPI(unittest.TestCase):
         body = response.json()
         self.assertEqual(body["status"], "ok")
         self.assertEqual(body["auth"], "disabled")
+        self.assertIn("env", body)
         self.assertIn("blueprint_source", body)
         self.assertIn("blueprint_repo", body)
         self.assertIn("blueprint_local", body)
