@@ -11,6 +11,8 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 
 from mn_api import state
 from mn_api.dependencies import require_auth
+from mn_api.errors import handle_grpc_error
+from mn_api.schemas import ModelInstallRequest, ModelRemoveRequest, ModelUpdateRequest
 from mn_sdk import (
     DOCKER_MODEL_RUNNER_HOST_API_BASE,
     assess_model_compatibility,
@@ -25,14 +27,28 @@ from mn_sdk import (
     model_ownership_metadata,
     resolve_model_entry,
 )
+from mn_sdk import (
+    doctor_runtime_model,
+    install_runtime_model,
+    list_runtime_models,
+    remove_runtime_model,
+    show_runtime_model,
+    update_runtime_model,
+)
 
 
 router = APIRouter(prefix="/api/v1")
 
 
 @router.get("/models")
-def list_models(_auth=Depends(require_auth)):
+def list_models(installed_only: bool = True, _auth=Depends(require_auth)):
     """List Docker Model Runner models installed on this runtime node."""
+    if not installed_only:
+        try:
+            return list_runtime_models(installed_only=False)
+        except Exception as exc:
+            return handle_grpc_error(exc)
+
     catalog = load_model_catalog()
     ownership = load_model_ownership()
     docker_state = _installed_model_names()
@@ -56,6 +72,84 @@ def list_models(_auth=Depends(require_auth)):
         "runner_available": docker_state["available"],
         "warnings": docker_state["warnings"],
     }
+
+
+@router.get("/models/catalog")
+def list_model_catalog(_auth=Depends(require_auth)):
+    try:
+        return list_runtime_models(installed_only=False)
+    except Exception as exc:
+        return handle_grpc_error(exc)
+
+
+@router.get("/models/{model_id:path}/doctor")
+def doctor_model(model_id: str, _auth=Depends(require_auth)):
+    try:
+        return doctor_runtime_model(model_id)
+    except Exception as exc:
+        return handle_grpc_error(exc)
+
+
+@router.get("/models/{model_id:path}")
+def show_model(
+    model_id: str,
+    compatibility: bool = False,
+    _auth=Depends(require_auth),
+):
+    try:
+        return show_runtime_model(model_id, compatibility=compatibility)
+    except Exception as exc:
+        return handle_grpc_error(exc)
+
+
+@router.post("/models/{model_id:path}/install")
+def install_model(model_id: str, req: ModelInstallRequest | None = None, _auth=Depends(require_auth)):
+    request = req or ModelInstallRequest()
+    try:
+        result = install_runtime_model(
+            model_id,
+            backend=request.backend,
+            context_size=request.context_size,
+            force=request.force,
+        )
+        return {"status": "running", **result}
+    except Exception as exc:
+        return handle_grpc_error(exc)
+
+
+@router.post("/models/{model_id:path}/update")
+def update_model(model_id: str, req: ModelUpdateRequest | None = None, _auth=Depends(require_auth)):
+    request = req or ModelUpdateRequest()
+    try:
+        return update_runtime_model(model_id, all_models=request.all, force=request.force)
+    except Exception as exc:
+        return handle_grpc_error(exc)
+
+
+@router.post("/models:update")
+def update_models(req: ModelUpdateRequest | None = None, _auth=Depends(require_auth)):
+    request = req or ModelUpdateRequest(all=True)
+    try:
+        return update_runtime_model(None, all_models=request.all or True, force=request.force)
+    except Exception as exc:
+        return handle_grpc_error(exc)
+
+
+@router.delete("/models/{model_id:path}")
+def remove_model(model_id: str, force: bool = False, _auth=Depends(require_auth)):
+    try:
+        return remove_runtime_model(model_id, force=force)
+    except Exception as exc:
+        return handle_grpc_error(exc)
+
+
+@router.post("/models/{model_id:path}/remove")
+def remove_model_post(model_id: str, req: ModelRemoveRequest | None = None, _auth=Depends(require_auth)):
+    request = req or ModelRemoveRequest()
+    try:
+        return remove_runtime_model(model_id, force=request.force)
+    except Exception as exc:
+        return handle_grpc_error(exc)
 
 
 @router.post("/models/{model_id:path}/benchmark")

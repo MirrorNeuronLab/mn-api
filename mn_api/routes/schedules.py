@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
+from mn_sdk import RuntimeService
 
 from mn_api import state
 from mn_api.bundles import load_uploaded_bundle
@@ -27,15 +28,43 @@ def create_schedule(req: CreateScheduleRequest, _auth=Depends(require_auth)):
     except Exception as exc:
         return handle_grpc_error(exc)
 
-    return client_json_response(
-        lambda: state.client.create_schedule(
+    try:
+        return RuntimeService(state.client).create_schedule(
             manifest_json,
             payloads,
             schedule=req.schedule,
             source=req.source or {"api": "create_schedule"},
-        ),
-        preserve_http_exceptions=True,
-    )
+        )
+    except Exception as exc:
+        return handle_grpc_error(exc)
+
+
+@router.post("/triggers")
+def create_trigger(req: CreateScheduleRequest, _auth=Depends(require_auth)):
+    req.schedule = {**(req.schedule or {}), "kind": "event"}
+    return create_schedule(req, _auth=_auth)
+
+
+@router.get("/triggers")
+def list_triggers(_auth=Depends(require_auth)):
+    return client_json_response(lambda: state.client.list_schedules(kind="event"))
+
+
+@router.delete("/triggers/{schedule_id}")
+def delete_trigger(schedule_id: str, reason: str = "", _auth=Depends(require_auth)):
+    return client_json_response(lambda: state.client.delete_schedule(schedule_id, reason=reason))
+
+
+@router.post("/schedules/periodic")
+def create_periodic_schedule(req: CreateScheduleRequest, _auth=Depends(require_auth)):
+    req.schedule = {**(req.schedule or {}), "kind": "periodic"}
+    return create_schedule(req, _auth=_auth)
+
+
+@router.post("/schedules/delayed")
+def create_delayed_schedule(req: CreateScheduleRequest, _auth=Depends(require_auth)):
+    req.schedule = {**(req.schedule or {}), "kind": "delayed"}
+    return create_schedule(req, _auth=_auth)
 
 
 @router.get("/schedules")

@@ -1,8 +1,13 @@
 # MirrorNeuron API
 
 `mn-api` is the FastAPI REST gateway for MirrorNeuron. It exposes runtime,
-blueprint, job, graph, event, metric, and run-artifact endpoints and forwards
-runtime calls to the core through the Python SDK gRPC client.
+blueprint, job, graph, event, metric, deployment, model, service, resource,
+and run-artifact endpoints and forwards runtime calls to the core through the
+Python SDK gRPC client.
+
+The shared business logic lives in `../mn-python-sdk/mn_sdk`. The CLI and API
+are adapters over that SDK: CLI commands render terminal output, while API
+routes validate HTTP payloads and return JSON/problem responses.
 
 ## Quick Start
 
@@ -26,6 +31,37 @@ Default local URL:
 ```text
 http://localhost:54001
 ```
+
+## Endpoint Summary
+
+All paths below are under `/api/v1`.
+
+- Health/runtime: `GET /health`, `GET /runtime/status`, `GET /system/summary`, `GET /metrics`
+- Jobs: `POST /jobs`, `GET /jobs`, `GET /jobs/{job_id}`, `POST /jobs/{job_id}/cancel`, `POST /jobs/{job_id}/pause`, `POST /jobs/{job_id}/resume`, `POST /jobs/cleanup`
+- Job recovery: `GET /jobs/{job_id}/dead-letters`, `POST /jobs/{job_id}/backup`, `POST /jobs/restore`
+- Schedules/events: `POST /schedules`, `POST /schedules/periodic`, `POST /schedules/delayed`, `GET /schedules`, `PATCH /schedules/{schedule_id}`, `POST /schedules/{schedule_id}/dispatch`, `POST /events`, `GET /events`
+- Triggers: `POST /triggers`, `GET /triggers`, `DELETE /triggers/{schedule_id}`
+- Deployments: `POST /deployments`, `GET /deployments`, `GET /deployments/{id_or_key}`, `POST /deployments/{id_or_key}/promote`, `POST /deployments/{id_or_key}/rollback`, `POST /deployments/{id_or_key}/pause`, `POST /deployments/{id_or_key}/resume`, `POST /deployments/{id_or_key}/fail`
+- Nodes/resources: `GET /resource`, `POST /resource`, `POST /nodes/{node_name}/reconcile`, `POST /nodes/{node_name}/drain`, `POST /nodes/{node_name}/undrain`, `POST /nodes/{node_name}/maintenance`
+- Services: `GET /services`, `GET /services/{name}/resolve`
+- Models: `GET /models`, `GET /models/catalog`, `GET /models/{model_id}`, `POST /models/{model_id}/install`, `POST /models/{model_id}/update`, `DELETE /models/{model_id}`, `GET /models/{model_id}/doctor`, `POST /models/{model_id}/benchmark`
+- Blueprints/runs/bundles: `GET /blueprints`, `POST /blueprints/{blueprint_id}/runs`, `POST /blueprints/launch/runs`, `POST /bundles/upload`, plus `/runs/{run_id}/...` artifact, UI, event, log, human-response, and observability routes.
+
+## SDK Usage
+
+Use SDK services directly when building another client:
+
+```python
+from mn_sdk import Client, RuntimeService, periodic_schedule
+
+service = RuntimeService(Client())
+jobs = service.list_jobs(limit=20)
+schedule = periodic_schedule(crons=["*/5 * * * *"], name="every-five")
+```
+
+Reusable SDK modules added for client parity include resource normalization,
+duration parsing, schedule payload builders, deployment policy creation,
+runtime service operations, model runtime management, and shared exceptions.
 
 ## Details
 

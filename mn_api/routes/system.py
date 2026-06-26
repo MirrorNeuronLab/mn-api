@@ -3,19 +3,26 @@ from __future__ import annotations
 import json
 import re
 import socket
-from numbers import Number
 from typing import Any, Callable
 
 from fastapi import APIRouter, Depends, HTTPException
 import grpc
-from mn_sdk import Client, RuntimeConfig, collect_runtime_status
+from mn_sdk import Client, RuntimeConfig, RuntimeService, collect_runtime_status, ensure_combined_resource_totals
 
 from mn_api import state
 from mn_api.blueprints import shared_runs_root
 from mn_api.config import auth_enabled
 from mn_api.dependencies import require_auth
 from mn_api.errors import handle_grpc_error
-from mn_api.schemas import ClusterNodeAddRequest, ClusterNodeRemoveRequest, ResourceSetRequest
+from mn_api.schemas import (
+    ClusterNodeAddRequest,
+    ClusterNodeRemoveRequest,
+    NodeDrainRequest,
+    NodeMaintenanceRequest,
+    NodeReconcileRequest,
+    NodeUndrainRequest,
+    ResourceSetRequest,
+)
 
 
 router = APIRouter(prefix="/api/v1")
@@ -50,8 +57,7 @@ def runtime_status(timeout: float = 3.0, _auth=Depends(require_auth)):
 @router.get("/system/summary")
 def get_system_summary(_auth=Depends(require_auth)):
     try:
-        summary_json = state.client.get_system_summary()
-        return json.loads(summary_json)
+        return RuntimeService(state.client).system_summary()
     except Exception as exc:
         return handle_grpc_error(exc)
 
@@ -59,19 +65,7 @@ def get_system_summary(_auth=Depends(require_auth)):
 @router.get("/metrics")
 def get_metrics(_auth=Depends(require_auth)):
     try:
-        summary = json.loads(state.client.get_system_summary())
-        if "metrics" in summary:
-            return summary["metrics"]
-
-        jobs = summary.get("jobs", [])
-        return {
-            "jobs": {
-                "total": len(jobs),
-                "by_status": counts(job.get("status", "unknown") for job in jobs),
-            },
-            "nodes": {"total": len(summary.get("nodes", []))},
-            "source": "system_summary",
-        }
+        return RuntimeService(state.client).metrics()
     except Exception as exc:
         return handle_grpc_error(exc)
 
@@ -79,8 +73,7 @@ def get_metrics(_auth=Depends(require_auth)):
 @router.get("/resource")
 def get_resource(_auth=Depends(require_auth)):
     try:
-        resource = json.loads(state.client.get_resource())
-        return ensure_combined_resource_totals(resource)
+        return RuntimeService(state.client).get_resource()
     except Exception as exc:
         return handle_grpc_error(exc)
 
@@ -93,8 +86,7 @@ def set_resource(req: ResourceSetRequest, _auth=Depends(require_auth)):
             payload = req.model_dump(exclude_none=True)
         else:
             payload = req.dict(exclude_none=True)
-        resource = json.loads(state.client.set_resource(payload))
-        return ensure_combined_resource_totals(resource)
+        return RuntimeService(state.client).set_resource(payload)
     except Exception as exc:
         return handle_grpc_error(exc)
 
@@ -146,116 +138,68 @@ def remove_cluster_node(req: ClusterNodeRemoveRequest, _auth=Depends(require_aut
         return handle_grpc_error(exc)
 
 
-def counts(values):
-    result = {}
-    for value in values:
-        result[value] = result.get(value, 0) + 1
-    return result
+@router.post("/nodes/{node_name}/reconcile")
+def reconcile_node(node_name: str, req: NodeReconcileRequest | None = None, _auth=Depends(require_auth)):
+    request = req or NodeReconcileRequest()
+    try:
+        return RuntimeService(state.client).reconcile_node(
+            normalize_node_name(node_name),
+            reason=request.reason,
+            dry_run=request.dry_run,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        return handle_grpc_error(exc)
 
 
-RESOURCE_TOTAL_KEYS = (
-    "cpu_cores",
-    "gpu_count",
-    "gpu_memory_total_mb",
-    "gpu_memory_free_mb",
-    "gpu_memory_total_gb",
-    "gpu_memory_free_gb",
-    "memory_gb",
-    "memory_total_gb",
-    "memory_available_gb",
-    "disk_gb",
-    "disk_available_gb",
-)
-INTEGER_RESOURCE_KEYS = {"cpu_cores", "gpu_count"}
+@router.post("/nodes/{node_name}/drain")
+def drain_node(node_name: str, req: NodeDrainRequest | None = None, _auth=Depends(require_auth)):
+    request = req or NodeDrainRequest()
+    try:
+        return RuntimeService(state.client).drain_node(
+            normalize_node_name(node_name),
+            reason=request.reason,
+            deadline=request.deadline,
+            deadline_ms=request.deadline_ms,
+            dry_run=request.dry_run,
+            wait=request.wait,
+            ignore_system_jobs=request.ignore_system_jobs,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        return handle_grpc_error(exc)
 
 
-def ensure_combined_resource_totals(payload: Any) -> Any:
-    if not isinstance(payload, dict):
-        return payload
-
-    enriched = dict(payload)
-
-    if isinstance(enriched.get("nodes"), list):
-        enriched["nodes"] = [
-            normalize_resource_totals(node) if isinstance(node, dict) else node
-            for node in enriched["nodes"]
-        ]
-
-    if isinstance(enriched.get("totals"), dict):
-        enriched["totals"] = normalize_resource_totals(enriched["totals"])
-
-    if isinstance(enriched.get("usable"), dict):
-        enriched["usable"] = normalize_resource_totals(enriched["usable"])
-
-    if isinstance(enriched.get("combined"), dict):
-        combined = enriched["combined"]
-    elif isinstance(enriched.get("totals"), dict):
-        combined = enriched["totals"]
-    elif isinstance(enriched.get("nodes"), list):
-        combined = combine_node_resources(enriched["nodes"])
-    else:
-        return enriched
-
-    enriched["combined"] = normalize_resource_totals(combined)
-    return enriched
+@router.post("/nodes/{node_name}/undrain")
+def undrain_node(node_name: str, req: NodeUndrainRequest | None = None, _auth=Depends(require_auth)):
+    request = req or NodeUndrainRequest()
+    try:
+        return RuntimeService(state.client).undrain_node(
+            normalize_node_name(node_name),
+            reason=request.reason,
+            mark_eligible=request.mark_eligible,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        return handle_grpc_error(exc)
 
 
-def combine_node_resources(nodes: Any) -> dict[str, Any]:
-    combined: dict[str, float] = {key: 0.0 for key in RESOURCE_TOTAL_KEYS}
-
-    if not isinstance(nodes, list):
-        return combined
-
-    for node in nodes:
-        if not isinstance(node, dict):
-            continue
-        node = normalize_resource_totals(node)
-        for key in RESOURCE_TOTAL_KEYS:
-            combined[key] += resource_number(node.get(key))
-
-    return normalize_resource_totals(combined)
-
-
-def normalize_resource_totals(totals: dict[str, Any]) -> dict[str, Any]:
-    normalized = dict(totals)
-
-    if "memory_total_gb" not in normalized and "memory_gb" in normalized:
-        normalized["memory_total_gb"] = normalized["memory_gb"]
-    if "memory_gb" not in normalized and "memory_total_gb" in normalized:
-        normalized["memory_gb"] = normalized["memory_total_gb"]
-    if "memory_available_gb" not in normalized:
-        normalized["memory_available_gb"] = 0.0
-
-    if "gpu_memory_total_gb" not in normalized and "gpu_memory_total_mb" in normalized:
-        normalized["gpu_memory_total_gb"] = resource_number(normalized["gpu_memory_total_mb"]) / 1024
-    if "gpu_memory_free_gb" not in normalized and "gpu_memory_free_mb" in normalized:
-        normalized["gpu_memory_free_gb"] = resource_number(normalized["gpu_memory_free_mb"]) / 1024
-    if "gpu_memory_total_mb" not in normalized and "gpu_memory_total_gb" in normalized:
-        normalized["gpu_memory_total_mb"] = resource_number(normalized["gpu_memory_total_gb"]) * 1024
-    if "gpu_memory_free_mb" not in normalized and "gpu_memory_free_gb" in normalized:
-        normalized["gpu_memory_free_mb"] = resource_number(normalized["gpu_memory_free_gb"]) * 1024
-
-    for key in RESOURCE_TOTAL_KEYS:
-        if key not in totals:
-            if key not in normalized:
-                normalized[key] = 0 if key in INTEGER_RESOURCE_KEYS else 0.0
-            value = resource_number(normalized.get(key))
-            normalized[key] = int(value) if key in INTEGER_RESOURCE_KEYS else round(value, 2)
-            continue
-        value = resource_number(totals.get(key))
-        normalized[key] = int(value) if key in INTEGER_RESOURCE_KEYS else round(value, 2)
-    return normalized
-
-
-def resource_number(value: Any) -> float:
-    if isinstance(value, Number):
-        return float(value)
-    if isinstance(value, str):
-        try:
-            return float(value.strip())
-        except ValueError:
-            return 0.0
-    return 0.0
+@router.post("/nodes/{node_name}/maintenance")
+def set_node_maintenance(node_name: str, req: NodeMaintenanceRequest | None = None, _auth=Depends(require_auth)):
+    request = req or NodeMaintenanceRequest()
+    try:
+        return RuntimeService(state.client).set_node_maintenance(
+            normalize_node_name(node_name),
+            enabled=request.enabled,
+            reason=request.reason,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        return handle_grpc_error(exc)
 
 
 def normalize_node_host(value: str) -> str:

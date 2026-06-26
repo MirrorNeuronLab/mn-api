@@ -5,6 +5,7 @@ import queue
 import re
 import threading
 import urllib.parse
+import base64
 from collections import Counter, deque
 from pathlib import Path
 from typing import Any
@@ -14,8 +15,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from mn_sdk import (
     BlueprintWorkflowProgress,
+    RuntimeService,
     make_validation_report,
-    prepare_job_submission,
     run_hardware_requirements_validation,
     run_input_validation,
     validate_input_validation_spec_issues,
@@ -45,7 +46,7 @@ from mn_api.run_store import read_jsonl_file as _read_jsonl_file
 from mn_api.run_store import run_dir_from_id as _run_dir_from_id
 from mn_api.run_store import runs_root as _runs_root
 from mn_api.run_store import stream_jsonl_files as _stream_jsonl_files
-from mn_api.schemas import SubmitJobRequest
+from mn_api.schemas import RestoreJobBackupRequest, SubmitJobRequest
 
 
 router = APIRouter(prefix="/api/v1")
@@ -93,20 +94,13 @@ def submit_job(req: SubmitJobRequest, _auth=Depends(require_auth)):
                 detail="manifest_json or _bundle_path is required",
             )
 
-        prepared = prepare_job_submission(
+        return RuntimeService(state.client).submit_job(
             manifest_json,
             payloads_bytes,
             bundle_dir=bundle_dir,
             run_id=_submission_run_id(manifest_json),
+            force=req.force,
         )
-        manifest_json = prepared.manifest_json
-        payloads_bytes = prepared.payloads
-
-        if req.force:
-            job_id = state.client.submit_job(manifest_json, payloads_bytes, force=True)
-        else:
-            job_id = state.client.submit_job(manifest_json, payloads_bytes)
-        return {"id": job_id, "status": "pending"}
     except HTTPException:
         raise
     except Exception as exc:
@@ -249,14 +243,12 @@ def list_jobs(limit: int = 20, include_terminal: bool = True, _auth=Depends(requ
 @router.post("/jobs/cleanup")
 def cleanup_jobs(_auth=Depends(require_auth)):
     try:
-        cleared_count = state.client.clear_jobs()
-        return {"cleared_count": cleared_count}
+        return RuntimeService(state.client).clear_jobs()
     except Exception as exc:
         if _is_clear_jobs_admin_token_error(exc):
             state.close_client()
             try:
-                cleared_count = state.client.clear_jobs()
-                return {"cleared_count": cleared_count}
+                return RuntimeService(state.client).clear_jobs()
             except Exception as retry_exc:
                 return handle_grpc_error(retry_exc)
         return handle_grpc_error(exc)
@@ -1083,23 +1075,7 @@ def stream_job_workflow_progress(
 @router.get("/jobs/{job_id}/dead-letters")
 def get_job_dead_letters(job_id: str, _auth=Depends(require_auth)):
     try:
-        dead_letters = []
-        for event_index, event_json in enumerate(
-            state.client.stream_events(job_id, follow=False, limit=_MAX_STATUS_RUNTIME_EVENTS)
-        ):
-            event = json.loads(event_json)
-            if event.get("type") == "dead_letter":
-                dead_letters.append(
-                    {
-                        "index": len(dead_letters),
-                        "event_index": event_index,
-                        "agent_id": event.get("agent_id"),
-                        "reason": event.get("reason") or event.get("error"),
-                        "timestamp": event.get("timestamp"),
-                        "message": event.get("message"),
-                    }
-                )
-        return {"job_id": job_id, "data": dead_letters}
+        return RuntimeService(state.client).dead_letters(job_id)
     except Exception as exc:
         return handle_grpc_error(exc)
 
@@ -1120,19 +1096,54 @@ def replay_job_dead_letter(job_id: str, index: int, _auth=Depends(require_auth))
 @router.post("/jobs/{job_id}/cancel")
 def cancel_job(job_id: str, _auth=Depends(require_auth)):
     try:
-        status = state.client.cancel_job(job_id)
+        result = RuntimeService(state.client).cancel_job(job_id)
         cleanup_blueprint_processes_for_job(job_id)
-        return {"status": status, "job_id": job_id}
+        return result
     except Exception as exc:
         cleanup_blueprint_processes_for_job(job_id)
+        return handle_grpc_error(exc)
+
+
+@router.post("/jobs/{job_id}/backup")
+def export_job_backup(job_id: str, _auth=Depends(require_auth)):
+    try:
+        backup_json, bundle_files = state.client.export_job_backup(job_id)
+        return {
+            "job_id": job_id,
+            "backup_json": backup_json,
+            "bundle_files": {
+                path: base64.b64encode(content).decode("ascii")
+                for path, content in bundle_files.items()
+            },
+            "encoding": "base64",
+        }
+    except Exception as exc:
+        return handle_grpc_error(exc)
+
+
+@router.post("/jobs/restore")
+def restore_job_backup(req: RestoreJobBackupRequest, _auth=Depends(require_auth)):
+    try:
+        bundle_files = {
+            path: base64.b64decode(content.encode("ascii"))
+            for path, content in req.bundle_files.items()
+        }
+        return json.loads(
+            state.client.restore_job_backup(
+                req.backup_json,
+                bundle_files,
+                blueprint_id=req.blueprint_id,
+                run_id=req.run_id,
+            )
+        )
+    except Exception as exc:
         return handle_grpc_error(exc)
 
 
 @router.post("/jobs/{job_id}/pause")
 def pause_job(job_id: str, _auth=Depends(require_auth)):
     try:
-        status = state.client.pause_job(job_id)
-        return {"status": status, "job_id": job_id}
+        return RuntimeService(state.client).pause_job(job_id)
     except Exception as exc:
         return handle_grpc_error(exc)
 
@@ -1140,7 +1151,6 @@ def pause_job(job_id: str, _auth=Depends(require_auth)):
 @router.post("/jobs/{job_id}/resume")
 def resume_job(job_id: str, _auth=Depends(require_auth)):
     try:
-        status = state.client.resume_job(job_id)
-        return {"status": status, "job_id": job_id}
+        return RuntimeService(state.client).resume_job(job_id)
     except Exception as exc:
         return handle_grpc_error(exc)
