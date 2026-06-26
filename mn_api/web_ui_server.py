@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -11,6 +10,8 @@ from typing import Any
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+
+from mn_api.config import WebUiConfig
 
 
 HOP_BY_HOP_HEADERS = {
@@ -37,18 +38,15 @@ def resolve_dist_dir(value: str | None = None, cwd: Path | None = None) -> Path:
 
 
 def api_base_url() -> str:
-    configured = os.getenv("MN_WEB_UI_API_BASE_URL") or os.getenv("MN_API_BASE_URL")
-    if configured:
-        return configured.rstrip("/")
-    host = os.getenv("MN_API_HOST", "localhost")
-    port = os.getenv("MN_API_PORT", "54001")
-    return f"http://{host}:{port}/api/v1"
+    return WebUiConfig.from_env().api_base_url
 
 
 def create_app(dist_dir: str | Path | None = None, api_url: str | None = None) -> FastAPI:
-    resolved_dist = resolve_dist_dir(str(dist_dir) if dist_dir is not None else os.getenv("MN_WEB_UI_DIST_DIR"))
+    config = WebUiConfig.from_env()
+    configured_dist = dist_dir if dist_dir is not None else config.dist_dir
+    resolved_dist = resolve_dist_dir(str(configured_dist) if configured_dist is not None else None)
     index_file = resolved_dist / "index.html"
-    upstream_api = (api_url or api_base_url()).rstrip("/")
+    upstream_api = (api_url or config.api_base_url).rstrip("/")
 
     app = FastAPI(title="MirrorNeuron Web UI", docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -87,10 +85,18 @@ async def proxy_request(path: str, request: Request, upstream_api: str) -> Respo
     body = await request.body()
     target_url = _target_url(path, request.url.query, upstream_api)
     proxy_headers = _proxy_headers(request.headers.items())
-    upstream_request = urllib.request.Request(target_url, data=body or None, headers=proxy_headers, method=request.method)
+    upstream_request = urllib.request.Request(
+        target_url,
+        data=body or None,
+        headers=proxy_headers,
+        method=request.method,
+    )
 
     try:
-        upstream_response = urllib.request.urlopen(upstream_request, timeout=float(os.getenv("MN_WEB_UI_PROXY_TIMEOUT_SECONDS", "30")))
+        upstream_response = urllib.request.urlopen(
+            upstream_request,
+            timeout=WebUiConfig.from_env().proxy_timeout_seconds,
+        )
     except urllib.error.HTTPError as exc:
         return Response(
             content=exc.read(),
@@ -122,9 +128,8 @@ async def proxy_request(path: str, request: Request, upstream_api: str) -> Respo
 
 
 def start() -> None:
-    host = os.getenv("MN_WEB_UI_HOST", "localhost")
-    port = int(os.getenv("MN_WEB_UI_PORT", "55173"))
-    uvicorn.run("mn_api.web_ui_server:create_app", host=host, port=port, factory=True, reload=False)
+    config = WebUiConfig.from_env()
+    uvicorn.run("mn_api.web_ui_server:create_app", host=config.host, port=config.port, factory=True, reload=False)
 
 
 def _target_url(path: str, query: str, upstream_api: str) -> str:

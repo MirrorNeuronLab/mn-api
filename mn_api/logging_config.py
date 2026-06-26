@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 import logging
-import os
 from logging.handlers import RotatingFileHandler
-from pathlib import Path
 
+from mn_api.config import LoggingConfig
 from mn_api.path_utils import default_logs_root
 
 
 def configure_logging(name: str = "mn-api", default_file: str = "api.log") -> logging.Logger:
+    config = LoggingConfig.from_env()
     logger = logging.getLogger(name)
-    logger.setLevel(os.getenv("MN_LOG_LEVEL", "INFO").upper())
+    logger.setLevel(config.level)
     logger.propagate = False
 
     if logger.handlers:
@@ -19,19 +19,14 @@ def configure_logging(name: str = "mn-api", default_file: str = "api.log") -> lo
     formatter = logging.Formatter(
         "%(asctime)s %(levelname)s [%(name)s] %(message)s"
     )
-    log_path = Path(
-        os.getenv(
-            "MN_API_LOG_PATH",
-            str(default_logs_root() / default_file),
-        )
-    ).expanduser()
+    log_path = config.api_log_path if default_file == "api.log" else default_logs_root() / default_file
 
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         handler: logging.Handler = RotatingFileHandler(
             log_path,
-            maxBytes=int(os.getenv("MN_LOG_MAX_BYTES", "1048576")),
-            backupCount=int(os.getenv("MN_LOG_BACKUP_COUNT", "5")),
+            maxBytes=config.max_bytes,
+            backupCount=config.backup_count,
         )
     except OSError:
         handler = logging.StreamHandler()

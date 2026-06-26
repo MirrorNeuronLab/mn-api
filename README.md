@@ -32,6 +32,53 @@ Default local URL:
 http://localhost:54001
 ```
 
+## Configuration
+
+Configuration is loaded by `mn_api.config` and shared by API, web UI server,
+and child CLI/runtime processes. Real environment variables always override
+values from `.env` files. Loading order is:
+
+```text
+real environment variables
+> .env.${MN_ENV}
+> .env
+> safe built-in defaults
+```
+
+If `MN_ENV` is unset it defaults to `dev`. `MN_ENV=development` loads
+`.env.dev`; `MN_ENV=prod` and `MN_ENV=production` load `.env.prod` when that
+file exists. Production does not require any `.env` file.
+
+Development example:
+
+```bash
+export MN_ENV=dev
+cp .env.example .env.dev
+mn-cli ...
+```
+
+Test example:
+
+```bash
+export MN_ENV=test
+mn-cli ...
+```
+
+Production example:
+
+```bash
+export MN_ENV=production
+export MN_HOME=/var/lib/mirrorneuron
+export MN_LOG_LEVEL=info
+export MN_API_HOST=0.0.0.0
+export MN_API_PORT=8080
+export MN_API_TOKEN=replace-with-secret
+mn-api
+```
+
+Keep real `.env` files local. `.env.example` contains placeholders only and is
+safe to commit.
+
 ## Endpoint Summary
 
 All paths below are under `/api/v1`.

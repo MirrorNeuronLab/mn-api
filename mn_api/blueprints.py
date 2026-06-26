@@ -53,7 +53,16 @@ from mn_sdk.blueprint_support import (
     stage_local_input_payloads_for_manifest as stage_sdk_local_input_payloads,
 )
 
-from mn_api.config import ApiConfig, runtime_env_values
+from mn_api.config import (
+    ApiConfig,
+    config_bool,
+    config_float,
+    config_optional_value,
+    config_path,
+    config_value,
+    runtime_env_values,
+    subprocess_environment,
+)
 from mn_api.path_utils import default_runs_root, inside_path
 
 
@@ -88,7 +97,7 @@ BLUEPRINT_RUNTIME_ENV_KEYS = (
 
 def workspace_root() -> Path:
     for name in ("MN_WORKSPACE_ROOT",):
-        value = os.getenv(name)
+        value = config_value(name)
         if value:
             return Path(value).expanduser().resolve()
     return Path(__file__).resolve().parents[2]
@@ -98,12 +107,12 @@ def runtime_path_environment() -> Dict[str, str]:
     root = workspace_root()
     runtime_modules_root = default_registered_modules_root(workspace_root=root)
     runtime_env = runtime_env_values()
-    membrane_project_path = Path(os.getenv("MN_MEMBRANE_PROJECT_PATH") or root / "Membrane").expanduser()
+    membrane_project_path = Path(config_value("MN_MEMBRANE_PROJECT_PATH") or root / "Membrane").expanduser()
     membrane_sdk_path = Path(
-        os.getenv("MN_MEMBRANE_SDK_PATH")
+        config_value("MN_MEMBRANE_SDK_PATH")
         or membrane_project_path / "mn-context-engine-python-sdk" / "src"
     ).expanduser()
-    skills_root = Path(os.getenv("MN_SKILLS_ROOT") or runtime_env.get("MN_SKILLS_ROOT") or runtime_modules_root).expanduser()
+    skills_root = Path(config_value("MN_SKILLS_ROOT", runtime_env=runtime_env) or runtime_modules_root).expanduser()
     env = {
         "MN_WORKSPACE_ROOT": str(root),
         "MN_MEMBRANE_PROJECT_PATH": str(membrane_project_path),
@@ -114,13 +123,13 @@ def runtime_path_environment() -> Dict[str, str]:
         skills_root / "llm_ocr_skill" / "src",
         skills_root / "pdf_extract_skill" / "src",
     ]
-    existing_pythonpath = os.getenv("PYTHONPATH")
+    existing_pythonpath = config_value("PYTHONPATH")
     resolved_python_paths = [str(path) for path in python_paths if path.exists()]
     if existing_pythonpath:
         resolved_python_paths.append(existing_pythonpath)
     if resolved_python_paths:
         env["PYTHONPATH"] = os.pathsep.join(resolved_python_paths)
-    env["PATH"] = docker_cli_path_environment().get("PATH", os.getenv("PATH", ""))
+    env["PATH"] = docker_cli_path_environment().get("PATH", config_value("PATH"))
     return env
 
 
@@ -155,7 +164,7 @@ def runtime_blueprint_environment_overrides() -> Dict[str, str]:
     runtime_env = runtime_env_values()
     overrides: Dict[str, str] = {}
     for key in BLUEPRINT_RUNTIME_ENV_KEYS:
-        value = os.getenv(key) or runtime_env.get(key)
+        value = config_value(key, runtime_env=runtime_env)
         if isinstance(value, str) and value.strip():
             overrides[key] = value.strip()
     return overrides
@@ -199,7 +208,10 @@ def cached_git_repo_path(repo_url: str) -> Path:
     parsed = urlparse(repo_url)
     name = Path(parsed.path.rstrip("/")).stem or "blueprints"
     digest = hashlib.sha256(repo_url.encode("utf-8")).hexdigest()[:12]
-    configured_cache = Path(os.getenv("MN_BLUEPRINT_REPO_CACHE", DEFAULT_BLUEPRINT_REPO_CACHE)).expanduser()
+    configured_cache = (
+        config_path("MN_BLUEPRINT_REPO_CACHE", default=DEFAULT_BLUEPRINT_REPO_CACHE)
+        or Path(DEFAULT_BLUEPRINT_REPO_CACHE).expanduser()
+    )
     return configured_cache / f"{name}-{digest}"
 
 
@@ -663,7 +675,7 @@ def run_mn_blueprint_validate(bundle_root: Path, *, timeout_seconds: int = 120) 
         return validation_failure_report(f"blueprint path is not a directory: {bundle_root}")
 
     command = mn_validate_command(bundle_root)
-    env = os.environ.copy()
+    env = subprocess_environment()
     env.update(runtime_path_environment())
     try:
         result = subprocess.run(
@@ -715,7 +727,7 @@ def run_mn_blueprint_validate(bundle_root: Path, *, timeout_seconds: int = 120) 
 
 def run_mn_blueprint_run(args: list[str], *, cwd: Path, timeout_seconds: int = 300) -> Dict[str, Any]:
     command = mn_base_command() + ["blueprint", "run", *args]
-    env = os.environ.copy()
+    env = subprocess_environment()
     env.update(runtime_path_environment())
     try:
         result = subprocess.run(
@@ -1032,11 +1044,13 @@ def openshell_local_from_path(bundle_root: Path, source: Any) -> Path | None:
 
 
 def openshell_config_dir() -> Path:
-    return Path(os.getenv("OPENSHELL_CONFIG_DIR", str(Path.home() / ".config" / "openshell"))).expanduser()
+    return config_path("OPENSHELL_CONFIG_DIR", default=Path.home() / ".config" / "openshell") or (
+        Path.home() / ".config" / "openshell"
+    )
 
 
 def openshell_gateway_name() -> str:
-    configured = os.getenv("OPENSHELL_GATEWAY", "").strip()
+    configured = config_value("OPENSHELL_GATEWAY").strip()
     if configured:
         return configured
     config_dir = openshell_config_dir()
@@ -1076,7 +1090,7 @@ def openshell_gateway_uses_local_docker() -> bool:
 
 
 def openshell_env() -> Dict[str, str]:
-    env = os.environ.copy()
+    env = subprocess_environment()
     if env.get("OPENSHELL_GATEWAY_ENDPOINT"):
         return env
     gateway_name = openshell_gateway_name()
@@ -1168,7 +1182,7 @@ def start_blueprint_pre_launch_hook(
         config=config,
         config_overrides=config_overrides,
     )
-    env = os.environ.copy()
+    env = subprocess_environment()
     env.update(runtime_env)
     env.update(
         {
@@ -1253,7 +1267,7 @@ def register_post_launch_hook(bundle_root: Path, run_id: str) -> None:
 
 def wait_for_pre_launch_ready(run_dir: Path, process: subprocess.Popen[Any], ready_file: Path) -> None:
     try:
-        timeout = max(float(os.getenv("MN_PRE_LAUNCH_TIMEOUT_SECONDS", "30")), 0)
+        timeout = max(config_float("MN_PRE_LAUNCH_TIMEOUT_SECONDS", default=30.0), 0)
     except ValueError:
         timeout = 30.0
     deadline = time.monotonic() + timeout
@@ -1338,7 +1352,7 @@ def process_session_id_for_pid(pid: int) -> int | None:
 
 def cleanup_timeout_seconds() -> float:
     try:
-        return max(float(os.getenv("MN_PROCESS_CLEANUP_TIMEOUT_SECONDS", str(PROCESS_CLEANUP_TIMEOUT_SECONDS))), 0.1)
+        return max(config_float("MN_PROCESS_CLEANUP_TIMEOUT_SECONDS", default=PROCESS_CLEANUP_TIMEOUT_SECONDS), 0.1)
     except ValueError:
         return PROCESS_CLEANUP_TIMEOUT_SECONDS
 
@@ -1582,10 +1596,10 @@ def cleanup_post_launch_hook(run_dir: Path, *, reason: str) -> None:
     except OSError:
         return
 
-    env = os.environ.copy()
+    env = subprocess_environment()
     env.update(post_launch_env(run_dir, hook_info, reason=reason))
     try:
-        timeout = max(float(os.getenv("MN_POST_LAUNCH_TIMEOUT_SECONDS", "10")), 0.1)
+        timeout = max(config_float("MN_POST_LAUNCH_TIMEOUT_SECONDS", default=10.0), 0.1)
     except ValueError:
         timeout = 10.0
     try:
@@ -1664,7 +1678,7 @@ def start_background_event_relay_if_needed(
     grpc_auth_token: str | None = None,
     grpc_timeout_seconds: float | None = None,
 ) -> None:
-    if os.getenv("MN_RUN_BACKGROUND_EVENT_RELAY", "1").strip().lower() in {"0", "false", "no", "off"}:
+    if not config_bool("MN_RUN_BACKGROUND_EVENT_RELAY", default=True):
         return
     try:
         manifest = json.loads(manifest_json)
@@ -1701,7 +1715,7 @@ def start_background_event_relay_if_needed(
     if max_seconds is not None:
         command.extend(["--max-seconds", f"{max_seconds:g}"])
 
-    env = os.environ.copy()
+    env = subprocess_environment()
     env.update(runtime_path_environment())
     env.update(string_env_values(env_overrides))
     env["MN_RUN_EVENT_RELAY_CHILD"] = "1"
@@ -1751,7 +1765,7 @@ def runtime_web_ui_service_from_manifest(manifest: Dict[str, Any]) -> Dict[str, 
 
 
 def background_event_relay_poll_seconds(config: Dict[str, Any] | None) -> float:
-    raw = os.getenv("MN_RUN_EVENT_RELAY_POLL_SECONDS")
+    raw = config_optional_value("MN_RUN_EVENT_RELAY_POLL_SECONDS")
     if raw is not None:
         try:
             return max(float(raw), 0.1)
@@ -1768,7 +1782,7 @@ def background_event_relay_poll_seconds(config: Dict[str, Any] | None) -> float:
 
 
 def background_event_relay_max_seconds(config: Dict[str, Any] | None) -> float | None:
-    raw = os.getenv("MN_RUN_EVENT_RELAY_MAX_SECONDS")
+    raw = config_optional_value("MN_RUN_EVENT_RELAY_MAX_SECONDS")
     if raw is not None:
         if raw.strip().lower() in {"", "0", "none", "infinity"}:
             return None
