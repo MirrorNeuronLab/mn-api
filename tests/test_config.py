@@ -110,6 +110,9 @@ class TestApiConfig(unittest.TestCase):
     def test_config_module_is_reusable_for_web_ui_and_child_env(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            state_dir = Path(tmp) / ".mn"
+            state_dir.mkdir()
+            (state_dir / "api.token").write_text("web-api-token-from-file\n", encoding="utf-8")
             (root / ".env").write_text(
                 "MN_API_HOST=127.0.0.1\nMN_API_PORT=8010\nMN_WEB_UI_PORT=55180\n",
                 encoding="utf-8",
@@ -123,6 +126,7 @@ class TestApiConfig(unittest.TestCase):
 
         self.assertEqual(api_config.port, 8010)
         self.assertEqual(web_config.api_base_url, "http://127.0.0.1:8010/api/v1")
+        self.assertEqual(web_config.api_token, "web-api-token-from-file")
         self.assertEqual(web_config.port, 55180)
         self.assertEqual(child_env["MN_API_PORT"], "8010")
 

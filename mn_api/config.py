@@ -139,18 +139,23 @@ class WebUiConfig:
     host: str
     port: int
     api_base_url: str
+    api_token: str
     dist_dir: Path | None
     proxy_timeout_seconds: float
 
     @classmethod
     def from_env(cls, *, env: Mapping[str, str] | None = None, env_dir: str | Path | None = None) -> "WebUiConfig":
         source = load_config_source(env=env, env_dir=env_dir)
-        runtime_env = RuntimeConfig.from_env(env=source.effective_env, env_dir=env_dir).runtime_env
+        runtime_config = RuntimeConfig.from_env(env=source.effective_env, env_dir=env_dir)
+        runtime_env = runtime_config.runtime_env
         api_base = config_string("MN_WEB_UI_API_BASE_URL", source=source, runtime_env=runtime_env, default="")
         if not api_base:
             api_base = config_string("MN_API_BASE_URL", source=source, runtime_env=runtime_env, default="")
         host = config_string("MN_API_HOST", source=source, runtime_env=runtime_env, default="localhost")
         port = config_int("MN_API_PORT", source=source, runtime_env=runtime_env, default=54001)
+        api_token = config_string("MN_API_TOKEN", source=source, runtime_env=runtime_env, default="")
+        if not api_token:
+            api_token = _read_token_file(runtime_config.mn_home / "api.token")
         dist_dir = config_path(
             "MN_WEB_UI_DIST_DIR",
             source=source,
@@ -162,6 +167,7 @@ class WebUiConfig:
             host=config_string("MN_WEB_UI_HOST", source=source, runtime_env=runtime_env, default="localhost"),
             port=config_int("MN_WEB_UI_PORT", source=source, runtime_env=runtime_env, default=55173),
             api_base_url=(api_base or f"http://{host}:{port}/api/v1").rstrip("/"),
+            api_token=api_token,
             dist_dir=dist_dir,
             proxy_timeout_seconds=config_float(
                 "MN_WEB_UI_PROXY_TIMEOUT_SECONDS",
@@ -317,6 +323,13 @@ def _first_string(*values: object) -> str:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return ""
+
+
+def _read_token_file(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
 
 
 def runtime_env_values() -> dict[str, str]:

@@ -4,6 +4,7 @@ import json
 import queue
 import re
 import threading
+import time
 import urllib.parse
 import base64
 from collections import Counter, deque
@@ -63,6 +64,26 @@ _LIST_STATUS_REFRESH_STATUSES = {
     "preparing",
     "running",
     "paused",
+}
+_TERMINAL_EVENT_TYPES = {"job_completed", "job_failed", "job_cancelled"}
+_IMMEDIATE_PROGRESS_EVENTS = {
+    "job_pending",
+    "job_validated",
+    "job_scheduled",
+    "job_running",
+    "job_pausing",
+    "job_paused",
+    "job_resumed",
+    "workflow_step_started",
+    "blueprint_phase_started",
+    "workflow_step_completed",
+    "blueprint_phase_completed",
+    "workflow_step_failed",
+    "blueprint_phase_failed",
+    "workflow_step_timed_out",
+    "workflow_step_attempt_retry_scheduled",
+    "workflow_step_attempt_timed_out",
+    "workflow_step_blocked",
 }
 
 
@@ -898,6 +919,17 @@ def _sse_event(event_name: str, payload: dict[str, Any]) -> str:
     return f"event: {event_name}\ndata: {json.dumps(payload, sort_keys=True)}\n\n"
 
 
+def _sse_heartbeat(job_id: str) -> str:
+    return _sse_event("heartbeat", {"job_id": job_id})
+
+
+def _progress_event_should_flush(event_type: str) -> bool:
+    normalized = str(event_type or "").strip().lower()
+    if normalized in _TERMINAL_EVENT_TYPES or normalized in _IMMEDIATE_PROGRESS_EVENTS:
+        return True
+    return "failed" in normalized or "error" in normalized or "timed_out" in normalized
+
+
 @router.get("/jobs/{job_id}/agent-graph")
 def get_job_agent_graph(job_id: str, _auth=Depends(require_auth)):
     try:
@@ -998,6 +1030,11 @@ def stream_job_workflow_progress(
         if stream_error:
             initial["warning"] = stream_error
         yield _sse_event("snapshot", initial)
+        last_sent_at = time.monotonic()
+        emit_interval = max(float(interval), 0.5)
+        heartbeat_interval = max(float(interval), 5.0)
+        next_heartbeat_at = last_sent_at + heartbeat_interval
+        pending_snapshot: dict[str, Any] | None = None
 
         def pump_events() -> None:
             try:
@@ -1020,9 +1057,17 @@ def stream_job_workflow_progress(
         try:
             while True:
                 try:
-                    kind, payload = event_queue.get(timeout=interval)
+                    kind, payload = event_queue.get(timeout=emit_interval)
                 except queue.Empty:
-                    yield ": heartbeat\n\n"
+                    now = time.monotonic()
+                    if pending_snapshot is not None and now - last_sent_at >= emit_interval:
+                        yield _sse_event("snapshot", pending_snapshot)
+                        pending_snapshot = None
+                        last_sent_at = now
+                        next_heartbeat_at = now + heartbeat_interval
+                    elif now >= next_heartbeat_at:
+                        yield _sse_heartbeat(job_id)
+                        next_heartbeat_at = now + heartbeat_interval
                     continue
 
                 if kind == "done":
@@ -1042,7 +1087,10 @@ def stream_job_workflow_progress(
 
                 event_type = str(event.get("type") or "")
                 if event_type == "stream_heartbeat":
-                    yield ": heartbeat\n\n"
+                    now = time.monotonic()
+                    if now >= next_heartbeat_at:
+                        yield _sse_heartbeat(job_id)
+                        next_heartbeat_at = now + heartbeat_interval
                     continue
                 event_key = _event_key(event)
                 if event_key in seen:
@@ -1060,11 +1108,16 @@ def stream_job_workflow_progress(
                 _apply_default_assigned_node(snapshot, details)
                 _enrich_workflow_progress_activity(snapshot, activity_events)
                 _clear_success_failure(snapshot)
-                yield _sse_event(
-                    "snapshot",
-                    snapshot,
-                )
-                if event_type in {"job_completed", "job_failed", "job_cancelled"}:
+                now = time.monotonic()
+                immediate = _progress_event_should_flush(event_type)
+                if immediate or now - last_sent_at >= emit_interval:
+                    yield _sse_event("snapshot", snapshot)
+                    pending_snapshot = None
+                    last_sent_at = now
+                    next_heartbeat_at = now + heartbeat_interval
+                else:
+                    pending_snapshot = snapshot
+                if event_type in _TERMINAL_EVENT_TYPES:
                     break
         finally:
             stop.set()

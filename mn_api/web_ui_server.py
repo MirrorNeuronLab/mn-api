@@ -83,8 +83,9 @@ def create_app(dist_dir: str | Path | None = None, api_url: str | None = None) -
 
 async def proxy_request(path: str, request: Request, upstream_api: str) -> Response:
     body = await request.body()
+    config = WebUiConfig.from_env()
     target_url = _target_url(path, request.url.query, upstream_api)
-    proxy_headers = _proxy_headers(request.headers.items())
+    proxy_headers = _proxy_headers(request.headers.items(), api_token=config.api_token)
     upstream_request = urllib.request.Request(
         target_url,
         data=body or None,
@@ -140,9 +141,13 @@ def _target_url(path: str, query: str, upstream_api: str) -> str:
     return f"{target}?{query}" if query else target
 
 
-def _proxy_headers(headers: Iterable[tuple[str, str]]) -> dict[str, str]:
+def _proxy_headers(headers: Iterable[tuple[str, str]], *, api_token: str = "") -> dict[str, str]:
     excluded = HOP_BY_HOP_HEADERS | {"host"}
-    return {key: value for key, value in headers if key.lower() not in excluded}
+    forwarded = {key: value for key, value in headers if key.lower() not in excluded}
+    has_authorization = any(key.lower() == "authorization" for key in forwarded)
+    if api_token and not has_authorization:
+        forwarded["Authorization"] = f"Bearer {api_token}"
+    return forwarded
 
 
 def _response_headers(headers: Iterable[tuple[str, str]]) -> dict[str, str]:

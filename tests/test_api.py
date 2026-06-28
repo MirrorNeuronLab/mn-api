@@ -2455,6 +2455,16 @@ class TestAPI(unittest.TestCase):
             [
                 history_event,
                 json.dumps({
+                    "type": "agent_beacon",
+                    "timestamp": "2026-05-31T10:00:01.100Z",
+                    "payload": {"step": "research", "agent_id": "research:docs", "message": "Reading", "progress": 0.2},
+                }),
+                json.dumps({
+                    "type": "agent_beacon",
+                    "timestamp": "2026-05-31T10:00:01.200Z",
+                    "payload": {"step": "research", "agent_id": "research:docs", "message": "Still reading", "progress": 0.3},
+                }),
+                json.dumps({
                     "type": "workflow_step_attempt_completed",
                     "timestamp": "2026-05-31T10:00:02Z",
                     "payload": {"step": "research", "worker": "research:docs"},
@@ -2468,6 +2478,7 @@ class TestAPI(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("event: snapshot", body)
+        self.assertEqual(body.count("event: snapshot"), 2)
         self.assertIn('"status": "completed"', body)
         self.assertIn('"done": 1', body)
 

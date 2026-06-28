@@ -62,12 +62,31 @@ def test_proxy_forwards_api_requests(tmp_path: Path):
         server.stop()
 
 
+def test_proxy_injects_configured_api_token(tmp_path: Path, monkeypatch):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("INDEX", encoding="utf-8")
+    server = _ApiServer()
+    server.start()
+    monkeypatch.setenv("MN_API_TOKEN", "local-api-token")
+    try:
+        client = TestClient(create_app(dist_dir=dist, api_url=server.base_url))
+
+        response = client.post("/api/v1/jobs", json={})
+
+        assert response.status_code == 201
+        assert server.last_authorization == "Bearer local-api-token"
+    finally:
+        server.stop()
+
+
 class _ApiServer:
     def __init__(self):
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
         self.httpd.owner = self
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
         self.last_body = b""
+        self.last_authorization = ""
 
     @property
     def base_url(self) -> str:
@@ -87,7 +106,9 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         length = int(self.headers.get("content-length") or "0")
         self.server.owner.last_body = self.rfile.read(length)
-        payload = json.dumps({"status": "ok", "path": self.path.split("?", 1)[0], "query": self.path.split("?", 1)[1]})
+        self.server.owner.last_authorization = self.headers.get("authorization", "")
+        path, _separator, query = self.path.partition("?")
+        payload = json.dumps({"status": "ok", "path": path, "query": query})
         self.send_response(201)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
