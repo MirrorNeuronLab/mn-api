@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 
 from fastapi import HTTPException
 from mn_sdk import (
+    AppError,
     DOCKER_MODEL_RUNNER_CONTAINER_API_BASE,
     cluster_provided_model,
     docker_cli_path_environment,
@@ -140,7 +141,14 @@ def ensure_runtime_modules_for_submission(
     try:
         return ensure_runtime_modules_for_manifest(manifest, config, workspace_root=workspace_root())
     except RuntimeModuleInstallError as exc:
-        raise HTTPException(status_code=500, detail=f"runtime module auto-install failed: {exc}") from exc
+        raise AppError(
+            "MN_EXECUTION_FAILED",
+            "A required runtime module could not be installed automatically.",
+            internal_message=str(exc),
+            hint="Check the API logs and runtime module configuration, then try again.",
+            http_status=500,
+            cause=exc,
+        ) from exc
 
 
 def blueprint_web_ui_enabled(config: Dict[str, Any] | None) -> bool:
@@ -949,7 +957,14 @@ def inject_runtime_web_ui_service_for_submission(
             reserved_ports=reserved_ports,
         )
     except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise AppError(
+            "MN_FAILED_PRECONDITION",
+            "The runtime web UI service could not be prepared for this blueprint.",
+            internal_message=str(exc),
+            hint="Review the blueprint web UI configuration and try again.",
+            http_status=409,
+            cause=exc,
+        ) from exc
 
 
 def runtime_web_ui_support_payloads_for_manifest(manifest: Dict[str, Any]) -> Dict[str, bytes]:
@@ -969,7 +984,15 @@ def stage_local_input_payloads_for_manifest(
     try:
         return stage_sdk_local_input_payloads(manifest, payloads, bundle_dir=bundle_dir)
     except RuntimeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise AppError(
+            "MN_INVALID_ARGUMENT",
+            "Local input payloads could not be prepared for this blueprint.",
+            internal_message=str(exc),
+            hint="Review the local input configuration and try again.",
+            exit_code=2,
+            http_status=400,
+            cause=exc,
+        ) from exc
 
 
 def manifest_agent_nodes(manifest: Dict[str, Any]) -> list[Dict[str, Any]]:
@@ -1211,7 +1234,14 @@ def start_blueprint_pre_launch_hook(
                 start_new_session=True,
             )
     except OSError as exc:
-        raise HTTPException(status_code=500, detail=f"failed to start blueprint pre-launch hook: {exc}") from exc
+        raise AppError(
+            "MN_EXECUTION_FAILED",
+            "The blueprint pre-launch hook could not be started.",
+            internal_message=str(exc),
+            hint="Check the API logs and the blueprint pre-launch script permissions.",
+            http_status=500,
+            cause=exc,
+        ) from exc
 
     process_info = {
         "pid": process.pid,
@@ -1241,7 +1271,14 @@ def start_blueprint_pre_launch_hook(
         terminate_pre_launch_process(process)
         cleanup_run_process(run_dir, "pre_launch_process.json")
         cleanup_post_launch_hook(run_dir, reason="pre_launch_failed")
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise AppError(
+            "MN_EXECUTION_FAILED",
+            "The blueprint pre-launch hook did not become ready.",
+            internal_message=str(exc),
+            hint="Check the API logs and the blueprint pre-launch log.",
+            http_status=500,
+            cause=exc,
+        ) from exc
     return process
 
 

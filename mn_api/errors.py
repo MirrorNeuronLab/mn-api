@@ -1,10 +1,14 @@
 from __future__ import annotations
 
-from fastapi.responses import JSONResponse
 import json
+from typing import Any, Mapping
+
 import grpc
+from fastapi import HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from mn_api import state
+from mn_sdk.errors import AppError, normalize_exception, sanitize_context
 
 INTERFACE_VERSION = 1
 
@@ -60,13 +64,57 @@ def validation_problem_response(
     )
 
 
+def app_error_response(app_error: AppError, *, request: Request | None = None, context: Mapping[str, Any] | None = None):
+    request_id = _request_id(request)
+    extra = {"hint": app_error.hint} if app_error.hint else {}
+    if request_id:
+        extra["request_id"] = request_id
+    return problem_response(
+        status_code=app_error.http_status,
+        error=app_error.code,
+        title=_title_from_code(app_error.code),
+        detail=app_error.user_message,
+        extra=extra,
+    )
+
+
 def handle_grpc_error(error: Exception):
-    state.logger.exception("Request failed")
-    if isinstance(error, grpc.RpcError) and error.code() == grpc.StatusCode.RESOURCE_EXHAUSTED:
-        return JSONResponse(
-            status_code=503,
-            content={"version": INTERFACE_VERSION, "error": "resource_overloaded", "detail": error.details()},
-        )
+    legacy = _legacy_validation_response(error)
+    if legacy is not None:
+        _log_exception(error, normalize_exception(error), {"handler": "handle_grpc_error", "legacy_validation": True})
+        return legacy
+    app_error = normalize_exception(error)
+    _log_exception(error, app_error, {"handler": "handle_grpc_error"})
+    return app_error_response(app_error)
+
+
+async def app_error_exception_handler(request: Request, exc: AppError):
+    _log_exception(exc.cause or exc, exc, _request_context(request))
+    return app_error_response(exc, request=request)
+
+
+async def http_exception_handler(request: Request, exc: HTTPException):
+    if exc.status_code < 500:
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail}, headers=exc.headers)
+    app_error = AppError(
+        "MN_EXECUTION_FAILED",
+        "Execution failed. Run again with --debug for more details.",
+        internal_message=str(exc.detail),
+        hint="Check the API logs for more details.",
+        http_status=exc.status_code,
+        cause=exc,
+    )
+    _log_exception(exc, app_error, _request_context(request))
+    return app_error_response(app_error, request=request)
+
+
+async def unexpected_exception_handler(request: Request, exc: Exception):
+    app_error = normalize_exception(exc)
+    _log_exception(exc, app_error, _request_context(request))
+    return app_error_response(app_error, request=request)
+
+
+def _legacy_validation_response(error: Exception):
     if isinstance(error, grpc.RpcError) and error.code() == grpc.StatusCode.FAILED_PRECONDITION:
         detail = error.details()
         error_name = "requirements_not_met" if str(detail).startswith("requirements_not_met:") else "failed_precondition"
@@ -86,16 +134,7 @@ def handle_grpc_error(error: Exception):
                 validation or _legacy_report(str(detail), "input_validation_failed:"),
                 detail=_human_detail(str(detail), "input_validation_failed:"),
             )
-        return problem_response(
-            status_code=422,
-            error="invalid_argument",
-            title="Invalid request",
-            detail=str(detail),
-        )
-
-    if hasattr(error, "details"):
-        return JSONResponse(status_code=500, content={"version": INTERFACE_VERSION, "error": error.details()})
-    return JSONResponse(status_code=500, content={"version": INTERFACE_VERSION, "error": str(error)})
+    return None
 
 
 def _validation_report_from_prefixed_detail(detail: str, prefix: str) -> dict | None:
@@ -141,3 +180,35 @@ def _human_detail(detail: str, prefix: str) -> str:
                 return "; ".join(str(error) for error in report["errors"])
         return stripped
     return detail
+
+
+def _title_from_code(code: str) -> str:
+    return code.removeprefix("MN_").replace("_", " ").title()
+
+
+def _request_id(request: Request | None) -> str:
+    if request is None:
+        return ""
+    return request.headers.get("x-request-id") or request.headers.get("x-correlation-id") or ""
+
+
+def _request_context(request: Request) -> dict[str, Any]:
+    return sanitize_context(
+        {
+            "method": request.method,
+            "path": request.url.path,
+            "query": str(request.url.query),
+            "request_id": _request_id(request),
+        }
+    )
+
+
+def _log_exception(error: Exception, app_error: AppError, context: Mapping[str, Any] | None = None) -> None:
+    sanitized = sanitize_context(context)
+    exc_info = (type(error), error, error.__traceback__)
+    state.logger.error(
+        "API request failed error_code=%s sanitized_context=%s",
+        app_error.code,
+        sanitized,
+        exc_info=exc_info,
+    )

@@ -1892,7 +1892,10 @@ class TestAPI(unittest.TestCase):
         mock_client.cancel_job.side_effect = MockRpcError()
         response = self.client.post("/api/v1/jobs/test_job_123/cancel")
         self.assertEqual(response.status_code, 500)
-        self.assertEqual(response.json(), {"version": 1, "error": "job test_job_123 was not found"})
+        payload = response.json()
+        self.assertEqual(payload["error"], "MN_EXECUTION_FAILED")
+        self.assertEqual(payload["detail"], "Execution failed. Run again with --debug for more details.")
+        self.assertNotIn("job test_job_123 was not found", repr(payload))
 
     @patch('mn_api.routes.jobs.cleanup_blueprint_processes_for_job')
     @patch('mn_api.state.client')
@@ -1902,7 +1905,10 @@ class TestAPI(unittest.TestCase):
         response = self.client.post("/api/v1/jobs/test_job_123/cancel")
 
         self.assertEqual(response.status_code, 500)
-        self.assertEqual(response.json(), {"version": 1, "error": "backend unavailable"})
+        payload = response.json()
+        self.assertEqual(payload["error"], "MN_EXECUTION_FAILED")
+        self.assertEqual(payload["detail"], "Execution failed. Run again with --debug for more details.")
+        self.assertNotIn("backend unavailable", repr(payload))
         mock_cleanup.assert_called_once_with("test_job_123")
 
     @patch('mn_api.state.client')
@@ -1910,7 +1916,10 @@ class TestAPI(unittest.TestCase):
         mock_client.cancel_job.side_effect = Exception("Some generic error")
         response = self.client.post("/api/v1/jobs/test_job_123/cancel")
         self.assertEqual(response.status_code, 500)
-        self.assertEqual(response.json(), {"version": 1, "error": "Some generic error"})
+        payload = response.json()
+        self.assertEqual(payload["error"], "MN_EXECUTION_FAILED")
+        self.assertEqual(payload["detail"], "Execution failed. Run again with --debug for more details.")
+        self.assertNotIn("Some generic error", repr(payload))
 
     @patch('mn_api.state.client')
     def test_submit_job_resource_overloaded(self, mock_client):
