@@ -84,6 +84,7 @@ def compact_value(value: Any, depth: int = 0) -> Any:
 def compact_event(event: dict[str, Any]) -> dict[str, Any]:
     failure = failure_from_event(event)
     compact = {
+        "version": int(event.get("version") or 1),
         "type": event.get("type"),
         "timestamp": event.get("timestamp") or event.get("ts"),
         "agent_id": event.get("agent_id") or event.get("node_id"),
@@ -91,6 +92,7 @@ def compact_event(event: dict[str, Any]) -> dict[str, Any]:
     }
     if failure:
         compact["failure"] = {
+            "version": failure.get("version") or 1,
             "schema_version": failure.get("schema_version"),
             "code": failure.get("code"),
             "desc": failure.get("desc"),

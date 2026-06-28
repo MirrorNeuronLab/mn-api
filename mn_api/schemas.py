@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 
 class SubmitJobRequest(BaseModel):
+    version: int = 1
     manifest_json: Optional[str] = None
     payloads: Optional[Dict[str, str]] = Field(default_factory=dict)
     bundle_path: Optional[str] = Field(default=None, alias="_bundle_path")
@@ -13,6 +14,7 @@ class SubmitJobRequest(BaseModel):
 
 
 class RestoreJobBackupRequest(BaseModel):
+    version: int = 1
     backup_json: str
     bundle_files: Dict[str, str] = Field(default_factory=dict)
     blueprint_id: str = ""
@@ -20,6 +22,7 @@ class RestoreJobBackupRequest(BaseModel):
 
 
 class BlueprintRunRequest(BaseModel):
+    version: int = 1
     run_id: Optional[str] = None
     config_overwrite: Optional[Dict[str, Any]] = None
     config_overrides: Optional[Dict[str, Any]] = None
@@ -35,6 +38,7 @@ class BlueprintLaunchRequest(BlueprintRunRequest):
 
 
 class ResourceSetRequest(BaseModel):
+    version: int = 1
     cpu: Optional[int] = None
     gpu: Optional[int] = None
     memory: Optional[int] = None
@@ -42,16 +46,19 @@ class ResourceSetRequest(BaseModel):
 
 
 class ClusterNodeAddRequest(BaseModel):
+    version: int = 1
     host: str
     token: str
     grpc_port: Optional[int] = None
 
 
 class ClusterNodeRemoveRequest(BaseModel):
+    version: int = 1
     node_name: str
 
 
 class NodeActionRequest(BaseModel):
+    version: int = 1
     reason: str = ""
 
 
@@ -76,6 +83,7 @@ class NodeMaintenanceRequest(NodeActionRequest):
 
 
 class CreateScheduleRequest(BaseModel):
+    version: int = 1
     manifest_json: Optional[str] = None
     payloads: Optional[Dict[str, str]] = Field(default_factory=dict)
     bundle_path: Optional[str] = Field(default=None, alias="_bundle_path")
@@ -84,22 +92,26 @@ class CreateScheduleRequest(BaseModel):
 
 
 class ScheduleUpdateRequest(BaseModel):
+    version: int = 1
     attrs: Dict[str, Any] = Field(default_factory=dict)
     reason: str = ""
 
 
 class DispatchScheduleRequest(BaseModel):
+    version: int = 1
     payload: Dict[str, Any] = Field(default_factory=dict)
     reason: str = "manual"
 
 
 class EmitEventRequest(BaseModel):
+    version: int = 1
     event_type: str
     payload: Dict[str, Any] = Field(default_factory=dict)
     source: str = "api"
 
 
 class DeploymentPolicyRequest(BaseModel):
+    version: int = 1
     strategy: str = "rolling"
     canary: int = 0
     max_parallel: int = 1
@@ -108,6 +120,7 @@ class DeploymentPolicyRequest(BaseModel):
 
 
 class DeploymentCreateRequest(BaseModel):
+    version: int = 1
     manifest_json: Optional[str] = None
     payloads: Optional[Dict[str, str]] = Field(default_factory=dict)
     bundle_path: Optional[str] = Field(default=None, alias="_bundle_path")
@@ -117,6 +130,7 @@ class DeploymentCreateRequest(BaseModel):
 
 
 class DeploymentActionRequest(BaseModel):
+    version: int = 1
     reason: str = ""
 
 
@@ -126,15 +140,18 @@ class DeploymentRollbackRequest(DeploymentActionRequest):
 
 
 class ModelInstallRequest(BaseModel):
+    version: int = 1
     backend: str = "auto"
     context_size: Optional[int] = None
     force: bool = False
 
 
 class ModelUpdateRequest(BaseModel):
+    version: int = 1
     all: bool = False
     force: bool = False
 
 
 class ModelRemoveRequest(BaseModel):
+    version: int = 1
     force: bool = False

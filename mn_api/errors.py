@@ -6,6 +6,8 @@ import grpc
 
 from mn_api import state
 
+INTERFACE_VERSION = 1
+
 
 def problem_response(
     *,
@@ -17,6 +19,7 @@ def problem_response(
     extra: dict | None = None,
 ):
     content = {
+        "version": INTERFACE_VERSION,
         "type": f"https://mirrorneuron.local/problems/{error}",
         "title": title,
         "status": status_code,
@@ -62,7 +65,7 @@ def handle_grpc_error(error: Exception):
     if isinstance(error, grpc.RpcError) and error.code() == grpc.StatusCode.RESOURCE_EXHAUSTED:
         return JSONResponse(
             status_code=503,
-            content={"error": "resource_overloaded", "detail": error.details()},
+            content={"version": INTERFACE_VERSION, "error": "resource_overloaded", "detail": error.details()},
         )
     if isinstance(error, grpc.RpcError) and error.code() == grpc.StatusCode.FAILED_PRECONDITION:
         detail = error.details()
@@ -91,8 +94,8 @@ def handle_grpc_error(error: Exception):
         )
 
     if hasattr(error, "details"):
-        return JSONResponse(status_code=500, content={"error": error.details()})
-    return JSONResponse(status_code=500, content={"error": str(error)})
+        return JSONResponse(status_code=500, content={"version": INTERFACE_VERSION, "error": error.details()})
+    return JSONResponse(status_code=500, content={"version": INTERFACE_VERSION, "error": str(error)})
 
 
 def _validation_report_from_prefixed_detail(detail: str, prefix: str) -> dict | None:
@@ -111,7 +114,8 @@ def _validation_report_from_prefixed_detail(detail: str, prefix: str) -> dict | 
 def _legacy_report(detail: str, prefix: str) -> dict:
     message = _human_detail(detail, prefix)
     return {
-        "version": "validation.report/v1",
+        "version": 1,
+        "schema_version": "validation.report/v1",
         "ok": False,
         "status": "failed",
         "error_count": 1,

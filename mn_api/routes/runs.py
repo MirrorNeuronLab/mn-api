@@ -385,6 +385,7 @@ def _web_ui_url_status(
 def _ui_from_service(service: dict[str, Any], run_id: str) -> dict[str, Any]:
     meta = service.get("meta") if isinstance(service.get("meta"), dict) else {}
     return {
+        "version": 1,
         "schema_version": 1,
         "adapter": meta.get("adapter") or "gradio",
         "kind": "output",

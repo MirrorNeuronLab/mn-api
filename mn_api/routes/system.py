@@ -86,6 +86,7 @@ def set_resource(req: ResourceSetRequest, _auth=Depends(require_auth)):
             payload = req.model_dump(exclude_none=True)
         else:
             payload = req.dict(exclude_none=True)
+        payload.pop("version", None)
         return RuntimeService(state.client).set_resource(payload)
     except Exception as exc:
         return handle_grpc_error(exc)

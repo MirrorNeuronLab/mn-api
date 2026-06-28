@@ -1009,14 +1009,14 @@ class TestAPI(unittest.TestCase):
             content=b"{}",
         )
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.json(), {"error": "invalid_content_length"})
+        self.assertEqual(response.json(), {"version": 1, "error": "invalid_content_length"})
 
     @patch('mn_api.state.client')
     def test_list_jobs_success(self, mock_client):
         mock_client.list_jobs.return_value = '{"data": [{"job_id": "job-1"}]}'
         response = self.client.get("/api/v1/jobs?limit=5&include_terminal=false")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"data": [{"job_id": "job-1"}]})
+        self.assertEqual(response.json(), {"version": 1, "data": [{"job_id": "job-1"}]})
         mock_client.list_jobs.assert_called_once_with(5, False)
 
     @patch('mn_api.state.client')
@@ -1095,7 +1095,7 @@ class TestAPI(unittest.TestCase):
         mock_client.clear_jobs.return_value = 3
         response = self.client.post("/api/v1/jobs:cleanup")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"cleared_count": 3})
+        self.assertEqual(response.json(), {"version": 1, "cleared_count": 3})
         mock_client.clear_jobs.assert_called_once()
 
     def test_cleanup_jobs_retries_after_admin_token_mismatch(self):
@@ -1122,7 +1122,7 @@ class TestAPI(unittest.TestCase):
             response = self.client.post("/api/v1/jobs:cleanup")
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"cleared_count": 2})
+        self.assertEqual(response.json(), {"version": 1, "cleared_count": 2})
         first_client.clear_jobs.assert_called_once()
         second_client.clear_jobs.assert_called_once()
         close_client.assert_called_once()
@@ -1132,7 +1132,7 @@ class TestAPI(unittest.TestCase):
         mock_client.get_system_summary.return_value = '{"nodes": [], "jobs": []}'
         response = self.client.get("/api/v1/system/summary")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"nodes": [], "jobs": []})
+        self.assertEqual(response.json(), {"version": 1, "nodes": [], "jobs": []})
 
     @patch('mn_api.state.client')
     def test_get_resource_success(self, mock_client):
@@ -1384,7 +1384,7 @@ class TestAPI(unittest.TestCase):
             json={"manifest_json": '{"graph_id": "g"}', "payloads": {"a.txt": "hello"}},
         )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"id": "job-123", "status": "pending"})
+        self.assertEqual(response.json(), {"version": 1, "id": "job-123", "job_id": "job-123", "status": "pending"})
         manifest_json, payloads = mock_client.submit_job.call_args.args
         manifest = json.loads(manifest_json)
         self.assertEqual(manifest["graph_id"], "g")
@@ -1415,7 +1415,7 @@ class TestAPI(unittest.TestCase):
             json={"_bundle_path": bundle_path},
         )
         self.assertEqual(submit_response.status_code, 200)
-        self.assertEqual(submit_response.json(), {"id": "job-zip", "status": "pending"})
+        self.assertEqual(submit_response.json(), {"version": 1, "id": "job-zip", "job_id": "job-zip", "status": "pending"})
         manifest_json, payloads = mock_client.submit_job.call_args.args
         submitted_manifest = json.loads(manifest_json)
         self.assertEqual(submitted_manifest["graph_id"], "zip_graph")
@@ -1743,7 +1743,7 @@ class TestAPI(unittest.TestCase):
         mock_client.cancel_job.return_value = "cancelled"
         response = self.client.post("/api/v1/jobs/test_job_123/cancel")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"status": "cancelled", "job_id": "test_job_123"})
+        self.assertEqual(response.json(), {"version": 1, "status": "cancelled", "job_id": "test_job_123"})
 
     @patch('mn_api.state.client')
     def test_cancel_job_runs_blueprint_post_launch_cleanup(self, mock_client):
@@ -1803,7 +1803,7 @@ class TestAPI(unittest.TestCase):
                 cleanup_record = json.loads((run_dir / "post_cleanup_seen.json").read_text())
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"status": "cancelled", "job_id": "job-cleanup"})
+        self.assertEqual(response.json(), {"version": 1, "status": "cancelled", "job_id": "job-cleanup"})
         self.assertEqual(cleanup_record["reason"], "job_cancelled")
         self.assertEqual(cleanup_record["run_id"], "run-cancel-cleanup")
         self.assertEqual(cleanup_record["rtsp_port"], "8562")
@@ -1892,7 +1892,7 @@ class TestAPI(unittest.TestCase):
         mock_client.cancel_job.side_effect = MockRpcError()
         response = self.client.post("/api/v1/jobs/test_job_123/cancel")
         self.assertEqual(response.status_code, 500)
-        self.assertEqual(response.json(), {"error": "job test_job_123 was not found"})
+        self.assertEqual(response.json(), {"version": 1, "error": "job test_job_123 was not found"})
 
     @patch('mn_api.routes.jobs.cleanup_blueprint_processes_for_job')
     @patch('mn_api.state.client')
@@ -1902,7 +1902,7 @@ class TestAPI(unittest.TestCase):
         response = self.client.post("/api/v1/jobs/test_job_123/cancel")
 
         self.assertEqual(response.status_code, 500)
-        self.assertEqual(response.json(), {"error": "backend unavailable"})
+        self.assertEqual(response.json(), {"version": 1, "error": "backend unavailable"})
         mock_cleanup.assert_called_once_with("test_job_123")
 
     @patch('mn_api.state.client')
@@ -1910,7 +1910,7 @@ class TestAPI(unittest.TestCase):
         mock_client.cancel_job.side_effect = Exception("Some generic error")
         response = self.client.post("/api/v1/jobs/test_job_123/cancel")
         self.assertEqual(response.status_code, 500)
-        self.assertEqual(response.json(), {"error": "Some generic error"})
+        self.assertEqual(response.json(), {"version": 1, "error": "Some generic error"})
 
     @patch('mn_api.state.client')
     def test_submit_job_resource_overloaded(self, mock_client):
@@ -1988,7 +1988,8 @@ class TestAPI(unittest.TestCase):
     @patch('mn_api.state.client')
     def test_submit_job_requirements_error_problem_details(self, mock_client):
         report = {
-            "version": "validation.report/v1",
+            "version": 1,
+            "schema_version": "validation.report/v1",
             "ok": False,
             "status": "failed",
             "error_count": 1,
@@ -2031,7 +2032,7 @@ class TestAPI(unittest.TestCase):
         mock_client.stream_events.return_value = ['{"id": "e1"}', '{"id": "e2"}']
         response = self.client.get("/api/v1/jobs/test_job_123/events")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"data": [{"id": "e1"}, {"id": "e2"}]})
+        self.assertEqual(response.json(), {"version": 1, "data": [{"id": "e1"}, {"id": "e2"}]})
 
     @patch('mn_api.state.client')
     def test_get_job_workflow_progress_uses_grpc_job_and_events(self, mock_client):
@@ -3017,12 +3018,12 @@ class TestAPI(unittest.TestCase):
         mock_client.pause_job.return_value = "paused"
         pause_response = self.client.post("/api/v1/jobs/test_job_123/pause")
         self.assertEqual(pause_response.status_code, 200)
-        self.assertEqual(pause_response.json(), {"status": "paused", "job_id": "test_job_123"})
+        self.assertEqual(pause_response.json(), {"version": 1, "status": "paused", "job_id": "test_job_123"})
 
         mock_client.resume_job.return_value = "running"
         resume_response = self.client.post("/api/v1/jobs/test_job_123/resume")
         self.assertEqual(resume_response.status_code, 200)
-        self.assertEqual(resume_response.json(), {"status": "running", "job_id": "test_job_123"})
+        self.assertEqual(resume_response.json(), {"version": 1, "status": "running", "job_id": "test_job_123"})
 
     @patch('mn_api.state.client')
     def test_pause_and_resume_job_grpc_errors(self, mock_client):
@@ -3036,12 +3037,12 @@ class TestAPI(unittest.TestCase):
         mock_client.pause_job.side_effect = MockRpcError("job test_job_123 cannot be paused")
         pause_response = self.client.post("/api/v1/jobs/test_job_123/pause")
         self.assertEqual(pause_response.status_code, 500)
-        self.assertEqual(pause_response.json(), {"error": "job test_job_123 cannot be paused"})
+        self.assertEqual(pause_response.json(), {"version": 1, "error": "job test_job_123 cannot be paused"})
 
         mock_client.resume_job.side_effect = MockRpcError("job test_job_123 cannot be resumed")
         resume_response = self.client.post("/api/v1/jobs/test_job_123/resume")
         self.assertEqual(resume_response.status_code, 500)
-        self.assertEqual(resume_response.json(), {"error": "job test_job_123 cannot be resumed"})
+        self.assertEqual(resume_response.json(), {"version": 1, "error": "job test_job_123 cannot be resumed"})
 
     def test_blueprint_list_detail_and_install_success(self):
         with tempfile.TemporaryDirectory() as tmpdir:

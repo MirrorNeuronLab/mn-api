@@ -8,6 +8,8 @@ from fastapi import HTTPException
 
 from mn_api.errors import handle_grpc_error
 
+INTERFACE_VERSION = 1
+
 
 def client_json_response(
     call: Callable[[], str | bytes | bytearray],
@@ -15,7 +17,10 @@ def client_json_response(
     preserve_http_exceptions: bool = False,
 ) -> Any:
     try:
-        return json.loads(call())
+        decoded = json.loads(call())
+        if isinstance(decoded, dict):
+            decoded.setdefault("version", INTERFACE_VERSION)
+        return decoded
     except HTTPException as exc:
         if preserve_http_exceptions:
             raise

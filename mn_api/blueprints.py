@@ -698,7 +698,8 @@ def run_mn_blueprint_validate(bundle_root: Path, *, timeout_seconds: int = 120) 
         combined = "\n".join(part for part in [output, error_output] if part).strip()
         if result.returncode == 0:
             report = {
-                "version": "validation.report/v1",
+                "version": 1,
+                "schema_version": "validation.report/v1",
                 "ok": True,
                 "status": "passed",
                 "errors": [],
@@ -820,7 +821,8 @@ def parse_cli_field(output: str, label: str) -> str | None:
 def validation_failure_report(message: str) -> Dict[str, Any]:
     message = message.strip() or "mn blueprint validate failed"
     return {
-        "version": "validation.report/v1",
+        "version": 1,
+        "schema_version": "validation.report/v1",
         "ok": False,
         "status": "failed",
         "error_count": 1,

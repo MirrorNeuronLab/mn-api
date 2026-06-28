@@ -25,6 +25,8 @@ HOP_BY_HOP_HEADERS = {
     "upgrade",
 }
 
+INTERFACE_VERSION = 1
+
 
 def resolve_dist_dir(value: str | None = None, cwd: Path | None = None) -> Path:
     if value:
@@ -106,7 +108,7 @@ async def proxy_request(path: str, request: Request, upstream_api: str) -> Respo
         )
     except Exception as exc:
         return JSONResponse(
-            {"status": "error", "component": "web-ui-proxy", "detail": str(exc), "target": target_url},
+            {"version": INTERFACE_VERSION, "status": "error", "component": "web-ui-proxy", "detail": str(exc), "target": target_url},
             status_code=502,
         )
 

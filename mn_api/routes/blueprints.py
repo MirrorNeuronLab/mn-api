@@ -312,6 +312,7 @@ def get_launch_progress(progress_id: str, _auth=Depends(require_auth)):
         for event in events
     )
     return {
+        "version": 1,
         "progress_id": resolved_progress_id,
         "schema_version": "mn.launch_progress.v1",
         "events": events,
@@ -698,6 +699,7 @@ def record_launch_progress(
     if not progress_id:
         return
     event: dict[str, Any] = {
+        "version": 1,
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "phase": phase,
         "status": status,
@@ -769,6 +771,7 @@ def summarize_launch_progress_phases(events: list[dict[str, Any]]) -> list[dict[
         if not phase:
             continue
         phase_record = {
+            "version": int(event.get("version") or 1),
             "id": phase,
             "label": str(event.get("label") or launch_progress_phase_label(phase)),
             "status": str(event.get("status") or event.get("state") or "running"),
@@ -1089,7 +1092,8 @@ def model_install_problem_response(
             for error in model_install.get("errors") or ["Required runtime model could not be installed."]
         ]
     validation = {
-        "version": "validation.report/v1",
+        "version": 1,
+        "schema_version": "validation.report/v1",
         "ok": False,
         "status": "failed",
         "error_count": len(issues),
