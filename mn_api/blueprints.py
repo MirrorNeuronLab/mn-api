@@ -585,7 +585,7 @@ def install_blueprint_runtime_models(
             continue
         cluster_model = resolve_cluster_model_for_api(requirement=requirement, entry=entry)
         if cluster_model:
-            results.append({**base_result, "status": cluster_model.get("status") or "cluster_node", "cluster": cluster_model})
+            results.append({**base_result, "status": "runtime_node_install", "cluster": cluster_model})
             continue
         previous_result = prepared_docker_models.get(target)
         if previous_result is not None:
@@ -725,7 +725,7 @@ def prepared_runtime_model_keys(model_install_summary: dict[str, Any] | None) ->
     prepared_statuses = {
         "installed",
         "already_installed",
-        "cluster_node",
+        "runtime_node_install",
         "cluster_provided",
         "service_registry",
         "model_remote",

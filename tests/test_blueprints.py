@@ -540,7 +540,7 @@ class TestBlueprintServices(unittest.TestCase):
                 summary = install_blueprint_runtime_models(repo.resolve(), {"id": "vc_assistant", "path": "vc_assistant"})
 
         self.assertTrue(summary["ok"])
-        self.assertEqual(summary["models"][0]["status"], "cluster_node")
+        self.assertEqual(summary["models"][0]["status"], "runtime_node_install")
         self.assertEqual(summary["models"][0]["cluster"]["node"], "spark")
         prepared = json.loads(summary["env"]["MN_PREPARED_RUNTIME_MODELS_JSON"])
         self.assertIn("ai/nemotron3:latest", prepared)

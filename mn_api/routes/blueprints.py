@@ -806,7 +806,7 @@ def model_install_progress_message(model_install: dict[str, Any]) -> str:
         "model_remote": "remote endpoint selected",
         "explicit_config": "configured endpoint selected",
         "cluster_provided": "cluster endpoint selected",
-        "cluster_node": "cluster node selected",
+        "runtime_node_install": "runtime node install scheduled",
         "failed": "failed",
     }
     for status in (
@@ -817,7 +817,7 @@ def model_install_progress_message(model_install: dict[str, Any]) -> str:
         "model_remote",
         "explicit_config",
         "cluster_provided",
-        "cluster_node",
+        "runtime_node_install",
         "failed",
     ):
         count = counts.get(status, 0)
