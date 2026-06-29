@@ -583,6 +583,10 @@ def install_blueprint_runtime_models(
                     endpoints[key] = endpoint
             results.append({**base_result, "status": endpoint.get("source") or "cluster_provided", "endpoint": endpoint})
             continue
+        cluster_model = resolve_cluster_model_for_api(requirement=requirement, entry=entry)
+        if cluster_model:
+            results.append({**base_result, "status": cluster_model.get("status") or "cluster_node", "cluster": cluster_model})
+            continue
         previous_result = prepared_docker_models.get(target)
         if previous_result is not None:
             duplicate_result = {
@@ -637,7 +641,12 @@ def install_blueprint_runtime_models(
             errors.append(str(context_result.get("error") or "context engine setup failed"))
         elif service_progress is not None:
             service_progress("context_engine_ready", context_result)
-    env = {"MN_MODEL_ENDPOINTS_JSON": model_endpoints_json(endpoints)} if endpoints else {}
+    env = {}
+    if endpoints:
+        env["MN_MODEL_ENDPOINTS_JSON"] = model_endpoints_json(endpoints)
+    prepared_json = prepared_runtime_models_json(results)
+    if prepared_json:
+        env["MN_PREPARED_RUNTIME_MODELS_JSON"] = prepared_json
     return {"ok": not errors, "models": results, "services": service_results, "endpoints": endpoints, "env": env, "errors": errors}
 
 
@@ -655,6 +664,165 @@ def resolve_runtime_model_endpoint_for_api(*, requirement: dict[str, Any], entry
         )
     except Exception:
         return None
+
+
+def resolve_cluster_model_for_api(*, requirement: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any] | None:
+    gpu_requirement = model_gpu_requirement(entry)
+    if not gpu_requirement:
+        return None
+    report = run_hardware_requirements_validation(
+        {"requirements": {"gpu": gpu_requirement}},
+        resource_report=runtime_resource_report,
+    )
+    if not report.get("ok"):
+        return None
+    results = report.get("results") if isinstance(report.get("results"), list) else []
+    first = results[0] if results and isinstance(results[0], dict) else {}
+    matching_nodes = first.get("matching_nodes") if isinstance(first.get("matching_nodes"), list) else []
+    node = str(matching_nodes[0]) if matching_nodes else ""
+    return {
+        "source": "cluster_node",
+        "status": "cluster_node",
+        "node": node,
+        "requirement": gpu_requirement,
+    }
+
+
+def model_gpu_requirement(entry: dict[str, Any]) -> dict[str, Any] | None:
+    requirements = entry.get("requirements") if isinstance(entry.get("requirements"), dict) else {}
+    memory_values = [
+        float_or_none(requirements.get("min_vram_gb")),
+        float_or_none(requirements.get("min_unified_memory_gb")),
+    ]
+    memory_gb = max((value for value in memory_values if value is not None), default=None)
+    if memory_gb is None:
+        return None
+    gpu_requirement: dict[str, Any] = {
+        "min_count": 1,
+        "min_memory_mb": int(memory_gb * 1024),
+        "memory_operator": ">=",
+        "enforcement": "hard",
+    }
+    capabilities = requirements.get("required_capabilities")
+    if isinstance(capabilities, list) and capabilities:
+        gpu_requirement["required_capabilities"] = capabilities
+    return gpu_requirement
+
+
+def float_or_none(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def prepared_runtime_models_json(results: list[dict[str, Any]]) -> str:
+    keys = prepared_runtime_model_keys({"models": results})
+    return json.dumps(sorted(keys), separators=(",", ":")) if keys else ""
+
+
+def prepared_runtime_model_keys(model_install_summary: dict[str, Any] | None) -> set[str]:
+    prepared_statuses = {
+        "installed",
+        "already_installed",
+        "cluster_node",
+        "cluster_provided",
+        "service_registry",
+        "model_remote",
+        "explicit_config",
+    }
+    keys: set[str] = set()
+    models = model_install_summary.get("models") if isinstance(model_install_summary, dict) else []
+    for item in models or []:
+        if not isinstance(item, dict) or str(item.get("status") or "") not in prepared_statuses:
+            continue
+        for key in ("id", "model", "runtime_model", "name"):
+            value = str(item.get(key) or "").strip()
+            if value:
+                keys.add(value)
+        endpoint = item.get("endpoint") if isinstance(item.get("endpoint"), dict) else {}
+        for key in ("model", "runtime_model"):
+            value = str(endpoint.get(key) or "").strip()
+            if value:
+                keys.add(value)
+    return keys
+
+
+def prepared_runtime_model_keys_from_env(env: dict[str, str] | None) -> set[str]:
+    raw = str((env or {}).get("MN_PREPARED_RUNTIME_MODELS_JSON") or "").strip()
+    if not raw:
+        return set()
+    try:
+        decoded = json.loads(raw)
+    except json.JSONDecodeError:
+        return set()
+    if not isinstance(decoded, list):
+        return set()
+    return {str(item).strip() for item in decoded if str(item).strip()}
+
+
+def prepared_model_installed_resolver(env: dict[str, str] | None):
+    prepared = prepared_runtime_model_keys_from_env(env)
+    if not prepared:
+        return None
+
+    def resolver(model_name: str, requirement: dict[str, Any]) -> bool:
+        keys = {
+            str(model_name or "").strip(),
+            str(requirement.get("model") or "").strip(),
+            str(requirement.get("runtime_model") or "").strip(),
+            str(requirement.get("name") or "").strip(),
+        }
+        if any(key and key in prepared for key in keys):
+            return True
+        return docker_model_installed(model_name)
+
+    return resolver
+
+
+def model_validation_inputs_with_prepared_models(
+    manifest: dict[str, Any],
+    config: dict[str, Any],
+    prepared: set[str],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    if not prepared:
+        return manifest, config
+    manifest_copy = json.loads(json.dumps(manifest))
+    config_copy = json.loads(json.dumps(config))
+    runtime = manifest_copy.get("runtime") if isinstance(manifest_copy.get("runtime"), dict) else {}
+    models = runtime.get("models") if isinstance(runtime.get("models"), dict) else {}
+    for entry in models.values():
+        if isinstance(entry, dict) and model_config_matches_prepared(entry, prepared):
+            entry["install_mode"] = "cluster_provided"
+    llm = config_copy.get("llm") if isinstance(config_copy.get("llm"), dict) else {}
+    configs = llm.get("configs") if isinstance(llm.get("configs"), dict) else {}
+    for entry in configs.values():
+        if isinstance(entry, dict) and model_config_matches_prepared(entry, prepared):
+            entry["install_mode"] = "cluster_provided"
+    if isinstance(llm, dict) and model_config_matches_prepared(llm, prepared):
+        llm["install_mode"] = "cluster_provided"
+    return manifest_copy, config_copy
+
+
+def model_config_matches_prepared(config: dict[str, Any], prepared: set[str]) -> bool:
+    values = {
+        str(config.get("runtime_model") or "").strip(),
+        str(config.get("model") or "").strip(),
+        str(config.get("model_alias") or "").strip(),
+    }
+    return any(model_match_keys(value) & prepared for value in values if value)
+
+
+def model_match_keys(model: str) -> set[str]:
+    value = str(model or "").strip()
+    if not value:
+        return set()
+    keys = {value}
+    if value.lower().startswith("ai/"):
+        keys.add(value[3:])
+    elif "/" not in value:
+        keys.add(f"ai/{value}")
+    return keys
 
 
 def resolve_model_services_for_requirement(entry: dict[str, Any]) -> list[dict[str, Any]]:
@@ -2151,7 +2319,18 @@ def validate_blueprint_inputs(
     if not service_result.get("ok"):
         return service_result
 
-    model_result = run_model_validation(bundle_root, manifest, config=config, env=env)
+    validation_manifest, validation_config = model_validation_inputs_with_prepared_models(
+        manifest,
+        config,
+        prepared_runtime_model_keys_from_env(env),
+    )
+    model_result = run_model_validation(
+        bundle_root,
+        validation_manifest,
+        config=validation_config,
+        env=env,
+        installed_resolver=prepared_model_installed_resolver(env),
+    )
     if not model_result.get("ok"):
         return model_result
 

@@ -472,6 +472,82 @@ class TestBlueprintServices(unittest.TestCase):
         mock_run.assert_not_called()
         mock_record.assert_not_called()
 
+    @patch("mn_api.blueprints.record_model_owner")
+    @patch("mn_api.blueprints.load_model_catalog")
+    @patch("mn_api.blueprints.load_model_ownership")
+    @patch("mn_api.blueprints.docker_model_installed")
+    @patch("mn_api.blueprints.subprocess.run")
+    def test_install_blueprint_runtime_models_uses_capable_cluster_node(
+        self,
+        mock_run,
+        mock_installed,
+        mock_ledger,
+        mock_catalog,
+        mock_record,
+    ):
+        mock_catalog.return_value = {
+            "nemotron3:latest": {
+                "id": "nemotron3:latest",
+                "model": "ai/nemotron3:latest",
+                "api_model": "ai/nemotron3:latest",
+                "provider": "docker_model_runner",
+                "backend": "llama.cpp",
+                "requirements": {"min_vram_gb": 48, "min_unified_memory_gb": 48},
+            }
+        }
+        mock_ledger.return_value = {"version": 1, "models": {}}
+        resource_report = {
+            "nodes": [
+                {
+                    "name": "spark",
+                    "status": "healthy",
+                    "scheduling_eligible": True,
+                    "devices": [
+                        {
+                            "kind": "gpu",
+                            "type": "integrated_gpu",
+                            "vendor": "nvidia",
+                            "memory_total_mb": 131072,
+                            "capabilities": ["nvidia-gb10", "nvidia-dgx-spark"],
+                        }
+                    ],
+                }
+            ]
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            bundle = repo / "vc_assistant"
+            bundle.mkdir()
+            (bundle / "manifest.json").write_text(json.dumps({
+                "metadata": {"blueprint_id": "vc_assistant"},
+                "nodes": [],
+                "edges": [],
+                "runtime": {
+                    "models": {
+                        "primary": {
+                            "provider": "docker_model_runner",
+                            "model": "nemotron3:latest",
+                            "api_base": "auto",
+                            "backend": "llama.cpp",
+                        }
+                    }
+                },
+            }))
+
+            with patch("mn_api.state.client") as mock_client:
+                mock_client.resolve_service.return_value = json.dumps({"services": []})
+                mock_client.get_resource.return_value = json.dumps(resource_report)
+                summary = install_blueprint_runtime_models(repo.resolve(), {"id": "vc_assistant", "path": "vc_assistant"})
+
+        self.assertTrue(summary["ok"])
+        self.assertEqual(summary["models"][0]["status"], "cluster_node")
+        self.assertEqual(summary["models"][0]["cluster"]["node"], "spark")
+        prepared = json.loads(summary["env"]["MN_PREPARED_RUNTIME_MODELS_JSON"])
+        self.assertIn("ai/nemotron3:latest", prepared)
+        mock_installed.assert_not_called()
+        mock_run.assert_not_called()
+        mock_record.assert_not_called()
+
     def test_catalog_loads_category_facets_and_filters_by_slug_or_name(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
