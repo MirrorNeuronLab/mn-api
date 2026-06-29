@@ -57,6 +57,7 @@ CONTEXT_ENGINE_EXPECTATION = (
 @dataclass(frozen=True)
 class LaunchPreflight:
     model_install: dict[str, Any]
+    env_overrides: dict[str, str]
 
 
 @router.get("/blueprints")
@@ -183,6 +184,7 @@ def run_blueprint_launch(req: BlueprintLaunchRequest, _auth=Depends(require_auth
     if isinstance(preflight, JSONResponse):
         return preflight
     model_install = preflight.model_install
+    env_overrides = dict(preflight.env_overrides)
     validation = {"ok": True, "status": "skipped" if force else "passed", "issues": [], "errors": []}
     if not force:
         record_launch_progress(
@@ -241,7 +243,7 @@ def run_blueprint_launch(req: BlueprintLaunchRequest, _auth=Depends(require_auth
         label="Submit runtime job",
         detail="Handing the prepared blueprint to the MirrorNeuron runtime.",
     )
-    run_result = run_launch_with_mn_cli(launch, req)
+    run_result = run_launch_with_mn_cli(launch, req, env_overrides=env_overrides)
     if not run_result.get("ok"):
         record_launch_progress(
             progress_id,
@@ -361,6 +363,7 @@ def run_blueprint_record(
     if isinstance(preflight, JSONResponse):
         return preflight
     model_install = preflight.model_install
+    env_overrides.update(preflight.env_overrides)
     record_launch_progress(
         progress_id,
         "cleanup",
@@ -799,9 +802,22 @@ def model_install_progress_message(model_install: dict[str, Any]) -> str:
         "installed": "installed",
         "already_installed": "already present",
         "service_required": "service model noted",
+        "service_registry": "service endpoint selected",
+        "model_remote": "remote endpoint selected",
+        "explicit_config": "configured endpoint selected",
+        "cluster_provided": "cluster endpoint selected",
         "failed": "failed",
     }
-    for status in ("installed", "already_installed", "service_required", "failed"):
+    for status in (
+        "installed",
+        "already_installed",
+        "service_required",
+        "service_registry",
+        "model_remote",
+        "explicit_config",
+        "cluster_provided",
+        "failed",
+    ):
         count = counts.get(status, 0)
         if count:
             noun = labels[status]
@@ -1023,7 +1039,9 @@ def run_launch_preflight(
             label="Prepare context memory",
             detail="This blueprint does not request context memory.",
         )
-    return LaunchPreflight(model_install=model_install)
+    env_patch = model_install.get("env") if isinstance(model_install.get("env"), dict) else {}
+    env_overrides = {str(key): str(value) for key, value in env_patch.items() if value is not None}
+    return LaunchPreflight(model_install=model_install, env_overrides=env_overrides)
 
 
 def validate_launch_hardware_requirements(launch: dict, *, force: bool = False) -> dict[str, Any]:
@@ -1121,13 +1139,18 @@ def model_install_problem_response(
     )
 
 
-def run_launch_with_mn_cli(launch: dict, req: BlueprintLaunchRequest) -> dict:
+def run_launch_with_mn_cli(
+    launch: dict,
+    req: BlueprintLaunchRequest,
+    *,
+    env_overrides: dict[str, str] | None = None,
+) -> dict:
     run_args = ["--folder", str(launch["bundle_root"]), "--detached"]
     if req.run_id:
         run_args.extend(["--run-id", req.run_id])
     if req.force:
         run_args.append("--force")
-    return run_mn_blueprint_run(run_args, cwd=launch["bundle_root"])
+    return run_mn_blueprint_run(run_args, cwd=launch["bundle_root"], env_overrides=env_overrides)
 
 
 def runtime_active_jobs_payload() -> object | None:

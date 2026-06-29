@@ -400,6 +400,78 @@ class TestBlueprintServices(unittest.TestCase):
         mock_run.assert_not_called()
         mock_record.assert_not_called()
 
+    @patch("mn_api.blueprints.record_model_owner")
+    @patch("mn_api.blueprints.load_model_catalog")
+    @patch("mn_api.blueprints.load_model_ownership")
+    @patch("mn_api.blueprints.docker_model_installed")
+    @patch("mn_api.blueprints.subprocess.run")
+    def test_install_blueprint_runtime_models_uses_registered_nemotron_remote(
+        self,
+        mock_run,
+        mock_installed,
+        mock_ledger,
+        mock_catalog,
+        mock_record,
+    ):
+        mock_catalog.return_value = {
+            "nemotron3:latest": {
+                "id": "nemotron3:latest",
+                "model": "ai/nemotron3:latest",
+                "api_model": "ai/nemotron3:latest",
+                "provider": "docker_model_runner",
+                "backend": "llama.cpp",
+                "aliases": ["nemotron3", "ai/nemotron3:latest"],
+            }
+        }
+        mock_ledger.return_value = {"version": 1, "models": {}}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            remotes_path = repo / "model-remotes.json"
+            remotes_path.write_text(json.dumps({
+                "version": 1,
+                "remotes": {
+                    "spark": {
+                        "name": "spark",
+                        "provider": "docker_model_runner",
+                        "model": "ai/nemotron3:latest",
+                        "api_model": "ai/nemotron3:latest",
+                        "base_url": "http://192.168.4.173:12434/v1",
+                        "api_key": "not-needed",
+                        "node": "spark",
+                    }
+                },
+            }))
+            bundle = repo / "vc_assistant"
+            bundle.mkdir()
+            (bundle / "manifest.json").write_text(json.dumps({
+                "metadata": {"blueprint_id": "vc_assistant"},
+                "nodes": [],
+                "edges": [],
+                "runtime": {
+                    "models": {
+                        "primary": {
+                            "provider": "docker_model_runner",
+                            "model": "nemotron3:latest",
+                            "api_base": "auto",
+                            "backend": "llama.cpp",
+                        }
+                    }
+                },
+            }))
+
+            with patch.dict(os.environ, {"MN_MODEL_REMOTES_PATH": str(remotes_path)}, clear=False):
+                summary = install_blueprint_runtime_models(repo.resolve(), {"id": "vc_assistant", "path": "vc_assistant"})
+
+        self.assertTrue(summary["ok"])
+        self.assertEqual(summary["models"][0]["status"], "model_remote")
+        self.assertEqual(summary["models"][0]["endpoint"]["api_base"], "http://192.168.4.173:12434/v1")
+        endpoints = json.loads(summary["env"]["MN_MODEL_ENDPOINTS_JSON"])
+        self.assertEqual(endpoints["nemotron3:latest"]["api_base"], "http://192.168.4.173:12434/v1")
+        self.assertEqual(endpoints["ai/nemotron3:latest"]["runtime_model"], "ai/nemotron3:latest")
+        mock_installed.assert_not_called()
+        mock_run.assert_not_called()
+        mock_record.assert_not_called()
+
     def test_catalog_loads_category_facets_and_filters_by_slug_or_name(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)

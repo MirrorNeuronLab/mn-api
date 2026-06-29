@@ -24,11 +24,14 @@ from mn_sdk import (
     docker_model_name,
     load_model_catalog,
     load_model_ownership,
+    load_model_remotes,
     make_validation_report,
+    model_endpoints_json,
     prepare_job_submission,
     record_model_owner,
     required_blueprint_models,
     resolve_llm_environment,
+    resolve_model_endpoint,
     resolve_model_entry,
     run_hardware_requirements_validation,
     run_input_validation,
@@ -530,6 +533,7 @@ def install_blueprint_runtime_models(
     service_results: list[dict[str, Any]] = []
     errors: list[str] = []
     prepared_docker_models: dict[str, dict[str, Any]] = {}
+    endpoints: dict[str, dict[str, Any]] = {}
     blueprint_id = str(blueprint.get("id") or "")
     blueprint_revision = str(blueprint.get("revision") or "")
     for requirement in requirements:
@@ -563,6 +567,21 @@ def install_blueprint_runtime_models(
                 backend=backend,
             )
             results.append({**base_result, "status": "service_required"})
+            continue
+        endpoint = resolve_runtime_model_endpoint_for_api(requirement=requirement, entry=entry)
+        if endpoint:
+            keys = {
+                str(requirement.get("name") or "").strip(),
+                str(requirement.get("model") or "").strip(),
+                str(entry.get("id") or "").strip(),
+                target,
+                str(endpoint.get("model") or "").strip(),
+                str(endpoint.get("runtime_model") or "").strip(),
+            }
+            for key in keys:
+                if key:
+                    endpoints[key] = endpoint
+            results.append({**base_result, "status": endpoint.get("source") or "cluster_provided", "endpoint": endpoint})
             continue
         previous_result = prepared_docker_models.get(target)
         if previous_result is not None:
@@ -618,7 +637,59 @@ def install_blueprint_runtime_models(
             errors.append(str(context_result.get("error") or "context engine setup failed"))
         elif service_progress is not None:
             service_progress("context_engine_ready", context_result)
-    return {"ok": not errors, "models": results, "services": service_results, "errors": errors}
+    env = {"MN_MODEL_ENDPOINTS_JSON": model_endpoints_json(endpoints)} if endpoints else {}
+    return {"ok": not errors, "models": results, "services": service_results, "endpoints": endpoints, "env": env, "errors": errors}
+
+
+def resolve_runtime_model_endpoint_for_api(*, requirement: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any] | None:
+    model = str(requirement.get("model") or entry.get("id") or "").strip()
+    config = requirement.get("config") if isinstance(requirement.get("config"), dict) else {}
+    services = resolve_model_services_for_requirement(entry)
+    try:
+        return resolve_model_endpoint(
+            model,
+            config=config,
+            entry=entry,
+            services=services,
+            remotes=load_model_remotes(),
+        )
+    except Exception:
+        return None
+
+
+def resolve_model_services_for_requirement(entry: dict[str, Any]) -> list[dict[str, Any]]:
+    try:
+        from mn_api import state
+    except Exception:
+        return []
+    services: list[dict[str, Any]] = []
+    for tag in model_service_tags(entry):
+        try:
+            response = state.client.resolve_service(
+                "docker-model-runner",
+                tags=[tag],
+                passing_only=True,
+            )
+            decoded = json.loads(response)
+        except Exception:
+            continue
+        for service in decoded.get("services") or []:
+            if isinstance(service, dict) and service not in services:
+                services.append(service)
+    return services
+
+
+def model_service_tags(entry: dict[str, Any]) -> list[str]:
+    tags: list[str] = []
+    for prefix, value in (
+        ("model-id", entry.get("id")),
+        ("model", entry.get("model") or entry.get("docker_model")),
+        ("model", entry.get("api_model")),
+    ):
+        text = str(value or "").strip().lower().replace("_", "-")
+        if text:
+            tags.append(f"{prefix}:{text}")
+    return list(dict.fromkeys(tags))
 
 
 def ensure_context_engine_for_blueprint(bundle_root: Path, *, force: bool = False) -> dict[str, Any]:
@@ -734,10 +805,17 @@ def run_mn_blueprint_validate(bundle_root: Path, *, timeout_seconds: int = 120) 
     return report
 
 
-def run_mn_blueprint_run(args: list[str], *, cwd: Path, timeout_seconds: int = 300) -> Dict[str, Any]:
+def run_mn_blueprint_run(
+    args: list[str],
+    *,
+    cwd: Path,
+    timeout_seconds: int = 300,
+    env_overrides: Dict[str, str] | None = None,
+) -> Dict[str, Any]:
     command = mn_base_command() + ["blueprint", "run", *args]
     env = subprocess_environment()
     env.update(runtime_path_environment())
+    env.update(string_env_values(env_overrides))
     try:
         result = subprocess.run(
             command,
@@ -1209,6 +1287,7 @@ def start_blueprint_pre_launch_hook(
     )
     env = subprocess_environment()
     env.update(runtime_env)
+    env.update(string_env_values(env_overrides))
     env.update(
         {
             "MN_RUN_ID": run_id,
