@@ -25,6 +25,7 @@ from mn_sdk import (
     load_model_ownership,
     merge_catalog_and_installed_models,
     model_ownership_metadata,
+    proxy_model_ids,
     resolve_model_entry,
 )
 from mn_sdk import (
@@ -52,18 +53,19 @@ def list_models(installed_only: bool = True, _auth=Depends(require_auth)):
     catalog = load_model_catalog()
     ownership = load_model_ownership()
     docker_state = _installed_model_names()
+    installed_models = docker_state["models"] | proxy_model_ids()
     node = _local_node_name()
 
     entries = merge_catalog_and_installed_models(
         catalog=catalog,
-        installed_models=docker_state["models"],
+        installed_models=installed_models,
         ownership=ownership,
     )
-    installed_model_keys = {key for model in docker_state["models"] for key in docker_model_match_keys(model)}
+    installed_model_keys = {key for model in installed_models for key in docker_model_match_keys(model)}
     models = [
-        _model_payload(entry, installed_models=docker_state["models"], ownership=ownership, node=node)
+        _model_payload(entry, installed_models=installed_models, ownership=ownership, node=node)
         for entry in entries
-        if docker_model_match_keys(docker_model_name(entry)) & installed_model_keys
+        if _is_proxy_entry(entry) or docker_model_match_keys(docker_model_name(entry)) & installed_model_keys
     ]
 
     return {
@@ -201,7 +203,7 @@ def _model_payload(
 ) -> dict[str, Any]:
     target = docker_model_name(entry)
     installed_model_keys = {key for model in installed_models for key in docker_model_match_keys(model)}
-    installed = bool(docker_model_match_keys(target) & installed_model_keys)
+    installed = _is_proxy_entry(entry) or bool(docker_model_match_keys(target) & installed_model_keys)
     compatibility = None
     if str(entry.get("provider") or "docker_model_runner") == "docker_model_runner":
         try:
@@ -225,8 +227,15 @@ def _model_payload(
         "node": node if installed else "",
         "nodes": [node] if installed else [],
         "compatibility": compatibility,
+        **({"status": "proxy", "proxy": entry.get("proxy") or {}} if _is_proxy_entry(entry) and installed else {}),
         **model_ownership_metadata(target, installed=installed, ledger=ownership),
     }
+
+
+def _is_proxy_entry(entry: dict[str, Any] | None) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    return str(entry.get("provider") or "").strip().lower() == "litellm_proxy" or str(entry.get("backend") or "").strip().lower() == "proxy"
 
 
 def _resolve_entry_or_external(
