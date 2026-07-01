@@ -26,6 +26,8 @@ from mn_api.blueprints import (
     load_blueprint_categories,
     load_blueprint_bundle,
     load_blueprint_catalog,
+    model_match_keys,
+    model_service_tags,
     runtime_blueprint_environment_overrides,
     validate_run_id,
 )
@@ -57,6 +59,22 @@ def _port_accepts_connection(port: int) -> bool:
 
 
 class TestBlueprintServices(unittest.TestCase):
+    def test_model_service_tags_include_nemotron_aliases(self):
+        entry = {
+            "id": "nemotron3",
+            "model": "nemotron3",
+            "api_model": "nemotron3",
+            "aliases": ["nemotron3:latest", "ai/nemotron3:latest"],
+        }
+
+        tags = model_service_tags(entry)
+
+        self.assertIn("model:nemotron3", tags)
+        self.assertIn("model:nemotron3:latest", tags)
+        self.assertIn("model:ai/nemotron3:latest", tags)
+        self.assertIn("model-id:nemotron3", tags)
+        self.assertIn("nemotron3", model_match_keys("ai/nemotron3:latest"))
+
     def test_is_git_repo_url_accepts_common_remote_forms(self):
         self.assertTrue(is_git_repo_url("https://github.com/MirrorNeuronLab/otterdesk-blueprints.git"))
         self.assertTrue(is_git_repo_url("ssh://git@github.com/MirrorNeuronLab/otterdesk-blueprints.git"))

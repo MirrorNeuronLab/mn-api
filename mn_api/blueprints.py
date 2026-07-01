@@ -814,14 +814,25 @@ def model_config_matches_prepared(config: dict[str, Any], prepared: set[str]) ->
 
 
 def model_match_keys(model: str) -> set[str]:
-    value = str(model or "").strip()
+    value = str(model or "").strip().lower().replace("_", "-")
     if not value:
         return set()
     keys = {value}
-    if value.lower().startswith("ai/"):
-        keys.add(value[3:])
-    elif "/" not in value:
-        keys.add(f"ai/{value}")
+    for prefix in ("docker.io/", "registry-1.docker.io/"):
+        if value.startswith(prefix):
+            keys.add(value[len(prefix) :])
+    for candidate in list(keys):
+        if candidate.startswith("ai/"):
+            keys.add(candidate[3:])
+        elif "/" not in candidate:
+            keys.add(f"ai/{candidate}")
+    for candidate in list(keys):
+        no_latest = candidate.removesuffix(":latest")
+        keys.add(no_latest)
+        if no_latest.startswith("ai/"):
+            keys.add(no_latest[3:])
+        elif "/" not in no_latest:
+            keys.add(f"ai/{no_latest}")
     return keys
 
 
@@ -849,14 +860,18 @@ def resolve_model_services_for_requirement(entry: dict[str, Any]) -> list[dict[s
 
 def model_service_tags(entry: dict[str, Any]) -> list[str]:
     tags: list[str] = []
-    for prefix, value in (
-        ("model-id", entry.get("id")),
-        ("model", entry.get("model") or entry.get("docker_model")),
-        ("model", entry.get("api_model")),
-    ):
-        text = str(value or "").strip().lower().replace("_", "-")
-        if text:
-            tags.append(f"{prefix}:{text}")
+    id_values = [entry.get("id")]
+    model_values = [
+        entry.get("model") or entry.get("docker_model"),
+        entry.get("api_model"),
+        *list(entry.get("aliases") or []),
+    ]
+    for value in id_values:
+        for key in model_match_keys(str(value or "")):
+            tags.append(f"model-id:{key}")
+    for value in id_values + model_values:
+        for key in model_match_keys(str(value or "")):
+            tags.append(f"model:{key}")
     return list(dict.fromkeys(tags))
 
 
