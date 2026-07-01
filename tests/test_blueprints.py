@@ -495,7 +495,7 @@ class TestBlueprintServices(unittest.TestCase):
     @patch("mn_api.blueprints.load_model_ownership")
     @patch("mn_api.blueprints.docker_model_installed")
     @patch("mn_api.blueprints.subprocess.run")
-    def test_install_blueprint_runtime_models_uses_capable_cluster_node(
+    def test_install_blueprint_runtime_models_does_not_prepare_via_core_cluster_node(
         self,
         mock_run,
         mock_installed,
@@ -514,6 +514,10 @@ class TestBlueprintServices(unittest.TestCase):
             }
         }
         mock_ledger.return_value = {"version": 1, "models": {}}
+        mock_installed.return_value = False
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = ""
+        mock_run.return_value.stderr = ""
         resource_report = {
             "nodes": [
                 {
@@ -555,39 +559,21 @@ class TestBlueprintServices(unittest.TestCase):
             with patch("mn_api.state.client") as mock_client:
                 mock_client.resolve_service.return_value = json.dumps({"services": []})
                 mock_client.get_resource.return_value = json.dumps(resource_report)
-                mock_client.prepare_runtime_model.return_value = json.dumps(
-                    {
-                        "status": "installed",
-                        "node": "spark",
-                        "endpoint": {
-                            "provider": "docker_model_runner",
-                            "model": "ai/nemotron3:latest",
-                            "runtime_model": "ai/nemotron3:latest",
-                            "api_model": "ai/nemotron3:latest",
-                            "api_base": "http://spark:12434/engines/v1",
-                            "node": "spark",
-                            "source": "cluster_node_install",
-                        },
-                    }
-                )
                 with patch("mn_api.blueprints.subprocess.run") as mock_run:
+                    mock_run.return_value.returncode = 0
+                    mock_run.return_value.stdout = ""
+                    mock_run.return_value.stderr = ""
                     summary = install_blueprint_runtime_models(repo.resolve(), {"id": "vc_assistant", "path": "vc_assistant"})
 
         self.assertTrue(summary["ok"])
-        self.assertEqual(summary["models"][0]["status"], "runtime_node_installed")
-        self.assertEqual(summary["models"][0]["node"], "spark")
-        self.assertEqual(summary["models"][0]["cluster"]["node"], "spark")
-        self.assertEqual(summary["models"][0]["endpoint"]["api_base"], "http://spark:12434/engines/v1")
-        endpoints = json.loads(summary["env"]["MN_MODEL_ENDPOINTS_JSON"])
-        self.assertEqual(endpoints["nemotron3:latest"]["node"], "spark")
-        self.assertEqual(endpoints["ai/nemotron3:latest"]["node"], "spark")
+        self.assertEqual(summary["models"][0]["status"], "installed")
+        self.assertNotIn("MN_MODEL_ENDPOINTS_JSON", summary["env"])
         prepared = json.loads(summary["env"]["MN_PREPARED_RUNTIME_MODELS_JSON"])
         self.assertIn("ai/nemotron3:latest", prepared)
-        mock_installed.assert_not_called()
-        mock_run.assert_not_called()
-        mock_client.prepare_runtime_model.assert_called_once()
-        self.assertEqual(mock_client.prepare_runtime_model.call_args.args[0]["node"], "spark")
-        mock_record.assert_not_called()
+        mock_installed.assert_called_once()
+        mock_run.assert_called_once()
+        self.assertFalse(mock_client.prepare_runtime_model.called)
+        mock_record.assert_called_once()
 
     def test_catalog_loads_category_facets_and_filters_by_slug_or_name(self):
         with tempfile.TemporaryDirectory() as tmpdir:
