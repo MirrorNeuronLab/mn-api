@@ -19,6 +19,7 @@ from mn_sdk import (
     AppError,
     DOCKER_MODEL_RUNNER_CONTAINER_API_BASE,
     cluster_provided_model,
+    docker_api_model_name,
     docker_cli_path_environment,
     docker_model_installed,
     docker_model_name,
@@ -578,6 +579,7 @@ def install_blueprint_runtime_models(
                 str(endpoint.get("model") or "").strip(),
                 str(endpoint.get("runtime_model") or "").strip(),
             }
+            keys.update(str(alias or "").strip() for alias in entry.get("aliases") or [])
             for key in keys:
                 if key:
                     endpoints[key] = endpoint
@@ -585,7 +587,44 @@ def install_blueprint_runtime_models(
             continue
         cluster_model = resolve_cluster_model_for_api(requirement=requirement, entry=entry)
         if cluster_model:
-            results.append({**base_result, "status": "runtime_node_install", "cluster": cluster_model})
+            try:
+                cluster_result = install_cluster_runtime_model_for_api(
+                    requirement=requirement,
+                    entry=entry,
+                    model=base_result,
+                    cluster=cluster_model,
+                    backend=backend,
+                    context_size=requirement.get("context_size"),
+                    force=force,
+                    service_progress=service_progress,
+                )
+                endpoint = cluster_result.get("endpoint") if isinstance(cluster_result, dict) else None
+                if isinstance(endpoint, dict):
+                    keys = {
+                        str(requirement.get("name") or "").strip(),
+                        str(requirement.get("model") or "").strip(),
+                        str(entry.get("id") or "").strip(),
+                        target,
+                        str(endpoint.get("model") or "").strip(),
+                        str(endpoint.get("runtime_model") or "").strip(),
+                    }
+                    keys.update(str(alias or "").strip() for alias in entry.get("aliases") or [])
+                    for key in keys:
+                        if key:
+                            endpoints[key] = endpoint
+                results.append(
+                    {
+                        **base_result,
+                        "status": "runtime_node_installed",
+                        "cluster": cluster_model,
+                        **cluster_result,
+                    }
+                )
+            except Exception as exc:
+                message = str(exc)
+                failed_result = {**base_result, "status": "failed", "cluster": cluster_model, "error": message}
+                results.append(failed_result)
+                errors.append(message)
             continue
         previous_result = prepared_docker_models.get(target)
         if previous_result is not None:
@@ -666,6 +705,109 @@ def resolve_runtime_model_endpoint_for_api(*, requirement: dict[str, Any], entry
         return None
 
 
+def install_cluster_runtime_model_for_api(
+    *,
+    requirement: dict[str, Any],
+    entry: dict[str, Any],
+    model: dict[str, Any],
+    cluster: dict[str, Any],
+    backend: str,
+    context_size: Any,
+    force: bool,
+    service_progress: Callable[[str, dict[str, Any] | None], None] | None = None,
+) -> dict[str, Any]:
+    node_name = str(cluster.get("node") or "").strip()
+    if not node_name:
+        raise RuntimeError(f"no capable cluster node was selected for {model.get('model') or model.get('id')}")
+    node_info = cluster_node_info_for_api(node_name)
+    display_node = str(node_info.get("display_name") or node_info.get("name") or node_name)
+    if service_progress is not None:
+        service_progress(
+            "runtime_model_node_install_started",
+            {"model": model.get("id") or model.get("model"), "node": node_name, "display_node": display_node},
+        )
+
+    from mn_api import state
+
+    model_ref = str(entry.get("id") or entry.get("model") or "").strip()
+    if not model_ref:
+        raise RuntimeError("cannot install cluster runtime model without a model id")
+    payload = {
+        "node": node_name,
+        "model": model_ref,
+        "id": entry.get("id"),
+        "runtime_model": docker_model_name(entry),
+        "api_model": docker_api_model_name(entry),
+        "backend": backend,
+        "context_size": context_size,
+        "force": force,
+    }
+    try:
+        raw_result = state.client.prepare_runtime_model(payload)
+        prepare_result = json.loads(raw_result or "{}")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"runtime model prepare returned invalid JSON: {exc}") from exc
+    if not isinstance(prepare_result, dict):
+        raise RuntimeError("runtime model prepare returned an invalid response")
+    status = str(prepare_result.get("status") or "").strip().lower()
+    if status and status not in {"installed", "ready", "ok"}:
+        message = str(prepare_result.get("error") or prepare_result.get("message") or "cluster model install failed")
+        raise RuntimeError(f"failed to install {model_ref} on {display_node}: {message}")
+
+    endpoint = prepare_result.get("endpoint")
+    if not isinstance(endpoint, dict):
+        endpoint = endpoint_for_cluster_model_for_api(requirement=requirement, entry=entry, node_info=node_info, node_name=node_name)
+    if service_progress is not None:
+        service_progress(
+            "runtime_model_node_install_ready",
+            {"model": model.get("id") or model.get("model"), "node": node_name, "display_node": display_node, "endpoint": endpoint},
+        )
+    return {
+        "node": node_name,
+        "node_display_name": display_node,
+        "endpoint": endpoint,
+        "install": prepare_result,
+    }
+
+
+def cluster_node_info_for_api(node_name: str) -> dict[str, Any]:
+    report = runtime_resource_report()
+    for node in report.get("nodes") or []:
+        if not isinstance(node, dict):
+            continue
+        names = {
+            str(node.get("name") or ""),
+            str(node.get("display_name") or ""),
+            str(node.get("hostname") or ""),
+        }
+        if node_name in names:
+            return node
+    return {"name": node_name}
+
+
+def endpoint_for_cluster_model_for_api(
+    *,
+    requirement: dict[str, Any],
+    entry: dict[str, Any],
+    node_info: dict[str, Any],
+    node_name: str,
+) -> dict[str, Any]:
+    endpoint = resolve_runtime_model_endpoint_for_api(requirement=requirement, entry=entry)
+    if endpoint:
+        return endpoint
+    host = str(node_name).split("@", 1)[-1].strip()
+    return {
+        "provider": "docker_model_runner",
+        "model": docker_api_model_name(entry),
+        "runtime_model": docker_model_name(entry),
+        "api_model": docker_api_model_name(entry),
+        "api_base": f"http://{host}:12434/engines/v1",
+        "node": node_name,
+        "node_display_name": str(node_info.get("display_name") or ""),
+        "source": "cluster_node_install",
+    }
+
+
 def resolve_cluster_model_for_api(*, requirement: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any] | None:
     gpu_requirement = model_gpu_requirement(entry)
     if not gpu_requirement:
@@ -726,6 +868,7 @@ def prepared_runtime_model_keys(model_install_summary: dict[str, Any] | None) ->
         "installed",
         "already_installed",
         "runtime_node_install",
+        "runtime_node_installed",
         "cluster_provided",
         "service_registry",
         "model_remote",
