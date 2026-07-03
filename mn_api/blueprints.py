@@ -23,7 +23,9 @@ from mn_sdk import (
     docker_cli_path_environment,
     docker_model_installed,
     docker_model_name,
+    expand_manifest_source,
     expand_manifest_model_service_requirements,
+    is_manifest_source,
     load_model_catalog,
     load_model_ownership,
     load_model_remotes,
@@ -513,6 +515,12 @@ def validate_blueprint_bundle(repo_root: Path, blueprint: Dict[str, Any]) -> Pat
     return bundle_root
 
 
+def expand_blueprint_manifest_if_source(bundle_root: Path, manifest: Dict[str, Any]) -> Dict[str, Any]:
+    if is_manifest_source(manifest):
+        return expand_manifest_source(manifest, root_dir=bundle_root)
+    return manifest
+
+
 def install_blueprint_runtime_models(
     repo_root: Path,
     blueprint: Dict[str, Any],
@@ -528,6 +536,7 @@ def install_blueprint_runtime_models(
         raise HTTPException(status_code=500, detail="blueprint manifest.json is malformed") from exc
     if not isinstance(manifest, dict):
         raise HTTPException(status_code=500, detail="blueprint manifest.json must be an object")
+    manifest = expand_blueprint_manifest_if_source(bundle_root, manifest)
     config = load_blueprint_config(bundle_root, config_overrides=config_overrides)
     catalog = load_model_catalog()
     requirements = required_blueprint_models(manifest, config, catalog=catalog)
@@ -842,6 +851,7 @@ def local_blueprint_from_path(path: str) -> tuple[Path, Dict[str, Any]]:
         raise HTTPException(status_code=400, detail="blueprint manifest.json is malformed") from exc
     if not isinstance(manifest, dict):
         raise HTTPException(status_code=400, detail="blueprint manifest.json must be an object")
+    manifest = expand_blueprint_manifest_if_source(bundle_root, manifest)
 
     metadata = as_dict(manifest.get("metadata"))
     identity = as_dict(manifest.get("identity"))
@@ -1067,6 +1077,7 @@ def load_blueprint_bundle(
 
     if not isinstance(manifest, dict):
         raise HTTPException(status_code=500, detail="blueprint manifest.json must be an object")
+    manifest = expand_blueprint_manifest_if_source(bundle_root, manifest)
 
     metadata = manifest.setdefault("metadata", {})
     if not isinstance(metadata, dict):
@@ -2239,6 +2250,7 @@ def validate_blueprint_inputs(
         raise HTTPException(status_code=500, detail="blueprint manifest.json is malformed") from exc
     if not isinstance(manifest, dict):
         raise HTTPException(status_code=500, detail="blueprint manifest.json must be an object")
+    manifest = expand_blueprint_manifest_if_source(bundle_root, manifest)
 
     spec_issues = (
         validate_service_spec_issues(manifest)
@@ -2304,6 +2316,7 @@ def validate_blueprint_hardware_requirements(
         raise HTTPException(status_code=500, detail="blueprint manifest.json is malformed") from exc
     if not isinstance(manifest, dict):
         raise HTTPException(status_code=500, detail="blueprint manifest.json must be an object")
+    manifest = expand_blueprint_manifest_if_source(bundle_root, manifest)
     return run_hardware_requirements_validation(
         manifest,
         resource_report=runtime_resource_report,
@@ -2409,7 +2422,9 @@ def load_optional_manifest(repo_root: Path, blueprint: Dict[str, Any]) -> Dict[s
         manifest = json.loads(manifest_path.read_text())
     except json.JSONDecodeError:
         return {}
-    return manifest if isinstance(manifest, dict) else {}
+    if not isinstance(manifest, dict):
+        return {}
+    return expand_blueprint_manifest_if_source(bundle_root, manifest)
 
 
 def manifest_init_config_review(manifest: Dict[str, Any]) -> Any:

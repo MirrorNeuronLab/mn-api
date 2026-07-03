@@ -16,7 +16,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from mn_sdk import (
     BlueprintWorkflowProgress,
+    ManifestConversionError,
     RuntimeService,
+    expand_manifest_source,
     make_validation_report,
     run_hardware_requirements_validation,
     run_input_validation,
@@ -24,6 +26,7 @@ from mn_sdk import (
     validate_requirements_spec_issues,
     validate_resource_spec_issues,
     failure_from_event,
+    is_manifest_source,
     normalize_error,
     workflow_progress_snapshot,
 )
@@ -129,7 +132,7 @@ def submit_job(req: SubmitJobRequest, _auth=Depends(require_auth)):
 
 
 def _validate_job_bundle(bundle_path: str, manifest_json: str, *, force: bool):
-    manifest = _decode_manifest(manifest_json)
+    manifest = _decode_manifest(manifest_json, root_dir=Path(bundle_path))
     spec_issues = (
         validate_requirements_spec_issues(manifest)
         + validate_resource_spec_issues(manifest)
@@ -171,7 +174,7 @@ def _validate_job_bundle(bundle_path: str, manifest_json: str, *, force: bool):
 
 
 def _validate_job_manifest(manifest_json: str, *, force: bool):
-    manifest = _decode_manifest(manifest_json)
+    manifest = _decode_manifest(manifest_json, root_dir=Path.cwd())
     spec_issues = (
         validate_requirements_spec_issues(manifest)
         + validate_resource_spec_issues(manifest)
@@ -212,22 +215,25 @@ def _validate_job_manifest(manifest_json: str, *, force: bool):
     return None
 
 
-def _decode_manifest(manifest_json: str) -> dict:
+def _decode_manifest(manifest_json: str, *, root_dir: Path | None = None) -> dict:
     try:
         manifest = json.loads(manifest_json)
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=400, detail="manifest_json is malformed") from exc
     if not isinstance(manifest, dict):
         raise HTTPException(status_code=400, detail="manifest_json must be an object")
+    if is_manifest_source(manifest):
+        try:
+            manifest = expand_manifest_source(manifest, root_dir=root_dir)
+        except ManifestConversionError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     return manifest
 
 
 def _submission_run_id(manifest_json: str) -> str | None:
     try:
-        manifest = json.loads(manifest_json)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(manifest, dict):
+        manifest = _decode_manifest(manifest_json)
+    except Exception:
         return None
     metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
     for value in (

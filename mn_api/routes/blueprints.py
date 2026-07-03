@@ -14,6 +14,7 @@ from mn_api import state
 from mn_api.blueprints import (
     active_job_ids_from_jobs_payload,
     create_blueprint_run_id,
+    expand_blueprint_manifest_if_source,
     filter_blueprints_by_category,
     find_blueprint,
     install_blueprint_runtime_models,
@@ -662,7 +663,9 @@ def read_manifest_for_launch(bundle_root: Path) -> dict:
         manifest = json.loads((bundle_root / "manifest.json").read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
-    return manifest if isinstance(manifest, dict) else {}
+    if not isinstance(manifest, dict):
+        return {}
+    return expand_blueprint_manifest_if_source(bundle_root, manifest)
 
 
 def validate_progress_id(progress_id: str | None) -> str | None:

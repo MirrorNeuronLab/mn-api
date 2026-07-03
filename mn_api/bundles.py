@@ -7,6 +7,7 @@ from typing import Any
 import zipfile
 
 from fastapi import HTTPException, UploadFile
+from mn_sdk import expand_manifest_json_if_source, is_manifest_source, expand_manifest_source
 
 from mn_api.path_utils import inside_path
 
@@ -46,6 +47,8 @@ async def save_uploaded_bundle(bundle: UploadFile, upload_root: Path) -> dict[st
         raise HTTPException(status_code=400, detail="bundle manifest.json is malformed") from exc
     if not isinstance(manifest, dict):
         raise HTTPException(status_code=400, detail="bundle manifest.json must be an object")
+    if is_manifest_source(manifest):
+        manifest = expand_manifest_source(manifest, root_dir=bundle_root)
 
     return {
         "bundle_path": str(bundle_root),
@@ -69,7 +72,9 @@ def load_uploaded_bundle(bundle_path: str, upload_root: Path) -> tuple[str, dict
         if path.is_file():
             payloads[path.relative_to(payloads_path).as_posix()] = path.read_bytes()
 
-    return manifest_path.read_text(encoding="utf-8"), payloads
+    manifest_json = manifest_path.read_text(encoding="utf-8")
+    manifest_json = expand_manifest_json_if_source(manifest_json, root_dir=bundle_root)
+    return manifest_json, payloads
 
 
 def safe_extract_path(root: Path, member_name: str) -> Path:
