@@ -685,6 +685,7 @@ def prepared_runtime_model_keys(model_install_summary: dict[str, Any] | None) ->
         "installed",
         "already_installed",
         "runtime_node_install",
+        "runtime_node_already_installed",
         "runtime_node_installed",
         "cluster_provided",
         "service_registry",

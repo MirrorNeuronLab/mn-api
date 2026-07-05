@@ -810,6 +810,7 @@ def model_install_progress_message(model_install: dict[str, Any]) -> str:
         "explicit_config": "configured endpoint selected",
         "cluster_provided": "cluster endpoint selected",
         "runtime_node_install": "runtime node install scheduled",
+        "runtime_node_already_installed": "runtime node already present",
         "runtime_node_installed": "runtime node installed",
         "failed": "failed",
     }
@@ -822,6 +823,7 @@ def model_install_progress_message(model_install: dict[str, Any]) -> str:
         "explicit_config",
         "cluster_provided",
         "runtime_node_install",
+        "runtime_node_already_installed",
         "runtime_node_installed",
         "failed",
     ):
