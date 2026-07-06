@@ -102,7 +102,7 @@ def parse_dotenv_line(line: str) -> tuple[str, str] | None:
     key = key.strip()
     if not key:
         return None
-    return key, _strip_inline_comment(_unquote(raw_value.strip()))
+    return key, _unquote(_strip_inline_comment(raw_value.strip()))
 
 
 def _unquote(value: str) -> str:

@@ -1,13 +1,21 @@
 from __future__ import annotations
 
-import json
 import re
 import socket
 from typing import Any, Callable
 
 from fastapi import APIRouter, Depends, HTTPException
 import grpc
-from mn_sdk import Client, RuntimeConfig, RuntimeService, collect_runtime_status, ensure_combined_resource_totals
+from mn_sdk import (
+    Client,
+    RuntimeConfig,
+    RuntimeService,
+    collect_runtime_status,
+    docker_status,
+    ensure_combined_resource_totals,
+    health_report_from_status,
+    litellm_gateway_health,
+)
 
 from mn_api import state
 from mn_api.blueprints import shared_runs_root
@@ -54,12 +62,48 @@ def runtime_status(timeout: float = 3.0, _auth=Depends(require_auth)):
     )
 
 
+@router.get("/runtime/health")
+def runtime_health(timeout: float = 3.0, _auth=Depends(require_auth)):
+    return health_report_from_status(runtime_status(timeout=timeout, _auth=_auth))
+
+
+@router.get("/runtime/doctor")
+def runtime_doctor(timeout: float = 3.0, _auth=Depends(require_auth)):
+    status = runtime_status(timeout=timeout, _auth=_auth)
+    foundation = [
+        _foundation_component("docker_model_runner", docker_status),
+        _foundation_component("litellm_gateway", lambda: litellm_gateway_health(timeout=timeout)),
+    ]
+    components = list(status.get("components") or []) + foundation
+    overall = _overall_status(components)
+    return {
+        "version": status.get("version", 1),
+        "overall": overall,
+        "checked_at": status.get("checked_at"),
+        "runtime": status.get("runtime") or {},
+        "endpoints": status.get("endpoints") or {},
+        "components": components,
+        "foundation": {component["name"]: component for component in foundation},
+        "nodes": status.get("nodes") or {},
+        "jobs": status.get("jobs") or {},
+        "shared_storage": status.get("shared_storage") or {},
+    }
+
+
 @router.get("/system/summary")
 def get_system_summary(_auth=Depends(require_auth)):
     try:
         return RuntimeService(state.client).system_summary()
     except Exception as exc:
         return handle_grpc_error(exc)
+
+
+@router.get("/nodes")
+def get_nodes(_auth=Depends(require_auth)):
+    summary = get_system_summary(_auth=_auth)
+    if isinstance(summary, dict):
+        return _strip_restart_history(summary)
+    return summary
 
 
 @router.get("/metrics")
@@ -73,9 +117,20 @@ def get_metrics(_auth=Depends(require_auth)):
 @router.get("/resource")
 def get_resource(_auth=Depends(require_auth)):
     try:
-        return RuntimeService(state.client).get_resource()
+        resource = RuntimeService(state.client).get_resource()
+        if isinstance(resource, dict):
+            enriched = ensure_combined_resource_totals(resource)
+            if isinstance(enriched, dict):
+                enriched["native_ports"] = native_service_ports()
+            return enriched
+        return resource
     except Exception as exc:
         return handle_grpc_error(exc)
+
+
+@router.get("/resource/ports")
+def get_resource_ports(_auth=Depends(require_auth)):
+    return {"ports": native_service_ports()}
 
 
 @router.post("/resource")
@@ -238,7 +293,7 @@ def normalize_node_name(value: str) -> str:
 
 def normalize_grpc_port(value: int | None) -> int:
     try:
-        port = int(value or 55051)
+        port = 55051 if value is None else int(value)
     except (TypeError, ValueError):
         raise HTTPException(status_code=422, detail="Remote gRPC port must be a valid TCP port.")
     if port < 1 or port > 65535:
@@ -337,3 +392,87 @@ def public_handshake_summary(handshake: dict[str, Any]) -> dict[str, Any]:
         "network_only",
     )
     return {key: handshake[key] for key in public_keys if key in handshake}
+
+
+def native_service_ports() -> list[dict[str, str]]:
+    config = RuntimeConfig.from_env()
+    endpoints = [
+        ("core_grpc", config.grpc_target, "gRPC runtime"),
+        ("api", config.api_base_url, "REST API"),
+        ("web_ui", config.web_ui_url, "Web UI"),
+    ]
+    ports: list[dict[str, str]] = []
+    for name, target, label in endpoints:
+        host, port = _host_port_from_target(target)
+        if not port:
+            continue
+        ports.append({"name": name, "label": label, "host": host, "port": port, "target": target})
+    return ports
+
+
+def _host_port_from_target(target: str | None) -> tuple[str, str]:
+    text = str(target or "").strip()
+    if not text:
+        return "", ""
+    if "://" in text:
+        parsed = urllib_parse_url(text)
+        return parsed["host"], parsed["port"]
+    if ":" in text:
+        host, port = text.rsplit(":", 1)
+        return host, port
+    return text, ""
+
+
+def urllib_parse_url(value: str) -> dict[str, str]:
+    from urllib.parse import urlparse
+
+    parsed = urlparse(value)
+    return {"host": parsed.hostname or "", "port": str(parsed.port or "")}
+
+
+def _foundation_component(name: str, probe: Callable[[], Any]) -> dict[str, Any]:
+    try:
+        payload = probe()
+        if isinstance(payload, dict):
+            status = str(payload.get("status") or payload.get("overall") or "")
+            if status in {"passing", "warning", "critical"}:
+                component_status = status
+            else:
+                component_status = "passing" if payload.get("ok") is True or payload.get("available") is True else "warning"
+            return {"name": name, "status": component_status, "detail": payload}
+        return {"name": name, "status": "passing", "detail": payload}
+    except Exception as exc:
+        return {"name": name, "status": "critical", "error": str(exc)}
+
+
+def _overall_status(components: list[dict[str, Any]]) -> str:
+    statuses = {str(component.get("status")) for component in components}
+    if "critical" in statuses:
+        return "critical"
+    if "warning" in statuses:
+        return "warning"
+    return "passing"
+
+
+def _strip_restart_history(value: Any) -> Any:
+    if isinstance(value, list):
+        return [_strip_restart_history(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    return {
+        key: _strip_restart_history(item)
+        for key, item in value.items()
+        if not _restart_history_key(key)
+    }
+
+
+def _restart_history_key(key: object) -> bool:
+    normalized = "".join(char for char in str(key).lower() if char.isalnum())
+    return bool(
+        normalized
+        and (
+            normalized
+            in {"restarthistory", "restartreason", "restartexhaustedreason", "exhaustedreason"}
+            or ("restart" in normalized and ("history" in normalized or "reason" in normalized))
+        )
+    )

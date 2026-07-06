@@ -1,6 +1,6 @@
 import base64
+import ast
 import json
-import sys
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -109,11 +109,185 @@ def test_job_backup_restore_routes_encode_bundle_bytes(monkeypatch):
 
 def test_api_and_cli_resource_paths_share_sdk_logic(monkeypatch):
     cli_root = Path(__file__).resolve().parents[2] / "mn-cli"
-    if str(cli_root) not in sys.path:
-        sys.path.insert(0, str(cli_root))
-    from mn_cli.libs.resource_cmds import ensure_combined_resource_totals as cli_normalize
     from mn_api.routes.system import ensure_combined_resource_totals as api_normalize
+    from mn_sdk import ensure_combined_resource_totals as sdk_normalize
+
+    resource_cmds = cli_root / "mn_cli" / "libs" / "resource_cmds.py"
+    assert "from mn_sdk import ensure_combined_resource_totals" in resource_cmds.read_text(encoding="utf-8")
 
     payload = {"nodes": [{"cpu_cores": "2", "memory_gb": "4"}]}
 
-    assert cli_normalize(payload) == api_normalize(payload)
+    assert sdk_normalize(payload) == api_normalize(payload)
+
+
+def test_cli_command_inventory_is_classified_for_api_parity():
+    commands = _cli_command_inventory()
+    classified = API_COVERED_COMMANDS | API_UNSUPPORTED_LOCAL_COMMANDS
+    assert commands - classified == set()
+    assert API_COVERED_COMMANDS - commands == set()
+
+
+API_COVERED_COMMANDS = {
+    "blueprint cleanup",
+    "blueprint compare",
+    "blueprint doctor",
+    "blueprint export",
+    "blueprint human",
+    "blueprint human ack",
+    "blueprint human respond",
+    "blueprint install",
+    "blueprint list",
+    "blueprint logs",
+    "blueprint monitor",
+    "blueprint resources",
+    "blueprint run",
+    "blueprint stream",
+    "blueprint tail",
+    "blueprint uninstall",
+    "blueprint validate",
+    "deployment deploy",
+    "deployment fail",
+    "deployment list",
+    "deployment pause",
+    "deployment promote",
+    "deployment resume",
+    "deployment rollback",
+    "deployment status",
+    "event emit",
+    "event list",
+    "job backup",
+    "job cancel",
+    "job clear",
+    "job dead-letters",
+    "job list",
+    "job monitor",
+    "job pause",
+    "job restore",
+    "job result",
+    "job resume",
+    "job status",
+    "job submit",
+    "job unfinished",
+    "model doctor",
+    "model install",
+    "model list",
+    "model proxy",
+    "model remote add",
+    "model remote list",
+    "model remote remove",
+    "model remove",
+    "model show",
+    "model update",
+    "node add",
+    "node drain",
+    "node join",
+    "node leave",
+    "node list",
+    "node maintenance",
+    "node reconcile",
+    "node undrain",
+    "resource list",
+    "resource ports",
+    "resource set",
+    "runtime doctor",
+    "runtime health",
+    "runtime metrics",
+    "runtime status",
+    "schedule create",
+    "schedule delay",
+    "schedule delete",
+    "schedule list",
+    "schedule pause",
+    "schedule resume",
+    "schedule run-now",
+    "schedule status",
+    "service check",
+    "service list",
+    "service resolve",
+    "trigger create",
+    "trigger delete",
+    "trigger list",
+}
+
+
+API_UNSUPPORTED_LOCAL_COMMANDS = {
+    "blueprint update",
+    "node expose",
+    "node refresh-token",
+    "runtime ensure-context-engine",
+    "runtime restart-sidecars",
+    "runtime start",
+    "runtime stop",
+    "runtime update",
+}
+
+
+APP_GROUPS = {
+    "blueprint_app": "blueprint",
+    "deployment_app": "deployment",
+    "deployment_cmds.deployment_app": "deployment",
+    "event_app": "event",
+    "human_app": "blueprint human",
+    "job_app": "job",
+    "model_app": "model",
+    "node_app": "node",
+    "remote_app": "model remote",
+    "resource_app": "resource",
+    "resource_cmds.resource_app": "resource",
+    "runtime_app": "runtime",
+    "schedule_app": "schedule",
+    "service_app": "service",
+    "service_cmds.service_app": "service",
+    "trigger_app": "trigger",
+}
+
+
+def _cli_command_inventory() -> set[str]:
+    cli_root = Path(__file__).resolve().parents[2] / "mn-cli" / "mn_cli"
+    files = [cli_root / "main.py", *sorted((cli_root / "libs").glob("*.py"))]
+    commands: set[str] = set()
+    for path in files:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef):
+                for decorator in node.decorator_list:
+                    if _is_command_decorator(decorator):
+                        group = APP_GROUPS.get(ast.unparse(decorator.func.value))
+                        if group:
+                            commands.add(f"{group} {_decorated_command_name(decorator, node.name)}")
+            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+                call = node.value
+                if (
+                    isinstance(call.func, ast.Call)
+                    and isinstance(call.func.func, ast.Attribute)
+                    and call.func.func.attr == "command"
+                ):
+                    group = APP_GROUPS.get(ast.unparse(call.func.func.value))
+                    if group:
+                        commands.add(f"{group} {_called_command_name(call)}")
+    return commands
+
+
+def _is_command_decorator(value: ast.AST) -> bool:
+    return isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute) and value.func.attr == "command"
+
+
+def _decorated_command_name(decorator: ast.Call, function_name: str) -> str:
+    if decorator.args and isinstance(decorator.args[0], ast.Constant):
+        return str(decorator.args[0].value)
+    for keyword in decorator.keywords:
+        if keyword.arg == "name" and isinstance(keyword.value, ast.Constant):
+            return str(keyword.value.value)
+    return function_name.replace("_", "-")
+
+
+def _called_command_name(call: ast.Call) -> str:
+    command_call = call.func
+    if command_call.args and isinstance(command_call.args[0], ast.Constant):
+        return str(command_call.args[0].value)
+    for keyword in command_call.keywords:
+        if keyword.arg == "name" and isinstance(keyword.value, ast.Constant):
+            return str(keyword.value.value)
+    if call.args:
+        return ast.unparse(call.args[0]).split(".")[-1].replace("_", "-")
+    return "unknown"

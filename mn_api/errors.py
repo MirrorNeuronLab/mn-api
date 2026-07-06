@@ -94,7 +94,7 @@ async def app_error_exception_handler(request: Request, exc: AppError):
 
 
 async def http_exception_handler(request: Request, exc: HTTPException):
-    if exc.status_code < 500:
+    if exc.status_code < 500 or exc.detail:
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail}, headers=exc.headers)
     app_error = AppError(
         "MN_EXECUTION_FAILED",
@@ -115,6 +115,17 @@ async def unexpected_exception_handler(request: Request, exc: Exception):
 
 
 def _legacy_validation_response(error: Exception):
+    if isinstance(error, grpc.RpcError) and error.code() == grpc.StatusCode.RESOURCE_EXHAUSTED:
+        detail = str(error.details())
+        if detail.startswith("resource_overloaded"):
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "version": INTERFACE_VERSION,
+                    "error": "resource_overloaded",
+                    "detail": detail,
+                },
+            )
     if isinstance(error, grpc.RpcError) and error.code() == grpc.StatusCode.FAILED_PRECONDITION:
         detail = error.details()
         error_name = "requirements_not_met" if str(detail).startswith("requirements_not_met:") else "failed_precondition"

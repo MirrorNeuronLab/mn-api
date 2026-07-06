@@ -43,7 +43,7 @@ from mn_api.config import config_value
 from mn_api.dependencies import require_auth
 from mn_api.errors import handle_grpc_error, validation_problem_response
 from mn_api.path_utils import resolve_mn_home
-from mn_api.schemas import BlueprintLaunchRequest, BlueprintRunRequest
+from mn_api.schemas import BlueprintCleanupRequest, BlueprintLaunchRequest, BlueprintRunRequest, BlueprintUninstallRequest, BlueprintUpdateRequest
 
 
 router = APIRouter(prefix="/api/v1")
@@ -325,6 +325,59 @@ def get_launch_progress(progress_id: str, _auth=Depends(require_auth)):
         "status": str(latest.get("status") or "pending") if isinstance(latest, dict) else "pending",
         "current_phase": str(latest.get("phase") or latest.get("step") or "") if isinstance(latest, dict) else None,
     }
+
+
+@router.post("/blueprints:cleanup")
+def cleanup_blueprints(req: BlueprintCleanupRequest, _auth=Depends(require_auth)):
+    if req.dry_run:
+        return {
+            "status": "planned",
+            "dry_run": True,
+            "supported": True,
+            "message": "API cleanup supports stale helper-process cleanup for one blueprint when file and Docker cleanup are disabled.",
+        }
+    if req.blueprint_id and not req.include_files and not req.include_docker:
+        repo_root, blueprint = find_blueprint(state.config, req.blueprint_id)
+        cleanup_stale_blueprint_run_processes(
+            repo_root,
+            blueprint,
+            active_job_ids=runtime_active_job_ids(),
+            reason="api_blueprint_cleanup",
+        )
+        return {"status": "completed", "blueprint_id": req.blueprint_id, "cleaned": "stale_processes"}
+    raise HTTPException(
+        status_code=501,
+        detail={
+            "error": "unsupported_api_cleanup_scope",
+            "message": "Full blueprint file, Docker, and catalog cleanup remains a local CLI operation.",
+            "supported": {"blueprint_id": "required", "include_files": False, "include_docker": False},
+        },
+    )
+
+
+@router.post("/blueprints:update")
+def update_blueprints(req: BlueprintUpdateRequest, _auth=Depends(require_auth)):
+    raise HTTPException(
+        status_code=501,
+        detail={
+            "error": "unsupported_api_blueprint_update",
+            "message": "Blueprint library git updates are intentionally local CLI operations.",
+            "source": req.source,
+        },
+    )
+
+
+@router.post("/blueprints:uninstall")
+def uninstall_blueprints(req: BlueprintUninstallRequest, _auth=Depends(require_auth)):
+    raise HTTPException(
+        status_code=501,
+        detail={
+            "error": "unsupported_api_blueprint_uninstall",
+            "message": "Blueprint uninstall can remove local files, Docker resources, and models, so it remains a local CLI operation.",
+            "blueprint_id": req.blueprint_id,
+            "dry_run": req.dry_run,
+        },
+    )
 
 
 def run_blueprint_record(

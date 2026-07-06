@@ -7,15 +7,18 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import asyncio
 from collections import deque
 from pathlib import Path
 from typing import Any, Callable
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from mn_sdk.blueprint_support.observability import (
     acknowledge_human_notice,
     list_pending_human_requests,
+    list_runs,
+    load_run,
     read_human_events,
     read_run_events,
     read_run_logs,
@@ -25,18 +28,61 @@ from mn_sdk.blueprint_support.observability import (
     read_run_timeline,
     record_human_response,
 )
+from mn_sdk.blueprint_support.web_ui import render_static_run_report
 
 from mn_api import state
 from mn_api.artifacts import artifact_content_type, artifact_ref, list_artifact_files
-from mn_api.dependencies import require_auth
+from mn_api.dependencies import require_auth, require_websocket_auth
 from mn_api.run_outputs import output_content_type, output_path_by_index, output_refs
 from mn_api.run_store import first_string as _first_string
 from mn_api.run_store import read_json_file as _read_json_object
 from mn_api.run_store import run_dir_from_id
 from mn_api.run_store import runs_root as _runs_root
+from mn_api.schemas import RunCompareRequest
 
 
 router = APIRouter(prefix="/api/v1")
+
+
+@router.get("/runs")
+def list_blueprint_runs(
+    blueprint_id: str | None = Query(default=None),
+    limit: int = Query(20, ge=1, le=500),
+    _auth=Depends(require_auth),
+):
+    return {"data": list_runs(runs_root=_runs_root(), blueprint_id=blueprint_id, limit=limit)}
+
+
+@router.post("/runs:compare")
+def compare_runs(req: RunCompareRequest, _auth=Depends(require_auth)):
+    try:
+        record_a = load_run(req.run_a, runs_root=_runs_root(), include_observability=True)
+        record_b = load_run(req.run_b, runs_root=_runs_root(), include_observability=True)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return _run_compare_payload(req.run_a, record_a, req.run_b, record_b)
+
+
+@router.websocket("/runs/ws")
+async def websocket_runs_monitor(
+    websocket: WebSocket,
+    blueprint_id: str | None = Query(default=None),
+    limit: int = Query(20, ge=1, le=500),
+    interval: float = Query(2.0, ge=0.25, le=60.0),
+):
+    await require_websocket_auth(websocket)
+    await websocket.accept()
+    try:
+        while True:
+            await websocket.send_json(
+                {
+                    "event": "runs",
+                    "data": list_runs(runs_root=_runs_root(), blueprint_id=blueprint_id, limit=limit),
+                }
+            )
+            await asyncio.sleep(interval)
+    except WebSocketDisconnect:
+        pass
 
 
 def _run_dir(run_id: str) -> Path:
@@ -155,6 +201,26 @@ def get_run_result(run_id: str, _auth=Depends(require_auth)):
 def get_run_final_artifact(run_id: str, _auth=Depends(require_auth)):
     run_dir = _ensure_run_exists(run_id)
     return _read_required_json_file(run_dir / "final_artifact.json", "final artifact")
+
+
+@router.get("/runs/{run_id}/export")
+def export_run(
+    run_id: str,
+    format: str = Query("json"),
+    _auth=Depends(require_auth),
+):
+    try:
+        record = load_run(run_id, runs_root=_runs_root(), include_observability=True)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    normalized_format = format.lower().strip()
+    if normalized_format == "json":
+        return record
+    if normalized_format in {"markdown", "md"}:
+        return Response(content=_render_markdown_export(record), media_type="text/markdown")
+    if normalized_format in {"html", "static_html", "web"}:
+        return Response(content=render_static_run_report(record), media_type="text/html")
+    raise HTTPException(status_code=400, detail="unsupported export format")
 
 
 @router.get("/runs/{run_id}/artifacts")
@@ -559,6 +625,56 @@ def stream_run_observability(
     return StreamingResponse(event_source(), media_type="text/event-stream")
 
 
+@router.websocket("/runs/{run_id}/stream/ws")
+async def websocket_run_stream(
+    websocket: WebSocket,
+    run_id: str,
+    channels: str = Query("events,logs,human,resources"),
+    level: str | None = Query(default=None),
+    interval: float = Query(1.0, ge=0.25, le=60.0),
+):
+    await require_websocket_auth(websocket)
+    await websocket.accept()
+    try:
+        _ensure_run_exists(run_id)
+        selected_channels = [item.strip() for item in channels.split(",") if item.strip()]
+        tools = _observability_tools()
+        seen: set[str] = set()
+        last_ts: str | None = None
+        heartbeat_seconds = max(float(interval), 5.0)
+        last_heartbeat = time.monotonic()
+        while True:
+            records = tools["read_run_stream_records"](
+                run_id,
+                runs_root=_runs_root(),
+                channels=selected_channels,
+                level=level,
+                limit=500,
+                since=last_ts,
+            )
+            emitted = False
+            for record in records:
+                record_id = str(record.get("id") or f"{record.get('channel')}:{record.get('ts')}")
+                if record_id in seen:
+                    continue
+                seen.add(record_id)
+                if len(seen) > 5000:
+                    seen.clear()
+                last_ts = str(record.get("ts") or last_ts or "")
+                emitted = True
+                await websocket.send_json({"event": record.get("channel") or "message", "id": record_id, "data": record})
+            now = time.monotonic()
+            if not emitted and now - last_heartbeat >= heartbeat_seconds:
+                await websocket.send_json({"event": "heartbeat", "data": {"run_id": run_id}})
+                last_heartbeat = now
+            await asyncio.sleep(interval)
+    except HTTPException as exc:
+        await websocket.send_json({"event": "error", "data": {"detail": exc.detail}})
+        await websocket.close(code=1008)
+    except WebSocketDisconnect:
+        pass
+
+
 @router.get("/runs/{run_id}/resources")
 def get_run_resources(
     run_id: str,
@@ -592,6 +708,28 @@ def stream_run_resources(
             time.sleep(interval)
 
     return StreamingResponse(event_source(), media_type="text/event-stream")
+
+
+@router.websocket("/runs/{run_id}/resources/ws")
+async def websocket_run_resources(
+    websocket: WebSocket,
+    run_id: str,
+    interval: float = Query(5.0, ge=0.25, le=60.0),
+):
+    await require_websocket_auth(websocket)
+    await websocket.accept()
+    try:
+        _ensure_run_exists(run_id)
+        tools = _observability_tools()
+        while True:
+            payload = tools["read_run_resources"](run_id, runs_root=_runs_root())
+            await websocket.send_json({"event": "resources", "data": payload})
+            await asyncio.sleep(interval)
+    except HTTPException as exc:
+        await websocket.send_json({"event": "error", "data": {"detail": exc.detail}})
+        await websocket.close(code=1008)
+    except WebSocketDisconnect:
+        pass
 
 
 @router.get("/runs/{run_id}/human")
@@ -674,6 +812,80 @@ def _observability_tools() -> dict[str, Any]:
         "read_run_timeline": read_run_timeline,
         "record_human_response": record_human_response,
     }
+
+
+def _run_compare_payload(run_a: str, record_a: dict[str, Any], run_b: str, record_b: dict[str, Any]) -> dict[str, Any]:
+    summary_a = _run_summary(record_a.get("run") or {})
+    summary_b = _run_summary(record_b.get("run") or {})
+    artifact_a = _final_artifact(record_a)
+    artifact_b = _final_artifact(record_b)
+    scalar_keys = sorted(set(artifact_a) | set(artifact_b))
+    artifact_diff = {
+        key: {run_a: artifact_a.get(key), run_b: artifact_b.get(key)}
+        for key in scalar_keys
+        if not isinstance(artifact_a.get(key), (dict, list)) and not isinstance(artifact_b.get(key), (dict, list))
+    }
+    return {
+        "runs": {
+            run_a: {**summary_a, "event_count": len(record_a.get("events") or []), "final_artifact": artifact_a},
+            run_b: {**summary_b, "event_count": len(record_b.get("events") or []), "final_artifact": artifact_b},
+        },
+        "artifact_diff": artifact_diff,
+    }
+
+
+def _run_summary(run: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "run_id": run.get("run_id"),
+        "blueprint_id": run.get("blueprint_id"),
+        "status": run.get("status"),
+        "started_at": run.get("started_at"),
+        "ended_at": run.get("ended_at"),
+        "run_dir": run.get("run_dir"),
+    }
+
+
+def _final_artifact(record: dict[str, Any]) -> dict[str, Any]:
+    artifact = record.get("final_artifact") or {}
+    if isinstance(artifact, dict) and artifact:
+        return artifact
+    result = record.get("result") or {}
+    nested = result.get("final_artifact") if isinstance(result, dict) else None
+    return nested if isinstance(nested, dict) else {}
+
+
+def _render_markdown_export(record: dict[str, Any]) -> str:
+    run = record.get("run") or {}
+    lines = [
+        f"# Blueprint Run {run.get('run_id') or ''}".rstrip(),
+        "",
+        "| Field | Value |",
+        "|---|---|",
+    ]
+    for key, value in _run_summary(run).items():
+        lines.append(f"| {key} | {_markdown_cell(value)} |")
+    lines.extend(
+        [
+            "",
+            "## Final Artifact",
+            "",
+            "```json",
+            json.dumps(_final_artifact(record), indent=2, sort_keys=True),
+            "```",
+            "",
+            "## Event Tail",
+            "",
+            "```json",
+            json.dumps((record.get("events") or [])[-50:], indent=2, sort_keys=True),
+            "```",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
+def _markdown_cell(value: Any) -> str:
+    text = json.dumps(value, sort_keys=True) if isinstance(value, (dict, list)) else str(value or "")
+    return text.replace("|", "\\|").replace("\n", " ")
 
 
 def _duration_seconds(value: str) -> float:

@@ -12,10 +12,12 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 from mn_api import state
 from mn_api.dependencies import require_auth
 from mn_api.errors import handle_grpc_error
-from mn_api.schemas import ModelInstallRequest, ModelRemoveRequest, ModelUpdateRequest
+from mn_api.schemas import ModelInstallRequest, ModelProxyRequest, ModelRemoteRequest, ModelRemoveRequest, ModelUpdateRequest
 from mn_sdk import (
     DOCKER_MODEL_RUNNER_HOST_API_BASE,
     assess_model_compatibility,
+    default_model_proxies_path,
+    default_model_remotes_path,
     dmr_api_list_models,
     docker_api_model_name,
     docker_cli_path_environment,
@@ -23,10 +25,16 @@ from mn_sdk import (
     docker_model_name,
     load_model_catalog,
     load_model_ownership,
+    load_model_remotes,
     merge_catalog_and_installed_models,
     model_ownership_metadata,
     proxy_model_ids,
+    remove_litellm_gateway_route,
+    remove_model_remote,
     resolve_model_entry,
+    sync_litellm_gateway,
+    upsert_model_proxy,
+    upsert_model_remote,
 )
 from mn_sdk import (
     doctor_runtime_model,
@@ -80,6 +88,62 @@ def list_models(installed_only: bool = True, _auth=Depends(require_auth)):
 def list_model_catalog(_auth=Depends(require_auth)):
     try:
         return list_runtime_models(installed_only=False)
+    except Exception as exc:
+        return handle_grpc_error(exc)
+
+
+@router.get("/models/remotes")
+def list_remote_models(_auth=Depends(require_auth)):
+    try:
+        ledger = load_model_remotes()
+        remotes = list((ledger.get("remotes") or {}).values())
+        return {"remotes": remotes, "path": str(default_model_remotes_path())}
+    except Exception as exc:
+        return handle_grpc_error(exc)
+
+
+@router.post("/models/remotes")
+def add_remote_model(req: ModelRemoteRequest, _auth=Depends(require_auth)):
+    try:
+        remote = _upsert_remote_from_request(req)
+        gateway = sync_litellm_gateway(restart=True) if req.sync_gateway else None
+        return {"remote": remote, "path": str(default_model_remotes_path()), "gateway": gateway}
+    except Exception as exc:
+        return handle_grpc_error(exc)
+
+
+@router.delete("/models/remotes/{name}")
+def delete_remote_model(name: str, sync_gateway: bool = False, _auth=Depends(require_auth)):
+    try:
+        removed = remove_model_remote(name)
+        remove_litellm_gateway_route(name)
+        if removed:
+            remove_litellm_gateway_route(str(removed.get("model") or ""))
+        gateway = sync_litellm_gateway(restart=True) if sync_gateway else None
+        return {"removed": removed, "path": str(default_model_remotes_path()), "gateway": gateway}
+    except Exception as exc:
+        return handle_grpc_error(exc)
+
+
+@router.post("/models/proxies")
+def add_proxy_model(req: ModelProxyRequest, _auth=Depends(require_auth)):
+    try:
+        proxy = upsert_model_proxy(
+            req.model_id,
+            source_model=req.source_model,
+            base_url=req.base_url,
+            api_model=req.api_model,
+            display_name=req.display_name,
+            api_key=req.api_key,
+            config_path=req.config_path,
+            litellm_config_path=req.litellm_config_path,
+            container_name=req.container_name,
+            image=req.image,
+            port=req.port,
+            host=req.host,
+        )
+        gateway = sync_litellm_gateway(restart=True) if req.sync_gateway else None
+        return {"proxy": proxy, "path": str(default_model_proxies_path()), "gateway": gateway}
     except Exception as exc:
         return handle_grpc_error(exc)
 
@@ -271,6 +335,26 @@ def _resolve_entry_or_external(
         "requirements": {},
         "external": True,
     }
+
+
+def _upsert_remote_from_request(req: ModelRemoteRequest) -> dict[str, Any]:
+    try:
+        entry = resolve_model_entry(req.model)
+        runtime_model = docker_model_name(entry)
+        api_model = req.api_model or str(entry.get("api_model") or runtime_model)
+        name = req.name or str(entry.get("id") or runtime_model).replace("/", "-").replace(":", "-")
+    except Exception:
+        runtime_model = req.model
+        api_model = req.api_model or req.model
+        name = req.name or req.model.replace("/", "-").replace(":", "-")
+    return upsert_model_remote(
+        name,
+        runtime_model,
+        req.base_url,
+        api_key=req.api_key,
+        api_model=api_model,
+        node=req.node,
+    )
 
 
 def _stream_chat_benchmark(

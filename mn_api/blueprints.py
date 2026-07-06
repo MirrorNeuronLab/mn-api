@@ -19,7 +19,6 @@ from mn_sdk import (
     AppError,
     DOCKER_MODEL_RUNNER_CONTAINER_API_BASE,
     cluster_provided_model,
-    docker_api_model_name,
     docker_cli_path_environment,
     docker_model_installed,
     docker_model_name,

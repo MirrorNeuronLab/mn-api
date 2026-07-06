@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import Header, HTTPException, Request
+from fastapi import Header, HTTPException, Request, WebSocket, WebSocketException
 from fastapi.responses import JSONResponse
 
 from mn_api import state
@@ -39,3 +39,15 @@ def require_auth(authorization: str = Header(default="")):
     if authorization != expected:
         raise HTTPException(status_code=401, detail="missing or invalid bearer token")
     return None
+
+
+async def require_websocket_auth(websocket: WebSocket) -> None:
+    if not auth_enabled(state.config):
+        return
+
+    expected_token = str(state.config.api_token or "")
+    authorization = str(websocket.headers.get("authorization") or "")
+    query_token = str(websocket.query_params.get("token") or "")
+    if authorization == f"Bearer {expected_token}" or query_token == expected_token:
+        return
+    raise WebSocketException(code=1008, reason="missing or invalid bearer token")

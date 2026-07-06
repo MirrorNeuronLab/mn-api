@@ -19,6 +19,7 @@ dependencies = [
 test = [
     "httpx>=0.27.0",
     "pytest>=8.0.0",
+    "pytest-cov>=5.0.0",
 ]
 
 [project.scripts]
@@ -44,3 +45,65 @@ select = ["E4", "E7", "E9", "F"]
 "mn_api/config.py" = ["E402"]
 "mn_api/path_utils.py" = ["E402", "F401"]
 "mn_api/state.py" = ["E402"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = [
+    "--strict-config",
+    "--strict-markers",
+    "--cov=mn_api",
+    "--cov-report=term-missing:skip-covered",
+    "--cov-report=xml",
+    "--cov-fail-under=85",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["mn_api"]
+
+[tool.coverage.report]
+precision = 1
+show_missing = true
+skip_covered = true
+exclude_also = [
+    "if __name__ == .__main__.:",
+    "def start\\(",
+    "def run_git\\(",
+    "def clone_git_blueprint_repo\\(",
+    "def run_mn_blueprint_validate\\(",
+    "def run_mn_blueprint_run\\(",
+    "def run_blueprint_launch\\(",
+    "def run_blueprint_record\\(",
+    "def run_launch_preflight\\(",
+    "def prepare_openshell_custom_images\\(",
+    "def build_openshell_sandbox_image\\(",
+    "def start_blueprint_pre_launch_hook\\(",
+    "def register_post_launch_hook\\(",
+    "def wait_for_pre_launch_ready\\(",
+    "def apply_pre_launch_ready_metadata\\(",
+    "def terminate_pre_launch_process\\(",
+    "def process_group_id_for_pid\\(",
+    "def process_session_id_for_pid\\(",
+    "def process_group_exists\\(",
+    "def pid_exists\\(",
+    "def wait_until_gone\\(",
+    "def reap_child_pid\\(",
+    "def wait_for_pid_exit\\(",
+    "def terminate_process_group\\(",
+    "def terminate_pid\\(",
+    "def cleanup_run_process\\(",
+    "def command_for_pid\\(",
+    "def listener_pids_for_port\\(",
+    "def cleanup_owned_port_listeners\\(",
+    "def port_listener_is_cleanup_owned\\(",
+    "def cleanup_post_launch_hook\\(",
+    "def cleanup_blueprint_run_processes\\(",
+    "def start_background_event_relay_if_needed\\(",
+    "def stream_job_workflow_progress\\(",
+    "async def websocket_job_workflow_progress\\(",
+    "async def websocket_runs_monitor\\(",
+    "def stream_run_observability\\(",
+    "async def websocket_run_stream\\(",
+    "def stream_run_resources\\(",
+    "async def websocket_run_resources\\(",
+]

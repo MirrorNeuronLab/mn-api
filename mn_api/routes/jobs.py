@@ -7,13 +7,14 @@ import threading
 import time
 import urllib.parse
 import base64
+import asyncio
 from collections import Counter, deque
 from pathlib import Path
 from typing import Any
 
 import grpc
-from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse, StreamingResponse
 from mn_sdk import (
     BlueprintWorkflowProgress,
     ManifestConversionError,
@@ -38,7 +39,7 @@ from mn_api.artifacts import artifact_ref, list_artifact_files
 from mn_api.blueprints import cleanup_blueprint_processes_for_job
 from mn_api.blueprints import runtime_resource_report
 from mn_api.bundles import load_uploaded_bundle
-from mn_api.dependencies import require_auth
+from mn_api.dependencies import require_auth, require_websocket_auth
 from mn_api.errors import handle_grpc_error, validation_problem_response
 from mn_api.job_activity import compact_event as _compact_event
 from mn_api.job_activity import compact_value as _compact_value
@@ -266,8 +267,8 @@ def list_jobs(limit: int = 20, include_terminal: bool = True, _auth=Depends(requ
         return handle_grpc_error(exc)
 
 
-@router.post("/jobs:cleanup")
-@router.post("/jobs/cleanup")
+@router.post("/jobs:cleanup", operation_id="cleanup_jobs_colon_alias")
+@router.post("/jobs/cleanup", operation_id="cleanup_jobs_path_alias")
 def cleanup_jobs(_auth=Depends(require_auth)):
     try:
         return RuntimeService(state.client).clear_jobs()
@@ -287,6 +288,19 @@ def _is_clear_jobs_admin_token_error(exc: Exception) -> bool:
     if exc.code() != grpc.StatusCode.PERMISSION_DENIED:
         return False
     return "MN_GRPC_ADMIN_TOKEN" in str(exc.details())
+
+
+@router.get("/jobs/unfinished")
+def unfinished_jobs(_auth=Depends(require_auth)):
+    try:
+        jobs_json = state.client.list_jobs(500, False)
+        payload = json.loads(jobs_json)
+        jobs = payload.get("data") if isinstance(payload, dict) else []
+        if not isinstance(jobs, list):
+            jobs = []
+        return {"data": [_unfinished_job_row(job) for job in jobs if isinstance(job, dict)]}
+    except Exception as exc:
+        return handle_grpc_error(exc)
 
 
 @router.get("/jobs/{job_id}")
@@ -936,6 +950,24 @@ def _progress_event_should_flush(event_type: str) -> bool:
     return "failed" in normalized or "error" in normalized or "timed_out" in normalized
 
 
+def _unfinished_job_row(job: dict[str, Any]) -> dict[str, Any]:
+    recovery = job.get("recovery") if isinstance(job.get("recovery"), dict) else {}
+    row = dict(job)
+    row["recovery_status"] = job.get("recovery_status") or recovery.get("status") or "normal"
+    row["recovery_requires_review"] = bool(job.get("recovery_requires_review") or recovery.get("requires_review"))
+    return row
+
+
+def _decode_event_payload(payload: str | None) -> dict[str, Any]:
+    if not payload:
+        return {}
+    try:
+        decoded = json.loads(payload)
+    except json.JSONDecodeError:
+        return {"type": "unparseable_event", "message": payload[:_MAX_COMPACT_STRING]}
+    return decoded if isinstance(decoded, dict) else {"type": "event", "payload": decoded}
+
+
 @router.get("/jobs/{job_id}/agent-graph")
 def get_job_agent_graph(job_id: str, _auth=Depends(require_auth)):
     try:
@@ -1131,6 +1163,76 @@ def stream_job_workflow_progress(
     return StreamingResponse(event_source(), media_type="text/event-stream")
 
 
+@router.websocket("/jobs/{job_id}/workflow-progress/ws")
+async def websocket_job_workflow_progress(
+    websocket: WebSocket,
+    job_id: str,
+    interval: float = Query(1.0, ge=0.25, le=30.0),
+):
+    await require_websocket_auth(websocket)
+    await websocket.accept()
+    stop = threading.Event()
+    try:
+        await websocket.send_json({"event": "snapshot", "data": _workflow_progress_snapshot_for_job(job_id)})
+        event_queue: queue.Queue[tuple[str, str | None]] = queue.Queue()
+
+        def pump_events() -> None:
+            try:
+                for event_json in state.client.stream_events(
+                    job_id,
+                    follow=True,
+                    timeout=None,
+                    heartbeat_interval_ms=max(int(interval * 1000), 250),
+                ):
+                    if stop.is_set():
+                        break
+                    event_queue.put(("event", event_json))
+            except Exception as exc:
+                event_queue.put(("error", str(exc)))
+            finally:
+                event_queue.put(("done", None))
+
+        threading.Thread(target=pump_events, daemon=True).start()
+        heartbeat_seconds = max(float(interval), 5.0)
+        last_heartbeat = time.monotonic()
+        while True:
+            try:
+                kind, payload = event_queue.get_nowait()
+            except queue.Empty:
+                now = time.monotonic()
+                if now - last_heartbeat >= heartbeat_seconds:
+                    await websocket.send_json({"event": "heartbeat", "data": {"job_id": job_id}})
+                    last_heartbeat = now
+                await asyncio.sleep(min(max(float(interval), 0.25), 1.0))
+                continue
+
+            if kind == "done":
+                await websocket.close(code=1000)
+                break
+            if kind == "error":
+                await websocket.send_json(
+                    {"event": "error", "data": {"job_id": job_id, "error": payload or "event stream failed"}}
+                )
+                await websocket.close(code=1011)
+                break
+
+            event = _decode_event_payload(payload)
+            event_type = str(event.get("type") or "")
+            if event_type == "stream_heartbeat":
+                await websocket.send_json({"event": "heartbeat", "data": {"job_id": job_id}})
+                last_heartbeat = time.monotonic()
+                continue
+            await websocket.send_json({"event": "event", "data": event})
+            await websocket.send_json({"event": "snapshot", "data": _workflow_progress_snapshot_for_job(job_id)})
+            if event_type in _TERMINAL_EVENT_TYPES:
+                await websocket.close(code=1000)
+                break
+    except WebSocketDisconnect:
+        pass
+    finally:
+        stop.set()
+
+
 @router.get("/jobs/{job_id}/dead-letters")
 def get_job_dead_letters(job_id: str, _auth=Depends(require_auth)):
     try:
@@ -1204,6 +1306,9 @@ def pause_job(job_id: str, _auth=Depends(require_auth)):
     try:
         return RuntimeService(state.client).pause_job(job_id)
     except Exception as exc:
+        legacy = _legacy_job_control_error(exc)
+        if legacy is not None:
+            return legacy
         return handle_grpc_error(exc)
 
 
@@ -1212,4 +1317,20 @@ def resume_job(job_id: str, _auth=Depends(require_auth)):
     try:
         return RuntimeService(state.client).resume_job(job_id)
     except Exception as exc:
+        legacy = _legacy_job_control_error(exc)
+        if legacy is not None:
+            return legacy
         return handle_grpc_error(exc)
+
+
+def _legacy_job_control_error(exc: Exception) -> JSONResponse | None:
+    details = getattr(exc, "details", None)
+    if not callable(details):
+        return None
+    try:
+        detail = str(details())
+    except Exception:
+        return None
+    if not detail:
+        return None
+    return JSONResponse(status_code=500, content={"version": 1, "error": detail})

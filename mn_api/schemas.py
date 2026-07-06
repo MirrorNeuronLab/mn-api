@@ -155,3 +155,68 @@ class ModelUpdateRequest(BaseModel):
 class ModelRemoveRequest(BaseModel):
     version: int = 1
     force: bool = False
+
+
+class ServiceCheckRequest(BaseModel):
+    version: int = 1
+    bundle_path: Optional[str] = Field(default=None, alias="_bundle_path")
+    path: Optional[str] = None
+    config_overrides: Optional[Dict[str, Any]] = None
+
+
+class ModelRemoteRequest(BaseModel):
+    version: int = 1
+    model: str
+    base_url: str
+    name: Optional[str] = None
+    api_model: Optional[str] = None
+    api_key: str = "not-needed"
+    node: Optional[str] = None
+    sync_gateway: bool = False
+
+
+class ModelProxyRequest(BaseModel):
+    version: int = 1
+    model_id: str
+    source_model: Optional[str] = None
+    base_url: str = "http://127.0.0.1:4000/v1"
+    api_model: Optional[str] = None
+    display_name: Optional[str] = None
+    api_key: str = "not-needed"
+    config_path: Optional[str] = None
+    litellm_config_path: Optional[str] = None
+    container_name: Optional[str] = None
+    image: Optional[str] = None
+    port: Optional[int] = None
+    host: Optional[str] = None
+    sync_gateway: bool = False
+
+
+class RunCompareRequest(BaseModel):
+    version: int = 1
+    run_a: str
+    run_b: str
+
+
+class BlueprintCleanupRequest(BaseModel):
+    version: int = 1
+    blueprint_id: Optional[str] = None
+    include_files: bool = True
+    include_docker: bool = True
+    include_dead: bool = True
+    dry_run: bool = False
+
+
+class BlueprintUpdateRequest(BaseModel):
+    version: int = 1
+    source: Optional[str] = None
+
+
+class BlueprintUninstallRequest(BaseModel):
+    version: int = 1
+    blueprint_id: Optional[str] = None
+    source: Optional[str] = None
+    keep_resources: bool = False
+    keep_models: bool = False
+    remove_models: bool = False
+    dry_run: bool = False
