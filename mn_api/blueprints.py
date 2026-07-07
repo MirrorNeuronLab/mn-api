@@ -17,6 +17,7 @@ from urllib.parse import urlparse
 from fastapi import HTTPException
 from mn_sdk import (
     AppError,
+    BlueprintCatalogError,
     DOCKER_MODEL_RUNNER_CONTAINER_API_BASE,
     cluster_provided_model,
     docker_cli_path_environment,
@@ -46,12 +47,32 @@ from mn_sdk import (
     validate_resource_spec_issues,
     validate_service_spec_issues,
 )
-from mn_sdk.blueprint_source import is_git_repo_url
+from mn_sdk.blueprint_source import (
+    as_dict as sdk_as_dict,
+    as_list as sdk_as_list,
+    blueprint_bundle_root as sdk_blueprint_bundle_root,
+    blueprint_repo_root as sdk_blueprint_repo_root,
+    cached_git_blueprint_repo_path as sdk_cached_git_blueprint_repo_path,
+    category_slug as sdk_category_slug,
+    clone_git_blueprint_repo as sdk_clone_git_blueprint_repo,
+    ensure_git_blueprint_repo as sdk_ensure_git_blueprint_repo,
+    enrich_blueprint_from_manifest as sdk_enrich_blueprint_from_manifest,
+    filter_blueprints_by_category as sdk_filter_blueprints_by_category,
+    find_blueprint as sdk_find_blueprint,
+    is_git_repo_url as sdk_is_git_repo_url,
+    load_blueprint_catalog as sdk_load_blueprint_catalog,
+    load_blueprint_categories as sdk_load_blueprint_categories,
+    load_optional_manifest as sdk_load_optional_manifest,
+    manifest_init_config_review as sdk_manifest_init_config_review,
+    normalize_blueprint as sdk_normalize_blueprint,
+    normalize_category_name as sdk_normalize_category_name,
+    run_git as sdk_run_git,
+)
 from mn_sdk.context_engine import blueprint_requires_context_engine
 from mn_sdk.runtime_modules import (
     RuntimeModuleInstallError,
-    default_registered_modules_root,
     ensure_runtime_modules_for_manifest,
+    runtime_path_environment as sdk_runtime_path_environment,
 )
 from mn_sdk.blueprint_support import (
     inject_runtime_web_ui_service,
@@ -71,7 +92,7 @@ from mn_api.config import (
     runtime_env_values,
     subprocess_environment,
 )
-from mn_api.path_utils import default_runs_root, inside_path
+from mn_api.path_utils import default_runs_root
 
 
 BLUEPRINT_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,160}$")
@@ -103,6 +124,10 @@ BLUEPRINT_RUNTIME_ENV_KEYS = (
 )
 
 
+def _catalog_http_exception(exc: BlueprintCatalogError) -> HTTPException:
+    return HTTPException(status_code=getattr(exc, "status_code", 500), detail=getattr(exc, "detail", str(exc)))
+
+
 def workspace_root() -> Path:
     for name in ("MN_WORKSPACE_ROOT",):
         value = config_value(name)
@@ -112,31 +137,7 @@ def workspace_root() -> Path:
 
 
 def runtime_path_environment() -> Dict[str, str]:
-    root = workspace_root()
-    runtime_modules_root = default_registered_modules_root(workspace_root=root)
-    runtime_env = runtime_env_values()
-    membrane_project_path = Path(config_value("MN_MEMBRANE_PROJECT_PATH") or root / "Membrane").expanduser()
-    membrane_sdk_path = Path(
-        config_value("MN_MEMBRANE_SDK_PATH")
-        or membrane_project_path / "mn-context-engine-python-sdk" / "src"
-    ).expanduser()
-    skills_root = Path(config_value("MN_SKILLS_ROOT", runtime_env=runtime_env) or runtime_modules_root).expanduser()
-    env = {
-        "MN_WORKSPACE_ROOT": str(root),
-        "MN_MEMBRANE_PROJECT_PATH": str(membrane_project_path),
-        "MN_MEMBRANE_SDK_PATH": str(membrane_sdk_path),
-        "MN_SKILLS_ROOT": str(skills_root),
-    }
-    python_paths = [
-        skills_root / "llm_ocr_skill" / "src",
-        skills_root / "pdf_extract_skill" / "src",
-    ]
-    existing_pythonpath = config_value("PYTHONPATH")
-    resolved_python_paths = [str(path) for path in python_paths if path.exists()]
-    if existing_pythonpath:
-        resolved_python_paths.append(existing_pythonpath)
-    if resolved_python_paths:
-        env["PYTHONPATH"] = os.pathsep.join(resolved_python_paths)
+    env = sdk_runtime_path_environment(workspace_root=workspace_root())
     env["PATH"] = docker_cli_path_environment().get("PATH", config_value("PATH"))
     return env
 
@@ -146,7 +147,8 @@ def ensure_runtime_modules_for_submission(
     config: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     try:
-        return ensure_runtime_modules_for_manifest(manifest, config, workspace_root=workspace_root())
+        env = {**os.environ, **runtime_path_environment()}
+        return ensure_runtime_modules_for_manifest(manifest, config, env=env, workspace_root=workspace_root())
     except RuntimeModuleInstallError as exc:
         raise AppError(
             "MN_EXECUTION_FAILED",
@@ -164,11 +166,11 @@ def blueprint_web_ui_enabled(config: Dict[str, Any] | None) -> bool:
 
 
 def as_dict(value: Any) -> Dict[str, Any]:
-    return value if isinstance(value, dict) else {}
+    return sdk_as_dict(value)
 
 
 def as_list(value: Any) -> list[Any]:
-    return value if isinstance(value, list) else []
+    return sdk_as_list(value)
 
 
 def string_env_values(values: Dict[str, Any] | None) -> Dict[str, str]:
@@ -186,16 +188,15 @@ def runtime_blueprint_environment_overrides() -> Dict[str, str]:
 
 
 def normalize_category_name(value: Any) -> str:
-    if not isinstance(value, str):
-        return DEFAULT_CATEGORY
-    category = value.strip()
-    return category or DEFAULT_CATEGORY
+    return sdk_normalize_category_name(value)
 
 
 def category_slug(value: Any) -> str:
-    category = normalize_category_name(value)
-    slug = CATEGORY_SLUG_PATTERN.sub("-", category.lower()).strip("-")
-    return slug or CATEGORY_SLUG_PATTERN.sub("-", DEFAULT_CATEGORY.lower()).strip("-")
+    return sdk_category_slug(value)
+
+
+def is_git_repo_url(value: str) -> bool:
+    return sdk_is_git_repo_url(value)
 
 
 def validate_blueprint_id(blueprint_id: str) -> None:
@@ -220,289 +221,75 @@ def create_blueprint_run_id(blueprint_id: str) -> str:
 
 
 def cached_git_repo_path(repo_url: str) -> Path:
-    parsed = urlparse(repo_url)
-    name = Path(parsed.path.rstrip("/")).stem or "blueprints"
-    digest = hashlib.sha256(repo_url.encode("utf-8")).hexdigest()[:12]
     configured_cache = (
         config_path("MN_BLUEPRINT_REPO_CACHE", default=DEFAULT_BLUEPRINT_REPO_CACHE)
         or Path(DEFAULT_BLUEPRINT_REPO_CACHE).expanduser()
     )
-    return configured_cache / f"{name}-{digest}"
+    return sdk_cached_git_blueprint_repo_path(repo_url, cache_root=configured_cache)
 
 
 def run_git(args: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git", *args],
-        check=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+    return sdk_run_git(args)
 
 
 def clone_git_blueprint_repo(repo_url: str, target: Path) -> None:
-    temp_target = target.with_name(f".{target.name}.tmp-{os.getpid()}-{int(time.time() * 1000)}")
-    if temp_target.exists():
-        shutil.rmtree(temp_target)
-    run_git(["clone", "--depth", "1", repo_url, str(temp_target)])
-    if target.exists():
-        shutil.rmtree(target)
-    temp_target.replace(target)
+    sdk_clone_git_blueprint_repo(repo_url, target)
 
 
 def ensure_git_blueprint_repo(repo_url: str) -> Path:
-    target = cached_git_repo_path(repo_url)
-    if (target / "index.json").is_file() and not (target / ".git").is_dir():
-        return target
-    target.parent.mkdir(parents=True, exist_ok=True)
-    if target.exists() and not (target / ".git").is_dir():
-        raise HTTPException(status_code=500, detail="blueprint repo cache path exists but is not a git repository")
     try:
-        if target.exists():
-            status = run_git(["-C", str(target), "status", "--porcelain"])
-            if status.stdout.strip():
-                run_git(["-C", str(target), "reset", "--hard", "HEAD"])
-                run_git(["-C", str(target), "clean", "-fdx"])
-            try:
-                run_git(["-C", str(target), "pull", "--ff-only"])
-            except (OSError, subprocess.CalledProcessError):
-                clone_git_blueprint_repo(repo_url, target)
-        else:
-            clone_git_blueprint_repo(repo_url, target)
-    except (OSError, subprocess.CalledProcessError) as exc:
-        detail = getattr(exc, "stderr", "") or str(exc)
-        raise HTTPException(status_code=500, detail=f"blueprint repo clone failed: {detail}") from exc
-    return target
+        return sdk_ensure_git_blueprint_repo(repo_url, cache_root=cached_git_repo_path(repo_url).parent)
+    except BlueprintCatalogError as exc:
+        raise _catalog_http_exception(exc) from exc
 
 
 def blueprint_repo_root(config: ApiConfig) -> Path:
-    source = str(getattr(config, "blueprint_source", "") or "").strip().lower()
-    if source == "github":
-        repo_value = getattr(config, "blueprint_repo", "")
-        if not repo_value:
-            raise HTTPException(status_code=500, detail="MN_BLUEPRINT_REPO is not configured")
-        if not is_git_repo_url(repo_value):
-            raise HTTPException(status_code=500, detail="MN_BLUEPRINT_REPO must be a Git URL")
-        return ensure_git_blueprint_repo(repo_value)
-
-    if source != "local":
-        raise HTTPException(status_code=500, detail="MN_BLUEPRINT_SOURCE must be github or local")
-
-    local_value = getattr(config, "blueprint_local", "") or getattr(config, "active_blueprint_location", "")
-    if not local_value:
-        raise HTTPException(status_code=500, detail="MN_BLUEPRINT_LOCAL is not configured")
-    repo_root = Path(local_value).expanduser().resolve()
-    if not repo_root.is_dir():
-        raise HTTPException(status_code=500, detail="MN_BLUEPRINT_LOCAL is not a directory")
-    if not (repo_root / "index.json").is_file():
-        raise HTTPException(status_code=500, detail="MN_BLUEPRINT_LOCAL index.json was not found")
-    return repo_root
+    try:
+        return sdk_blueprint_repo_root(config, github_resolver=ensure_git_blueprint_repo)
+    except BlueprintCatalogError as exc:
+        raise _catalog_http_exception(exc) from exc
 
 
 def load_blueprint_catalog(config: ApiConfig) -> tuple[Path, list[Dict[str, Any]]]:
     repo_root = blueprint_repo_root(config)
-    index_path = repo_root / "index.json"
-    if not index_path.is_file():
-        raise HTTPException(status_code=500, detail="blueprint repo index.json was not found")
-
     try:
-        index_data = json.loads(index_path.read_text())
-    except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=500, detail="blueprint repo index.json is malformed") from exc
-
-    entries = index_data.get("blueprints") if isinstance(index_data, dict) else index_data
-    if not isinstance(entries, list):
-        raise HTTPException(status_code=500, detail="blueprint repo index.json must be a list")
-
-    blueprints: list[Dict[str, Any]] = []
-    for entry in entries:
-        normalized = normalize_blueprint(entry)
-        if normalized:
-            blueprints.append(enrich_blueprint_from_manifest(repo_root, normalized))
-    return repo_root, blueprints
+        return sdk_load_blueprint_catalog(repo_root)
+    except BlueprintCatalogError as exc:
+        raise _catalog_http_exception(exc) from exc
 
 
 def normalize_blueprint(entry: Any) -> Optional[Dict[str, Any]]:
-    record = as_dict(entry)
-    product = as_dict(record.get("product"))
-    pricing = as_dict(record.get("pricing"))
-    blueprint_id = record.get("id") or record.get("blueprint_id") or record.get("blueprintId")
-    if not isinstance(blueprint_id, str) or not blueprint_id:
-        return None
-
-    pricing_model = pricing.get("model") or record.get("pricing_model") or record.get("pricingModel") or "free"
-    pricing_rate = pricing.get("rate") or record.get("hourly_rate") or record.get("hourlyRate") or 0
-    pricing_unit = pricing.get("unit") or "hour"
-    try:
-        pricing_rate = float(pricing_rate)
-    except (TypeError, ValueError):
-        pricing_rate = 0
-
-    runtime_features = (
-        record.get("runtime_features")
-        or record.get("runtimeFeatures")
-        or product.get("runtime_features")
-        or product.get("runtimeFeatures")
-        or []
-    )
-    capabilities = record.get("capabilities") or product.get("capabilities") or []
-    category = normalize_category_name(record.get("category") or product.get("category"))
-    rate_label = (
-        record.get("rate_label")
-        or record.get("rateLabel")
-        or ("Free" if pricing_model == "free" or not pricing_rate else f"${pricing_rate:g}/{pricing_unit}")
-    )
-    hourly_rate = (
-        record.get("hourly_rate")
-        or record.get("hourlyRate")
-        or ("$0/hr" if pricing_model == "free" or not pricing_rate else f"${pricing_rate:g}/{pricing_unit}")
-    )
-
-    return {
-        "id": blueprint_id,
-        "type": record.get("type") or product.get("type") or "batch",
-        "name": record.get("name") or product.get("name") or blueprint_id,
-        "tagline": record.get("tagline") or product.get("tagline") or product.get("one_line") or "",
-        "summary": record.get("summary") or product.get("summary") or product.get("one_line") or "",
-        "description": record.get("description") or product.get("description") or product.get("one_line") or "",
-        "job_name": record.get("job_name") or record.get("jobName") or product.get("job_name") or "",
-        "workflow_id": record.get("workflow_id") or record.get("workflowId") or product.get("workflow_id") or "",
-        "target_users": record.get("target_users") or record.get("targetUsers") or product.get("target_users") or "",
-        "output": record.get("output") or product.get("output") or "",
-        "agent_role": record.get("agent_role") or record.get("agentRole") or product.get("agent_role") or "",
-        "customizable_for": (
-            record.get("customizable_for")
-            or record.get("customizableFor")
-            or product.get("customizable_for")
-            or ""
-        ),
-        "problem": record.get("problem") or product.get("problem") or "",
-        "simulation_type": (
-            record.get("simulation_type")
-            or record.get("simulationType")
-            or product.get("simulation_type")
-            or ""
-        ),
-        "category": category,
-        "category_slug": category_slug(category),
-        "publisher": record.get("publisher") or product.get("publisher") or "MirrorNeuron",
-        "rating": record.get("rating") or product.get("rating") or 0,
-        "installs": record.get("installs") or product.get("installs") or 0,
-        "pricing": {
-            "model": pricing_model,
-            "rate": pricing_rate,
-            "unit": pricing_unit,
-        },
-        "requirements": record.get("requirements") if isinstance(record.get("requirements"), dict) else {},
-        "rate_label": rate_label,
-        "hourly_rate": hourly_rate,
-        "capabilities": as_list(capabilities),
-        "runtime_features": as_list(runtime_features),
-        "icon": record.get("icon") or product.get("icon") or "",
-        "accent_color": record.get("accent_color") or record.get("accentColor") or "#1f7a8c",
-        "revision": record.get("revision") or record.get("blueprint_revision") or "",
-        "path": record.get("path") or record.get("directory") or blueprint_id,
-    }
+    return sdk_normalize_blueprint(entry)
 
 
 def load_blueprint_categories(repo_root: Path, blueprints: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
-    category_records: list[Dict[str, str]] = []
-    category_path = repo_root / "category.json"
-    if category_path.is_file():
-        try:
-            category_data = json.loads(category_path.read_text())
-        except json.JSONDecodeError as exc:
-            raise HTTPException(status_code=500, detail="blueprint repo category.json is malformed") from exc
-
-        categories = as_dict(category_data).get("categories")
-        if not isinstance(categories, list):
-            raise HTTPException(status_code=500, detail="blueprint repo category.json must contain a categories list")
-        for position, entry in enumerate(categories):
-            record = as_dict(entry)
-            raw_name = record.get("name")
-            if not isinstance(raw_name, str) or not raw_name.strip():
-                raise HTTPException(status_code=500, detail=f"blueprint category entry {position} is malformed")
-            name = raw_name.strip()
-            slug = record.get("slug")
-            if not isinstance(slug, str) or not slug.strip():
-                slug = category_slug(name)
-            else:
-                slug = category_slug(slug)
-            category_records.append({"name": name, "slug": slug})
-
-    counts: dict[str, int] = {}
-    names_by_slug: dict[str, str] = {}
-    for blueprint in blueprints:
-        name = normalize_category_name(blueprint.get("category"))
-        slug = category_slug(blueprint.get("category_slug") or name)
-        counts[slug] = counts.get(slug, 0) + 1
-        names_by_slug.setdefault(slug, name)
-
-    categories_by_slug: dict[str, Dict[str, Any]] = {}
-    ordered_slugs: list[str] = []
-    for record in category_records:
-        slug = record["slug"]
-        if slug not in categories_by_slug:
-            ordered_slugs.append(slug)
-        categories_by_slug[slug] = {
-            "name": record["name"],
-            "slug": slug,
-            "count": counts.get(slug, 0),
-        }
-
-    for slug in sorted(counts):
-        if slug in categories_by_slug:
-            continue
-        ordered_slugs.append(slug)
-        categories_by_slug[slug] = {
-            "name": names_by_slug.get(slug, slug.replace("-", " ").title()),
-            "slug": slug,
-            "count": counts[slug],
-        }
-
-    return [categories_by_slug[slug] for slug in ordered_slugs]
+    try:
+        return sdk_load_blueprint_categories(repo_root, blueprints)
+    except BlueprintCatalogError as exc:
+        raise _catalog_http_exception(exc) from exc
 
 
 def filter_blueprints_by_category(
     blueprints: list[Dict[str, Any]],
     category: str | None,
 ) -> list[Dict[str, Any]]:
-    if category is None or not category.strip():
-        return blueprints
-
-    requested = {
-        category_slug(part)
-        for part in category.split(",")
-        if part.strip()
-    }
-    if not requested:
-        return blueprints
-    return [
-        blueprint
-        for blueprint in blueprints
-        if category_slug(blueprint.get("category_slug") or blueprint.get("category")) in requested
-    ]
+    return sdk_filter_blueprints_by_category(blueprints, category)
 
 
 def find_blueprint(config: ApiConfig, blueprint_id: str) -> tuple[Path, Dict[str, Any]]:
     validate_blueprint_id(blueprint_id)
     repo_root, blueprints = load_blueprint_catalog(config)
-    for blueprint in blueprints:
-        if blueprint["id"] == blueprint_id:
-            return repo_root, blueprint
-    raise HTTPException(status_code=404, detail="blueprint not found")
+    try:
+        return sdk_find_blueprint(repo_root, blueprints, blueprint_id)
+    except BlueprintCatalogError as exc:
+        raise _catalog_http_exception(exc) from exc
 
 
 def blueprint_bundle_root(repo_root: Path, blueprint: Dict[str, Any]) -> Path:
-    blueprint_path = Path(str(blueprint.get("path") or blueprint["id"]))
-    if blueprint_path.is_absolute():
-        candidate = blueprint_path.resolve()
-    else:
-        candidate = (repo_root / blueprint_path).resolve()
-
-    if not inside_path(candidate, repo_root):
-        raise HTTPException(status_code=400, detail="blueprint path escapes repository")
-    return candidate
+    try:
+        return sdk_blueprint_bundle_root(repo_root, blueprint)
+    except BlueprintCatalogError as exc:
+        raise _catalog_http_exception(exc) from exc
 
 
 def validate_blueprint_bundle(repo_root: Path, blueprint: Dict[str, Any]) -> Path:
@@ -2396,44 +2183,18 @@ def write_blueprint_job_mapping(
 
 
 def enrich_blueprint_from_manifest(repo_root: Path, blueprint: Dict[str, Any]) -> Dict[str, Any]:
-    enriched = dict(blueprint)
-    manifest = load_optional_manifest(repo_root, enriched)
-    if not manifest:
-        return enriched
-    enriched["type"] = manifest.get("type") or "batch"
-    requirements = manifest.get("requirements")
-    if isinstance(requirements, dict):
-        enriched["requirements"] = {**as_dict(enriched.get("requirements")), **requirements}
-    init_config_review = manifest_init_config_review(manifest)
-    if init_config_review is not None:
-        enriched["init_config_review"] = init_config_review
-    return enriched
+    try:
+        return sdk_enrich_blueprint_from_manifest(repo_root, blueprint)
+    except BlueprintCatalogError as exc:
+        raise _catalog_http_exception(exc) from exc
 
 
 def load_optional_manifest(repo_root: Path, blueprint: Dict[str, Any]) -> Dict[str, Any]:
-    try:
-        bundle_root = blueprint_bundle_root(repo_root, blueprint)
-    except HTTPException:
-        return {}
-    manifest_path = bundle_root / "manifest.json"
-    if not manifest_path.is_file():
-        return {}
-    try:
-        manifest = json.loads(manifest_path.read_text())
-    except json.JSONDecodeError:
-        return {}
-    if not isinstance(manifest, dict):
-        return {}
-    return expand_blueprint_manifest_if_source(bundle_root, manifest)
+    return sdk_load_optional_manifest(repo_root, blueprint)
 
 
 def manifest_init_config_review(manifest: Dict[str, Any]) -> Any:
-    if "init_config_review" in manifest:
-        return manifest.get("init_config_review")
-    metadata = manifest.get("metadata")
-    if isinstance(metadata, dict):
-        return metadata.get("init_config_review")
-    return None
+    return sdk_manifest_init_config_review(manifest)
 
 
 def blueprint_runtime_environment(

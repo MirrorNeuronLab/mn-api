@@ -48,6 +48,34 @@ def test_blueprint_update_and_uninstall_report_unsupported_scope(api_client):
     assert uninstall.json()["detail"]["dry_run"] is True
 
 
+def test_blueprint_list_and_health_refresh_local_source_env(monkeypatch, api_client, tmp_path):
+    catalog_a = tmp_path / "catalog-a"
+    catalog_b = tmp_path / "catalog-b"
+    catalog_a.mkdir()
+    catalog_b.mkdir()
+    (catalog_a / "index.json").write_text(json.dumps([{"id": "bp-a", "name": "Blueprint A"}]), encoding="utf-8")
+    (catalog_b / "index.json").write_text(json.dumps([{"id": "bp-b", "name": "Blueprint B"}]), encoding="utf-8")
+
+    monkeypatch.setenv("MN_ENV", "dev")
+    monkeypatch.setenv("MN_BLUEPRINT_SOURCE", "local")
+    monkeypatch.setenv("MN_BLUEPRINT_LOCAL", str(catalog_a))
+    first = api_client.get("/api/v1/blueprints")
+
+    monkeypatch.setenv("MN_BLUEPRINT_LOCAL", str(catalog_b))
+    second = api_client.get("/api/v1/blueprints")
+    health = api_client.get("/api/v1/health")
+
+    assert first.status_code == 200
+    assert first.json()["repo_dir"] == str(catalog_a.resolve())
+    assert [blueprint["id"] for blueprint in first.json()["blueprints"]] == ["bp-a"]
+    assert second.status_code == 200
+    assert second.json()["repo_dir"] == str(catalog_b.resolve())
+    assert [blueprint["id"] for blueprint in second.json()["blueprints"]] == ["bp-b"]
+    assert health.status_code == 200
+    assert health.json()["blueprint_source"] == "local"
+    assert health.json()["active_blueprint_location"] == str(catalog_b.resolve())
+
+
 def test_launch_progress_helpers_record_read_and_summarize(monkeypatch, tmp_path):
     monkeypatch.setattr("mn_api.routes.blueprints.launch_progress_root", lambda: tmp_path)
 

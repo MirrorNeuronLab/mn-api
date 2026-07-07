@@ -52,7 +52,7 @@ def test_blueprint_repo_root_validates_local_config(tmp_path):
     assert blueprints.blueprint_repo_root(config) == no_index.resolve()
 
 
-def test_blueprint_repo_root_validates_github_config(monkeypatch):
+def test_blueprint_repo_root_validates_github_config(monkeypatch, tmp_path):
     with pytest.raises(HTTPException) as missing_error:
         blueprints.blueprint_repo_root(SimpleNamespace(blueprint_source="github", blueprint_repo=""))
     assert missing_error.value.detail == "MN_BLUEPRINT_REPO is not configured"
@@ -61,12 +61,14 @@ def test_blueprint_repo_root_validates_github_config(monkeypatch):
         blueprints.blueprint_repo_root(SimpleNamespace(blueprint_source="github", blueprint_repo="not-a-url"))
     assert url_error.value.detail == "MN_BLUEPRINT_REPO must be a Git URL"
 
-    monkeypatch.setattr("mn_api.blueprints.ensure_git_blueprint_repo", lambda repo_url: repo_url)
+    cached = tmp_path / "cached"
+    cached.mkdir()
+    monkeypatch.setattr("mn_api.blueprints.ensure_git_blueprint_repo", lambda repo_url: cached)
     assert (
         blueprints.blueprint_repo_root(
             SimpleNamespace(blueprint_source="github", blueprint_repo="https://github.com/org/repo.git")
         )
-        == "https://github.com/org/repo.git"
+        == cached.resolve()
     )
 
 

@@ -61,6 +61,10 @@ class LaunchPreflight:
     env_overrides: dict[str, str]
 
 
+def _current_config():
+    return state.refresh_config_from_env()
+
+
 @router.get("/blueprints")
 def list_blueprints(
     category: str | None = Query(
@@ -69,7 +73,7 @@ def list_blueprints(
     ),
     _auth=Depends(require_auth),
 ):
-    repo_root, blueprints = load_blueprint_catalog(state.config)
+    repo_root, blueprints = load_blueprint_catalog(_current_config())
     categories = load_blueprint_categories(repo_root, blueprints)
     filtered_blueprints = filter_blueprints_by_category(blueprints, category)
     return {"repo_dir": str(repo_root), "blueprints": filtered_blueprints, "categories": categories}
@@ -77,7 +81,7 @@ def list_blueprints(
 
 @router.get("/blueprints/{blueprint_id}")
 def get_blueprint(blueprint_id: str, _auth=Depends(require_auth)):
-    _repo_root, blueprint = find_blueprint(state.config, blueprint_id)
+    _repo_root, blueprint = find_blueprint(_current_config(), blueprint_id)
     return {"blueprint": blueprint}
 
 
@@ -87,7 +91,7 @@ def install_blueprint(
     force: bool = Query(False, description="Force model install when hardware compatibility checks fail."),
     _auth=Depends(require_auth),
 ):
-    repo_root, blueprint = find_blueprint(state.config, blueprint_id)
+    repo_root, blueprint = find_blueprint(_current_config(), blueprint_id)
     validate_blueprint_bundle(repo_root, blueprint)
     model_install = install_blueprint_runtime_models(repo_root, blueprint, force=force)
     if not model_install.get("ok", True):
@@ -124,7 +128,7 @@ def validate_blueprint(
     req: BlueprintRunRequest | None = None,
     _auth=Depends(require_auth),
 ):
-    repo_root, blueprint = find_blueprint(state.config, blueprint_id)
+    repo_root, blueprint = find_blueprint(_current_config(), blueprint_id)
     config_overrides = {}
     if req:
         config_overrides = dict(req.config_overwrite or req.config_overrides or {})
@@ -300,7 +304,7 @@ def run_blueprint(
     req: BlueprintRunRequest | None = None,
     _auth=Depends(require_auth),
 ):
-    repo_root, blueprint = find_blueprint(state.config, blueprint_id)
+    repo_root, blueprint = find_blueprint(_current_config(), blueprint_id)
     return run_blueprint_record(repo_root, blueprint, req)
 
 
@@ -337,7 +341,7 @@ def cleanup_blueprints(req: BlueprintCleanupRequest, _auth=Depends(require_auth)
             "message": "API cleanup supports stale helper-process cleanup for one blueprint when file and Docker cleanup are disabled.",
         }
     if req.blueprint_id and not req.include_files and not req.include_docker:
-        repo_root, blueprint = find_blueprint(state.config, req.blueprint_id)
+        repo_root, blueprint = find_blueprint(_current_config(), req.blueprint_id)
         cleanup_stale_blueprint_run_processes(
             repo_root,
             blueprint,
@@ -598,6 +602,7 @@ def run_blueprint_record(
             blueprint_revision=blueprint.get("revision") or None,
             web_ui_service=web_ui_service,
         )
+        current_config = _current_config()
         start_background_event_relay_if_needed(
             repo_root,
             blueprint,
@@ -606,9 +611,9 @@ def run_blueprint_record(
             manifest_json,
             config_overrides=config_overrides,
             env_overrides=env_overrides,
-            grpc_target=getattr(state.config, "grpc_target", None),
-            grpc_auth_token=getattr(state.config, "grpc_auth_token", None),
-            grpc_timeout_seconds=getattr(state.config, "grpc_timeout_seconds", None),
+            grpc_target=getattr(current_config, "grpc_target", None),
+            grpc_auth_token=getattr(current_config, "grpc_auth_token", None),
+            grpc_timeout_seconds=getattr(current_config, "grpc_timeout_seconds", None),
         )
         record_launch_progress(
             progress_id,
@@ -652,7 +657,7 @@ def resolve_launch_source(req: BlueprintLaunchRequest) -> dict:
     if source in {"catalog", "blueprint"}:
         if not req.blueprint_id:
             raise HTTPException(status_code=422, detail="blueprint_id is required")
-        repo_root, blueprint = find_blueprint(state.config, req.blueprint_id)
+        repo_root, blueprint = find_blueprint(_current_config(), req.blueprint_id)
         bundle_root = validate_blueprint_bundle(repo_root, blueprint)
         return {
             "source": "catalog",

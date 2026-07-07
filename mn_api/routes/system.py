@@ -40,14 +40,15 @@ DEFAULT_NODE_ADD_GRPC_PORTS = (55051, 50051)
 
 @router.get("/health")
 def health():
+    config = state.refresh_config_from_env()
     return {
         "status": "ok",
-        "auth": "enabled" if auth_enabled(state.config) else "disabled",
-        "env": getattr(state.config, "env", ""),
-        "blueprint_source": getattr(state.config, "blueprint_source", ""),
-        "blueprint_repo": getattr(state.config, "blueprint_repo", ""),
-        "blueprint_local": getattr(state.config, "blueprint_local", ""),
-        "active_blueprint_location": getattr(state.config, "active_blueprint_location", ""),
+        "auth": "enabled" if auth_enabled(config) else "disabled",
+        "env": getattr(config, "env", ""),
+        "blueprint_source": getattr(config, "blueprint_source", ""),
+        "blueprint_repo": getattr(config, "blueprint_repo", ""),
+        "blueprint_local": getattr(config, "blueprint_local", ""),
+        "active_blueprint_location": getattr(config, "active_blueprint_location", ""),
         "runs_root": shared_runs_root(),
     }
 
