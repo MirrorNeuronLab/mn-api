@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import inspect
 import sys
 import tempfile
 from pathlib import Path
@@ -12,6 +11,7 @@ for parent in Path(__file__).resolve().parents:
         break
 
 from mn_sdk import Client
+from mn_sdk.runtime_client import grpc_client_settings, runtime_client_kwargs
 
 from mn_api.config import ApiConfig
 from mn_api.logging_config import configure_logging
@@ -25,12 +25,7 @@ _client: Client | None = None
 
 
 def _grpc_client_settings(config_obj) -> tuple:
-    return (
-        getattr(config_obj, "grpc_target", None),
-        getattr(config_obj, "grpc_timeout_seconds", None),
-        getattr(config_obj, "grpc_auth_token", None),
-        getattr(config_obj, "grpc_admin_token", None),
-    )
+    return grpc_client_settings(config_obj)
 
 
 def refresh_config_from_env():
@@ -50,23 +45,7 @@ def refresh_config_from_env():
 
 def _client_kwargs() -> dict:
     current_config = refresh_config_from_env()
-    kwargs = {
-        "target": current_config.grpc_target,
-        "timeout": current_config.grpc_timeout_seconds,
-        "auth_token": current_config.grpc_auth_token,
-    }
-    try:
-        client_params = inspect.signature(Client).parameters
-    except (TypeError, ValueError):
-        client_params = {}
-    if "admin_token" in client_params:
-        kwargs["admin_token"] = current_config.grpc_admin_token
-    elif current_config.grpc_admin_token:
-        logger.warning(
-            "mn_sdk.Client does not accept admin_token; upgrade mirrorneuron-python-sdk "
-            "for destructive admin RPC support."
-        )
-    return kwargs
+    return runtime_client_kwargs(current_config, client_cls=Client, warn=logger.warning)
 
 
 def get_client() -> Client:

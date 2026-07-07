@@ -1,125 +1,45 @@
 from __future__ import annotations
 
-import re
-import urllib.parse
 from pathlib import Path
 from typing import Any
+import urllib.parse
 
-from mn_api.artifacts import ARTIFACT_CONTENT_TYPES, file_sha256
-from mn_api.run_store import first_string as _first_string
-from mn_api.run_store import read_json_file as _read_json
-
-
-OUTPUT_CONTENT_TYPES = ARTIFACT_CONTENT_TYPES
-
-
-def output_content_type(path: Path) -> str:
-    return OUTPUT_CONTENT_TYPES.get(path.suffix.lower(), "application/octet-stream")
+from mn_sdk.run_outputs import (
+    OUTPUT_CONTENT_TYPES,
+    output_content_type,
+    output_metadata,
+    output_path_by_index,
+    output_ref_metadata,
+    recorded_output_items,
+    recorded_output_path,
+    slug,
+)
 
 
 def output_refs(run_id: str, run_dir: Path) -> list[dict[str, Any]]:
     refs: list[dict[str, Any]] = []
-    for item in _recorded_output_items(run_dir):
-        path = _recorded_output_path(item)
-        if path is None or not path.is_file():
-            continue
-        refs.append(_output_ref(run_id, len(refs), path, item))
+    quoted_run_id = urllib.parse.quote(run_id)
+    for index, ref in enumerate(output_metadata(run_dir)):
+        decorated = dict(ref)
+        decorated.update(
+            {
+                "url": f"/api/v1/runs/{quoted_run_id}/outputs/{index}",
+                "reveal_url": f"/api/v1/runs/{quoted_run_id}/outputs/{index}/reveal",
+            }
+        )
+        refs.append(decorated)
     return refs
 
 
-def output_path_by_index(run_dir: Path, output_index: int) -> Path | None:
-    if output_index < 0:
-        return None
-    refs = output_refs("", run_dir)
-    if output_index >= len(refs):
-        return None
-    return Path(refs[output_index]["path"]).expanduser().resolve()
+_output_ref = output_ref_metadata
+_recorded_output_items = recorded_output_items
+_recorded_output_path = recorded_output_path
+_slug = slug
 
 
-def _output_ref(run_id: str, index: int, path: Path, item: dict[str, Any]) -> dict[str, Any]:
-    stat = path.stat()
-    kind = _first_string(item.get("kind"), item.get("artifact_id"), path.stem)
-    name = path.name
-    quoted_run_id = urllib.parse.quote(run_id)
-    artifact_id = f"output_{index}_{_slug(kind or name)}"
-    return {
-        "artifact_id": artifact_id,
-        "kind": kind or None,
-        "name": name,
-        "label": name,
-        "path": str(path),
-        "relative_path": name,
-        "source": "post_launch_output",
-        "external": True,
-        "size_bytes": stat.st_size,
-        "sha256": file_sha256(path),
-        "content_type": output_content_type(path),
-        "url": f"/api/v1/runs/{quoted_run_id}/outputs/{index}",
-        "reveal_url": f"/api/v1/runs/{quoted_run_id}/outputs/{index}/reveal",
-    }
-
-
-def _recorded_output_items(run_dir: Path) -> list[dict[str, Any]]:
-    items: list[dict[str, Any]] = []
-    seen_paths: set[str] = set()
-    for payload in _output_payloads(run_dir):
-        for item in _output_items_from_payload(payload):
-            path = _recorded_output_path(item)
-            if path is None:
-                continue
-            key = str(path)
-            if key in seen_paths:
-                continue
-            seen_paths.add(key)
-            items.append(item)
-    return items
-
-
-def _output_payloads(run_dir: Path) -> list[dict[str, Any]]:
-    payloads: list[dict[str, Any]] = []
-    for name in [
-        "post_launch_materialized.json",
-        "post_launch_state.json",
-        "result.json",
-        "final_artifact.json",
-    ]:
-        payload = _read_json(run_dir / name)
-        if payload:
-            payloads.append(payload)
-    return payloads
-
-
-def _output_items_from_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    items: list[dict[str, Any]] = []
-    _extend_output_items(items, payload.get("output_files"))
-    final_artifact = payload.get("final_artifact")
-    if isinstance(final_artifact, dict):
-        _extend_output_items(items, final_artifact.get("output_files"))
-    result = payload.get("result")
-    if isinstance(result, dict):
-        _extend_output_items(items, result.get("output_files"))
-        nested_artifact = result.get("final_artifact")
-        if isinstance(nested_artifact, dict):
-            _extend_output_items(items, nested_artifact.get("output_files"))
-    return items
-
-
-def _extend_output_items(items: list[dict[str, Any]], value: Any) -> None:
-    if not isinstance(value, list):
-        return
-    for item in value:
-        if isinstance(item, dict):
-            items.append(item)
-        elif isinstance(item, str) and item.strip():
-            items.append({"path": item.strip()})
-
-
-def _recorded_output_path(item: dict[str, Any]) -> Path | None:
-    value = _first_string(item.get("path"), item.get("file"), item.get("file_path"), item.get("local_path"))
-    if not value:
-        return None
-    return Path(value).expanduser().resolve()
-
-
-def _slug(value: str) -> str:
-    return re.sub(r"[^A-Za-z0-9]+", "_", value).strip("_").lower() or "output"
+__all__ = [
+    "OUTPUT_CONTENT_TYPES",
+    "output_content_type",
+    "output_path_by_index",
+    "output_refs",
+]

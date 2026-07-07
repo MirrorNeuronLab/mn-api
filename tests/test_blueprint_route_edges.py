@@ -76,6 +76,36 @@ def test_blueprint_list_and_health_refresh_local_source_env(monkeypatch, api_cli
     assert health.json()["active_blueprint_location"] == str(catalog_b.resolve())
 
 
+def test_blueprint_list_and_health_use_persisted_local_source_env(monkeypatch, api_client, tmp_path):
+    mn_home = tmp_path / "mn-home"
+    catalog = tmp_path / "catalog"
+    mn_home.mkdir()
+    catalog.mkdir()
+    (catalog / "index.json").write_text(json.dumps([{"id": "bp-persisted", "name": "Persisted"}]), encoding="utf-8")
+    (mn_home / "docker-compose.env").write_text(
+        "MN_ENV=dev\n"
+        "MN_BLUEPRINT_SOURCE=local\n"
+        "MN_BLUEPRINT_REPO=https://github.com/MirrorNeuronLab/mn-blueprints.git\n"
+        f"MN_BLUEPRINT_LOCAL={catalog}\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("MN_HOME", str(mn_home))
+    monkeypatch.delenv("MN_BLUEPRINT_SOURCE", raising=False)
+    monkeypatch.delenv("MN_BLUEPRINT_REPO", raising=False)
+    monkeypatch.delenv("MN_BLUEPRINT_LOCAL", raising=False)
+
+    blueprints_response = api_client.get("/api/v1/blueprints")
+    health_response = api_client.get("/api/v1/health")
+
+    assert blueprints_response.status_code == 200
+    assert blueprints_response.json()["repo_dir"] == str(catalog.resolve())
+    assert [blueprint["id"] for blueprint in blueprints_response.json()["blueprints"]] == ["bp-persisted"]
+    assert health_response.status_code == 200
+    assert health_response.json()["blueprint_source"] == "local"
+    assert health_response.json()["active_blueprint_location"] == str(catalog.resolve())
+
+
 def test_launch_progress_helpers_record_read_and_summarize(monkeypatch, tmp_path):
     monkeypatch.setattr("mn_api.routes.blueprints.launch_progress_root", lambda: tmp_path)
 
