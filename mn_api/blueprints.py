@@ -155,14 +155,36 @@ def workspace_root() -> Path:
 
 
 def runtime_path_environment() -> Dict[str, str]:
-    env = sdk_runtime_path_environment(workspace_root=workspace_root())
-    env["PATH"] = docker_cli_path_environment().get("PATH", config_value("PATH"))
+    base_env = subprocess_environment()
+    # Match mn-cli's blueprint runner: runtime path discovery starts from the
+    # live process environment so service/desktop launch PATH differences are
+    # preserved and then repaired with known Docker CLI locations.
+    base_env.update(os.environ)
+    env = sdk_runtime_path_environment(env=base_env, workspace_root=workspace_root())
+    docker_env = docker_cli_runtime_environment(base_env)
+    env["PATH"] = docker_env.get("PATH", config_value("PATH"))
+    if docker_env.get("MN_DOCKER_BIN"):
+        env["MN_DOCKER_BIN"] = docker_env["MN_DOCKER_BIN"]
     return env
 
 
 def runtime_process_environment() -> Dict[str, str]:
     env = subprocess_environment()
     env.update(runtime_path_environment())
+    return env
+
+
+def docker_cli_runtime_environment(base_env: Dict[str, str] | None = None) -> Dict[str, str]:
+    env = docker_cli_path_environment(base_env)
+    path = env.get("PATH") or config_value("PATH")
+    docker_bin = str(env.get("MN_DOCKER_BIN") or "").strip()
+    if not docker_bin:
+        docker_bin = shutil.which("docker", path=path) or ""
+    if docker_bin:
+        docker_dir = str(Path(docker_bin).expanduser().parent)
+        path = sdk_merge_path_values(docker_dir, path)
+        env["MN_DOCKER_BIN"] = docker_bin
+    env["PATH"] = path
     return env
 
 
@@ -894,12 +916,13 @@ def load_blueprint_bundle(
     payloads.update(runtime_web_ui_support_payloads_for_manifest(manifest))
     normalize_host_local_uploads_for_submission(manifest)
     lower_manifest_topology_for_submission(manifest)
-    prepared = prepare_job_submission(
-        manifest,
-        payloads,
-        bundle_dir=bundle_root,
-        run_id=run_id,
-    )
+    with temporary_process_environment(runtime_process_environment()):
+        prepared = prepare_job_submission(
+            manifest,
+            payloads,
+            bundle_dir=bundle_root,
+            run_id=run_id,
+        )
 
     return prepared.manifest_json, prepared.payloads
 

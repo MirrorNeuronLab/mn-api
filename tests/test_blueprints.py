@@ -108,6 +108,49 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertEqual(overrides["MN_BLUEPRINT_WEB_UI_PORT_END"], "61049")
         self.assertEqual(overrides["MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE"], "prepublished")
 
+    def test_runtime_path_environment_uses_cli_style_process_env_and_docker_path(self):
+        observed = {}
+
+        def fake_sdk_runtime_path_environment(*, env=None, workspace_root=None):
+            observed["sdk_env"] = dict(env or {})
+            observed["workspace_root"] = workspace_root
+            return {"PYTHONPATH": "/runtime/python"}
+
+        def fake_docker_cli_path_environment(env=None):
+            observed["docker_env"] = dict(env or {})
+            return {"PATH": f"{env['PATH']}:/docker/bin"}
+
+        def fake_which(command, path=None):
+            observed["which"] = {"command": command, "path": path}
+            return "/docker/bin/docker" if command == "docker" and "/docker/bin" in str(path) else None
+
+        with patch.dict(os.environ, {"PATH": "/api/process/bin", "MN_HOME": "/api/mn-home"}, clear=True), patch.object(
+            blueprints_module,
+            "subprocess_environment",
+            return_value={"PATH": "/config/bin", "MN_HOME": "/config/mn-home"},
+        ), patch.object(
+            blueprints_module,
+            "sdk_runtime_path_environment",
+            side_effect=fake_sdk_runtime_path_environment,
+        ), patch.object(
+            blueprints_module,
+            "docker_cli_path_environment",
+            side_effect=fake_docker_cli_path_environment,
+        ), patch.object(
+            blueprints_module.shutil,
+            "which",
+            side_effect=fake_which,
+        ):
+            env = blueprints_module.runtime_path_environment()
+
+        self.assertEqual(observed["sdk_env"]["PATH"], "/api/process/bin")
+        self.assertEqual(observed["sdk_env"]["MN_HOME"], "/api/mn-home")
+        self.assertEqual(observed["docker_env"]["PATH"], "/api/process/bin")
+        self.assertEqual(observed["which"]["path"], "/api/process/bin:/docker/bin")
+        self.assertEqual(env["PATH"], "/docker/bin:/api/process/bin")
+        self.assertEqual(env["MN_DOCKER_BIN"], "/docker/bin/docker")
+        self.assertEqual(env["PYTHONPATH"], "/runtime/python")
+
     def test_catalog_accepts_wrapped_index_and_normalizes_aliases(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
@@ -746,6 +789,43 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertEqual(env["CUSTOM_MODEL"], "overwrite")
         self.assertEqual(env["MN_LLM_MODEL"], "ollama/test")
         self.assertEqual(payload_bytes, {"nested/input.txt": b"hello"})
+
+    def test_load_blueprint_bundle_prepares_submission_with_runtime_process_environment(self):
+        observed = {}
+
+        def fake_prepare_job_submission(manifest, payloads, *, bundle_dir, run_id):
+            observed["path"] = os.environ.get("PATH")
+            observed["docker_bin"] = os.environ.get("MN_DOCKER_BIN")
+            return SimpleNamespace(manifest_json=json.dumps(manifest), payloads=payloads)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            bundle = repo / "worker_one"
+            bundle.mkdir()
+            (bundle / "manifest.json").write_text(
+                json.dumps({"graph_id": "worker_graph", "nodes": [{"node_id": "worker"}], "edges": []}),
+                encoding="utf-8",
+            )
+
+            with patch.dict(os.environ, {"PATH": "/api/bin"}, clear=True), patch.object(
+                blueprints_module,
+                "runtime_process_environment",
+                return_value={"PATH": "/docker/bin:/api/bin", "MN_DOCKER_BIN": "/docker/bin/docker"},
+            ), patch.object(
+                blueprints_module,
+                "prepare_job_submission",
+                side_effect=fake_prepare_job_submission,
+            ):
+                _manifest_json, _payload_bytes = load_blueprint_bundle(
+                    repo.resolve(),
+                    {"id": "worker_one", "path": "worker_one"},
+                    "run-env",
+                )
+                self.assertEqual(os.environ.get("PATH"), "/api/bin")
+                self.assertNotIn("MN_DOCKER_BIN", os.environ)
+
+        self.assertEqual(observed["path"], "/docker/bin:/api/bin")
+        self.assertEqual(observed["docker_bin"], "/docker/bin/docker")
 
     def test_load_blueprint_bundle_injects_docker_model_runner_env(self):
         with tempfile.TemporaryDirectory() as tmpdir:
