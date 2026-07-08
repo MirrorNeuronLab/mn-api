@@ -28,6 +28,8 @@ class BlueprintRunRequest(BaseModel):
     config_overrides: Optional[Dict[str, Any]] = None
     force: bool = False
     progress_id: Optional[str] = None
+    fake_llm: bool = False
+    fake_skills: bool = False
 
 
 class BlueprintLaunchRequest(BlueprintRunRequest):

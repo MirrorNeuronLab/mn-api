@@ -219,6 +219,8 @@ def run_blueprint_launch_record(req: BlueprintLaunchRequest):
         config_overrides=req.config_overrides,
         force=req.force,
         progress_id=progress_id,
+        fake_llm=req.fake_llm,
+        fake_skills=req.fake_skills,
     )
     return run_blueprint_record(
         launch["repo_root"],
@@ -302,6 +304,8 @@ def resolve_async_blueprint_run_request(blueprint_id: str, req: BlueprintRunRequ
         config_overrides=req.config_overrides,
         force=req.force,
         progress_id=progress_id,
+        fake_llm=req.fake_llm,
+        fake_skills=req.fake_skills,
     )
 
 
@@ -316,6 +320,8 @@ def resolve_async_blueprint_launch_request(req: BlueprintLaunchRequest) -> Bluep
         config_overrides=req.config_overrides,
         force=req.force,
         progress_id=progress_id,
+        fake_llm=req.fake_llm,
+        fake_skills=req.fake_skills,
         source=req.source,
         blueprint_id=req.blueprint_id,
         path=req.path,
@@ -330,6 +336,15 @@ def blueprint_launch_run_id_seed(req: BlueprintLaunchRequest) -> str:
         if value:
             return sanitize_blueprint_id(Path(value).expanduser().name or Path(value).stem)
     return sanitize_blueprint_id(req.source or "blueprint")
+
+
+def fake_mode_environment_overrides(req: BlueprintRunRequest | None) -> dict[str, str]:
+    env: dict[str, str] = {}
+    if req and req.fake_llm:
+        env["MN_BLUEPRINT_FAKE_LLM"] = "1"
+    if req and req.fake_skills:
+        env["MN_BLUEPRINT_FAKE_SKILLS"] = "1"
+    return env
 
 
 def create_blueprint_progress_id(run_id: str) -> str:
@@ -753,6 +768,7 @@ def run_blueprint_record(
     if req:
         config_overrides = dict(req.config_overwrite or req.config_overrides or {})
     env_overrides = runtime_blueprint_environment_overrides()
+    env_overrides.update(fake_mode_environment_overrides(req))
     force = bool(req.force) if req else False
     state.close_client()
     preflight = run_launch_preflight(

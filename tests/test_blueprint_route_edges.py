@@ -390,7 +390,13 @@ def test_blueprint_run_route_submits_after_real_preflight_with_runtime_environme
 
     response = api_client.post(
         "/api/v1/blueprints/vc_assistant/runs",
-        json={"run_id": "vc-route-real", "progress_id": "progress-route-real", "force": True},
+        json={
+            "run_id": "vc-route-real",
+            "progress_id": "progress-route-real",
+            "force": True,
+            "fake_llm": True,
+            "fake_skills": True,
+        },
     )
     progress = api_client.get("/api/v1/blueprints/launch/progress/progress-route-real")
 
@@ -418,6 +424,10 @@ def test_blueprint_run_route_submits_after_real_preflight_with_runtime_environme
     assert packages[-1] == "existing-helper==0.1"
     worker_env = worker_config["environment"]
     assert worker_env["PYTHONPATH"] == "/runtime/python"
+    assert worker_env["MN_BLUEPRINT_FAKE_LLM"] == "1"
+    assert worker_env["MN_BLUEPRINT_FAKE_SKILLS"] == "1"
+    assert "MN_FAKE_LLM" not in worker_env
+    assert "MN_FAKE_SKILLS" not in worker_env
     assert "MN_WORKSPACE_ROOT" not in worker_env
     assert "MN_SKILLS_ROOT" not in worker_env
     assert submitted_manifest["flow"]["edges"] == []
@@ -444,6 +454,8 @@ def test_blueprint_launch_returns_progress_session_immediately(monkeypatch, api_
             "path": str(tmp_path / "local_worker"),
             "run_id": "local-run",
             "progress_id": "local-progress",
+            "fake_llm": True,
+            "fake_skills": True,
         },
     )
 
@@ -458,6 +470,8 @@ def test_blueprint_launch_returns_progress_session_immediately(monkeypatch, api_
     assert starts[0].path == str(tmp_path / "local_worker")
     assert starts[0].run_id == "local-run"
     assert starts[0].progress_id == "local-progress"
+    assert starts[0].fake_llm is True
+    assert starts[0].fake_skills is True
 
 
 def test_blueprint_launch_route_background_uses_shared_sdk_submission(monkeypatch, api_client, tmp_path):
