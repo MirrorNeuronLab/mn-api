@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from mn_api.config import ApiConfig
 from mn_api import state
 from mn_api.main import app
-from mn_api.blueprints import parse_cli_field, scheduler_allocated_ports_from_jobs_payload
+from mn_api.blueprints import scheduler_allocated_ports_from_jobs_payload
 from mn_api.routes.blueprints import (
     run_blueprint_launch_record,
     run_blueprint_record,
@@ -3577,32 +3577,42 @@ class TestAPI(unittest.TestCase):
         mock_validate.assert_called_once()
         self.assertEqual(mock_validate.call_args.args[0].name, "worker_one")
 
-    @patch("mn_api.routes.blueprints.run_mn_blueprint_run")
-    @patch("mn_api.routes.blueprints.run_mn_blueprint_validate")
-    def test_blueprint_launch_run_uses_mn_cli_for_catalog_blueprint(self, mock_validate, mock_run):
-        mock_validate.return_value = {"ok": True, "status": "passed", "issues": [], "errors": []}
-        mock_run.return_value = {"ok": True, "job_id": "job-from-cli", "run_id": "run-from-cli", "command": "mn blueprint run"}
+    @patch('mn_api.state.client')
+    def test_blueprint_launch_run_uses_sdk_submission_for_catalog_blueprint(self, mock_client):
+        mock_client.submit_job.return_value = "job-from-sdk"
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
             self._write_blueprint_repo(repo)
             original = self._set_blueprint_config(repo)
             try:
                 with patch("mn_api.routes.blueprints.validate_blueprint_hardware_requirements", return_value={"ok": True, "status": "passed", "issues": [], "errors": []}):
-                    response = self._sync_blueprint_launch({"source": "catalog", "blueprint_id": "worker_one"})
+                    response = self._sync_blueprint_launch(
+                        {
+                            "source": "catalog",
+                            "blueprint_id": "worker_one",
+                            "run_id": "run-from-launch-api",
+                            "force": True,
+                        }
+                    )
             finally:
                 self._restore_config(original)
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
-        self.assertEqual(body["job_id"], "job-from-cli")
-        self.assertEqual(body["id"], "job-from-cli")
-        self.assertEqual(body["run_id"], "run-from-cli")
-        self.assertEqual(mock_run.call_args.args[0], ["--folder", str((repo / "worker_one").resolve()), "--detached"])
+        self.assertEqual(body["job_id"], "job-from-sdk")
+        self.assertEqual(body["id"], "job-from-sdk")
+        self.assertEqual(body["run_id"], "run-from-launch-api")
+        self.assertEqual(body["source"], "catalog")
+        manifest_json, payloads = mock_client.submit_job.call_args.args
+        submitted = json.loads(manifest_json)
+        self.assertEqual(submitted["run_id"], "run-from-launch-api")
+        self.assertEqual(submitted["metadata"]["mn_cli"]["blueprint_id"], "worker_one")
+        self.assertEqual(payloads, {"payload.txt": b"hello"})
 
-    @patch("mn_api.routes.blueprints.run_mn_blueprint_run")
-    @patch("mn_api.routes.blueprints.run_mn_blueprint_validate")
+    @patch('mn_api.state.client')
+    @patch("mn_api.routes.blueprints.validate_blueprint_inputs")
     @patch("mn_api.routes.blueprints.install_blueprint_runtime_models")
-    def test_blueprint_launch_run_installs_models_before_validation(self, mock_install, mock_validate, mock_run):
+    def test_blueprint_launch_run_installs_models_before_validation(self, mock_install, mock_validate, mock_client):
         events = []
 
         def install_side_effect(*args, **kwargs):
@@ -3620,7 +3630,7 @@ class TestAPI(unittest.TestCase):
 
         mock_install.side_effect = install_side_effect
         mock_validate.side_effect = validate_side_effect
-        mock_run.return_value = {"ok": True, "job_id": "job-from-cli", "run_id": "run-from-cli", "command": "mn blueprint run"}
+        mock_client.submit_job.return_value = "job-from-sdk"
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
             self._write_blueprint_repo(repo)
@@ -3643,6 +3653,7 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(events, ["install", "validate"])
         body = response.json()
         self.assertEqual(body["progress_id"], "launch-api-test")
+        self.assertEqual(body["job_id"], "job-from-sdk")
         self.assertEqual(body["model_install"]["models"][0]["status"], "installed")
         self.assertEqual(progress_response.status_code, 200)
         progress_body = progress_response.json()
@@ -3656,13 +3667,11 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(phase_by_id["context_engine"]["status"], "skipped")
         self.assertEqual(progress_body["events"][-1]["phase"], "launch")
         self.assertEqual(progress_body["events"][-1]["status"], "completed")
-        mock_run.assert_called_once()
+        mock_client.submit_job.assert_called_once()
 
-    @patch("mn_api.routes.blueprints.run_mn_blueprint_run")
-    @patch("mn_api.routes.blueprints.run_mn_blueprint_validate")
-    def test_blueprint_launch_progress_records_context_engine_when_required(self, mock_validate, mock_run):
-        mock_validate.return_value = {"ok": True, "status": "passed", "issues": [], "errors": []}
-        mock_run.return_value = {"ok": True, "job_id": "job-context", "run_id": "run-context", "command": "mn blueprint run"}
+    @patch('mn_api.state.client')
+    def test_blueprint_launch_progress_records_context_engine_when_required(self, mock_client):
+        mock_client.submit_job.return_value = "job-context"
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
             self._write_blueprint_repo(repo)
@@ -3689,6 +3698,7 @@ class TestAPI(unittest.TestCase):
                             {
                                 "source": "catalog",
                                 "blueprint_id": "worker_one",
+                                "force": True,
                                 "progress_id": "launch-context-test",
                             }
                         )
@@ -3698,6 +3708,7 @@ class TestAPI(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(progress_response.status_code, 200)
+        self.assertEqual(response.json()["job_id"], "job-context")
         progress_body = progress_response.json()
         context_events = [event for event in progress_body["events"] if event["phase"] == "context_engine"]
         self.assertEqual([event["status"] for event in context_events], ["running", "completed"])
@@ -3712,10 +3723,9 @@ class TestAPI(unittest.TestCase):
         response = self.client.get("/api/v1/blueprints/launch/progress/bad%20id")
         self.assertEqual(response.status_code, 400)
 
-    @patch("mn_api.routes.blueprints.run_mn_blueprint_run")
-    @patch("mn_api.routes.blueprints.run_mn_blueprint_validate")
+    @patch('mn_api.state.client')
     @patch("mn_api.routes.blueprints.install_blueprint_runtime_models")
-    def test_blueprint_launch_run_blocks_when_auto_model_install_fails(self, mock_install, mock_validate, mock_run):
+    def test_blueprint_launch_run_blocks_when_auto_model_install_fails(self, mock_install, mock_client):
         mock_install.return_value = {
             "ok": False,
             "models": [
@@ -3743,22 +3753,19 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.headers["content-type"], "application/problem+json")
         self.assertEqual(response.json()["error"], "blueprint_model_install_failed")
         self.assertEqual(response.json()["errors"][0]["location"]["path"], "llm.runtime_model")
-        mock_validate.assert_not_called()
-        mock_run.assert_not_called()
+        mock_client.submit_job.assert_not_called()
 
-    @patch("mn_api.routes.blueprints.run_mn_blueprint_run")
-    @patch("mn_api.routes.blueprints.run_mn_blueprint_validate")
+    @patch('mn_api.state.client')
     @patch("mn_api.routes.blueprints.install_blueprint_runtime_models")
-    def test_blueprint_launch_run_hard_gpu_blocks_before_model_install(self, mock_install, mock_validate, mock_run):
+    def test_blueprint_launch_run_hard_gpu_blocks_before_model_install(self, mock_install, mock_client):
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
             self._write_blueprint_repo(repo)
             (repo / "worker_one" / "manifest.json").write_text(json.dumps(self._hard_gpu_manifest()))
             original = self._set_blueprint_config(repo)
             try:
-                with patch('mn_api.state.client') as mock_client:
-                    mock_client.get_resource.return_value = json.dumps({"nodes": []})
-                    response = self._sync_blueprint_launch({"source": "catalog", "blueprint_id": "worker_one", "force": True})
+                mock_client.get_resource.return_value = json.dumps({"nodes": []})
+                response = self._sync_blueprint_launch({"source": "catalog", "blueprint_id": "worker_one", "force": True})
             finally:
                 self._restore_config(original)
 
@@ -3767,14 +3774,11 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.json()["error"], "requirements_not_met")
         self.assertEqual(response.json()["errors"][0]["code"], "requirements.gpu_node_unavailable")
         mock_install.assert_not_called()
-        mock_validate.assert_not_called()
-        mock_run.assert_not_called()
+        mock_client.submit_job.assert_not_called()
 
-    @patch("mn_api.routes.blueprints.run_mn_blueprint_run")
-    @patch("mn_api.routes.blueprints.run_mn_blueprint_validate")
-    def test_blueprint_launch_run_uses_mn_cli_for_filesystem_path(self, mock_validate, mock_run):
-        mock_validate.return_value = {"ok": True, "status": "passed", "issues": [], "errors": []}
-        mock_run.return_value = {"ok": True, "job_id": "job-path-cli", "command": "mn blueprint run --folder"}
+    @patch('mn_api.state.client')
+    def test_blueprint_launch_run_uses_sdk_submission_for_filesystem_path(self, mock_client):
+        mock_client.submit_job.return_value = "job-path-sdk"
         with tempfile.TemporaryDirectory() as tmpdir:
             bundle_dir = Path(tmpdir) / "local_worker"
             (bundle_dir / "payloads").mkdir(parents=True)
@@ -3784,15 +3788,17 @@ class TestAPI(unittest.TestCase):
                 "nodes": [],
                 "edges": [],
             }))
-            response = self._sync_blueprint_launch({"source": "path", "path": str(bundle_dir)})
+            response = self._sync_blueprint_launch({"source": "path", "path": str(bundle_dir), "force": True})
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["job_id"], "job-path-cli")
-        self.assertEqual(mock_run.call_args.args[0], ["--folder", str(bundle_dir.resolve()), "--detached"])
+        self.assertEqual(response.json()["job_id"], "job-path-sdk")
+        self.assertEqual(response.json()["source"], "path")
+        manifest_json, _payloads = mock_client.submit_job.call_args.args
+        self.assertEqual(json.loads(manifest_json)["graph_id"], "local_worker_graph")
 
-    @patch("mn_api.routes.blueprints.run_mn_blueprint_run")
-    @patch("mn_api.routes.blueprints.run_mn_blueprint_validate")
-    def test_blueprint_launch_validation_failure_blocks_cli_run(self, mock_validate, mock_run):
+    @patch('mn_api.state.client')
+    @patch("mn_api.routes.blueprints.validate_blueprint_inputs")
+    def test_blueprint_launch_validation_failure_blocks_submit(self, mock_validate, mock_client):
         mock_validate.return_value = {
             "ok": False,
             "status": "failed",
@@ -3811,22 +3817,7 @@ class TestAPI(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422)
         self.assertEqual(response.json()["error"], "blueprint_validation_failed")
-        mock_run.assert_not_called()
-
-    def test_blueprint_launch_cli_field_parser_reads_rich_output(self):
-        output = """
-        ╭──────────────────── Job submitted successfully ────────────────────╮
-        │ Bundle           video_watch_assistant                             │
-        │ Job ID           vwav-755a88af                                     │
-        │ Blueprint Run ID video_watch_assistant-20260531T224413Z-412c9cb2f1 │
-        ╰────────────────────────────────────────────────────────────────────╯
-        """
-
-        self.assertEqual(parse_cli_field(output, "Job ID"), "vwav-755a88af")
-        self.assertEqual(
-            parse_cli_field(output, "Blueprint Run ID"),
-            "video_watch_assistant-20260531T224413Z-412c9cb2f1",
-        )
+        mock_client.submit_job.assert_not_called()
 
     @patch('mn_api.state.client')
     @patch("mn_api.routes.blueprints.validate_blueprint_inputs")

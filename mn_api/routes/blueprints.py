@@ -42,7 +42,6 @@ from mn_api.blueprints import (
     start_background_event_relay_if_needed,
     start_blueprint_pre_launch_hook,
     local_blueprint_from_path,
-    run_mn_blueprint_run,
     run_mn_blueprint_validate,
     sanitize_blueprint_id,
     validate_blueprint_hardware_requirements,
@@ -213,127 +212,20 @@ def run_blueprint_launch_record(req: BlueprintLaunchRequest):
         label="Find blueprint",
         detail="The blueprint source and manifest were found.",
     )
-    force = bool(req.force)
-    state.close_client()
-    config_overrides = dict(req.config_overwrite or req.config_overrides or {})
-    preflight = run_launch_preflight(
+    run_req = BlueprintRunRequest(
+        version=req.version,
+        run_id=req.run_id,
+        config_overwrite=req.config_overwrite,
+        config_overrides=req.config_overrides,
+        force=req.force,
+        progress_id=progress_id,
+    )
+    return run_blueprint_record(
         launch["repo_root"],
         launch["blueprint"],
-        progress_id=progress_id,
-        force=force,
-        config_overrides=config_overrides,
+        run_req,
         source=launch["source"],
     )
-    if isinstance(preflight, JSONResponse):
-        return preflight
-    model_install = preflight.model_install
-    env_overrides = dict(preflight.env_overrides)
-    validation = {"ok": True, "status": "skipped" if force else "passed", "issues": [], "errors": []}
-    if not force:
-        record_launch_progress(
-            progress_id,
-            "validation",
-            "running",
-            "Validating blueprint.",
-            label="Validate inputs",
-            detail="Checking blueprint structure and launch inputs before submission.",
-        )
-        validation = run_mn_blueprint_validate(launch["bundle_root"])
-        if not validation.get("ok"):
-            record_launch_progress(
-                progress_id,
-                "validation",
-                "failed",
-                "Blueprint validation failed.",
-                {"validation": validation},
-                label="Validate inputs",
-                detail="A blueprint or input validation check failed.",
-                severity="error",
-            )
-            record_launch_progress(progress_id, "launch", "failed", "Blueprint launch stopped during validation.")
-            return validation_problem_response(
-                validation,
-                status_code=422,
-                error="blueprint_validation_failed",
-                title="Blueprint validation failed",
-                detail="Fix the highlighted blueprint validation issues and launch again.",
-                extra={"blueprint": launch["blueprint"], "source": launch["source"], "progress_id": progress_id},
-            )
-        record_launch_progress(
-            progress_id,
-            "validation",
-            "completed",
-            "Blueprint validation passed.",
-            {"validation": validation},
-            label="Validate inputs",
-            detail="Blueprint structure and launch inputs are valid.",
-        )
-    else:
-        record_launch_progress(
-            progress_id,
-            "validation",
-            "skipped",
-            "Validation skipped because force=true.",
-            label="Validate inputs",
-            detail="Validation was skipped by request.",
-        )
-
-    record_launch_progress(
-        progress_id,
-        "submit",
-        "running",
-        "Submitting blueprint run.",
-        label="Submit runtime job",
-        detail="Handing the prepared blueprint to the MirrorNeuron runtime.",
-    )
-    run_result = run_launch_with_mn_cli(launch, req, env_overrides=env_overrides)
-    if not run_result.get("ok"):
-        record_launch_progress(
-            progress_id,
-            "submit",
-            "failed",
-            str(run_result.get("error") or "mn blueprint run failed"),
-            label="Submit runtime job",
-            detail="The runtime did not accept the blueprint run.",
-            severity="error",
-        )
-        record_launch_progress(progress_id, "launch", "failed", "Blueprint launch failed during submit.")
-        raise HTTPException(status_code=500, detail=run_result.get("error") or "mn blueprint run failed")
-    job_id = run_result.get("job_id")
-    if not job_id:
-        record_launch_progress(
-            progress_id,
-            "submit",
-            "failed",
-            "mn blueprint run did not report a Job ID.",
-            label="Submit runtime job",
-            detail="The runtime accepted output was missing a job id.",
-            severity="error",
-        )
-        record_launch_progress(progress_id, "launch", "failed", "Blueprint launch did not return a job id.")
-        raise HTTPException(status_code=500, detail="mn blueprint run did not report a Job ID")
-    record_launch_progress(
-        progress_id,
-        "submit",
-        "completed",
-        "Blueprint run submitted.",
-        {"job_id": job_id, "run_id": run_result.get("run_id")},
-        label="Submit runtime job",
-        detail="The runtime accepted the job and live monitoring can begin.",
-    )
-    record_launch_progress(progress_id, "launch", "completed", "Launch complete.", {"job_id": job_id, "run_id": run_result.get("run_id")})
-    return {
-        "job_id": job_id,
-        "id": job_id,
-        "run_id": run_result.get("run_id"),
-        "status": "pending",
-        "source": launch["source"],
-        "blueprint": launch["blueprint"],
-        "validation": validation,
-        "model_install": model_install,
-        "progress_id": progress_id,
-        "command": run_result.get("command"),
-    }
 
 
 @router.post("/blueprints/{blueprint_id}/runs")
@@ -842,6 +734,7 @@ def run_blueprint_record(
     req: BlueprintRunRequest | None = None,
     *,
     validation: dict | None = None,
+    source: str = "catalog",
 ):
     blueprint_id = blueprint["id"]
     progress_id = validate_progress_id(req.progress_id if req else None)
@@ -850,7 +743,7 @@ def run_blueprint_record(
         "resolve_source",
         "completed",
         "Blueprint source resolved.",
-        {"source": "catalog", "blueprint_id": blueprint_id},
+        {"source": source, "blueprint_id": blueprint_id},
         label="Find blueprint",
         detail="The catalog blueprint and launch configuration were found.",
     )
@@ -1082,6 +975,7 @@ def run_blueprint_record(
             "id": job_id,
             "run_id": run_id,
             "status": "pending",
+            "source": source,
             "blueprint": blueprint,
             "validation": validation,
             "model_install": model_install,
@@ -1657,20 +1551,6 @@ def model_install_problem_response(
         detail="A required runtime model could not be installed automatically.",
         extra=extra,
     )
-
-
-def run_launch_with_mn_cli(
-    launch: dict,
-    req: BlueprintLaunchRequest,
-    *,
-    env_overrides: dict[str, str] | None = None,
-) -> dict:
-    run_args = ["--folder", str(launch["bundle_root"]), "--detached"]
-    if req.run_id:
-        run_args.extend(["--run-id", req.run_id])
-    if req.force:
-        run_args.append("--force")
-    return run_mn_blueprint_run(run_args, cwd=launch["bundle_root"], env_overrides=env_overrides)
 
 
 def runtime_active_jobs_payload() -> object | None:

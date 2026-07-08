@@ -134,16 +134,13 @@ def test_blueprint_bundle_root_and_validation_reject_bad_paths(tmp_path):
     assert blueprints.validate_blueprint_bundle(repo, {"id": "bp", "path": "bp"}) == bundle.resolve()
 
 
-def test_validation_output_and_cli_field_parsers(monkeypatch, tmp_path):
+def test_validation_output_parsers(monkeypatch, tmp_path):
     monkeypatch.setattr("mn_api.blueprints.mn_base_command", lambda: ["mn"])
     assert blueprints.mn_validate_command(tmp_path) == ["mn", "blueprint", "validate", str(tmp_path), "--output", "json"]
     assert blueprints.clean_validation_output("\x1b[31m bad \x1b[0m") == "bad"
     assert blueprints.parse_validation_json('prefix {"ok": true, "value": 1} suffix') == {"ok": True, "value": 1}
     assert blueprints.parse_validation_json("[1]") is None
     assert blueprints.parse_validation_json("no json") is None
-    assert blueprints.parse_json_field('{"job_id":"job-1"}', "job_id") == "job-1"
-    assert blueprints.parse_json_field("bad", "job_id") is None
-    assert blueprints.parse_cli_field("Job ID job-123\n", "Job ID") == "job-123"
     assert blueprints.validation_failure_report(" bad ")["errors"] == ["bad"]
     assert blueprints.validation_failure_report("")["errors"] == ["mn blueprint validate failed"]
 

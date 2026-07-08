@@ -738,57 +738,6 @@ def run_mn_blueprint_validate(bundle_root: Path, *, timeout_seconds: int = 120) 
     return report
 
 
-def run_mn_blueprint_run(
-    args: list[str],
-    *,
-    cwd: Path,
-    timeout_seconds: int = 300,
-    env_overrides: Dict[str, str] | None = None,
-) -> Dict[str, Any]:
-    command = mn_base_command() + ["blueprint", "run", *args]
-    env = subprocess_environment()
-    env.update(runtime_path_environment())
-    env.update(string_env_values(env_overrides))
-    try:
-        result = subprocess.run(
-            command,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            env=env,
-            timeout=timeout_seconds,
-        )
-    except FileNotFoundError:
-        return {
-            "ok": False,
-            "exit_code": 127,
-            "command": " ".join(command),
-            "error": "mn CLI was not found. Install mn or run the API from the monorepo environment.",
-        }
-    except subprocess.TimeoutExpired:
-        return {
-            "ok": False,
-            "exit_code": 124,
-            "command": " ".join(command),
-            "error": f"mn blueprint run timed out after {timeout_seconds}s.",
-        }
-
-    stdout = clean_validation_output(result.stdout)
-    stderr = clean_validation_output(result.stderr)
-    job_id = parse_cli_field(stdout, "Job ID") or parse_json_field(stdout, "job_id") or parse_json_field(stdout, "id")
-    run_id = parse_cli_field(stdout, "Blueprint Run ID") or parse_json_field(stdout, "run_id")
-    return {
-        "ok": result.returncode == 0,
-        "exit_code": result.returncode,
-        "command": " ".join(command),
-        "job_id": job_id,
-        "run_id": run_id,
-        "stdout": stdout[-8000:],
-        "stderr": stderr[-8000:],
-        "error": stderr or stdout or "mn blueprint run failed",
-    }
-
-
 def mn_base_command() -> list[str]:
     mn_binary = shutil.which("mn")
     if mn_binary:
@@ -822,19 +771,6 @@ def parse_validation_json(output: str) -> Dict[str, Any] | None:
     except json.JSONDecodeError:
         return None
     return decoded if isinstance(decoded, dict) else None
-
-
-def parse_json_field(output: str, field: str) -> str | None:
-    decoded = parse_validation_json(output)
-    if not decoded:
-        return None
-    value = decoded.get(field)
-    return str(value) if value else None
-
-
-def parse_cli_field(output: str, label: str) -> str | None:
-    match = re.search(rf"{re.escape(label)}\s+([A-Za-z0-9_.:-]+)", output)
-    return match.group(1) if match else None
 
 
 def validation_failure_report(message: str) -> Dict[str, Any]:
