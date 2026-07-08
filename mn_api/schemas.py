@@ -201,6 +201,11 @@ class RunCompareRequest(BaseModel):
 class BlueprintCleanupRequest(BaseModel):
     version: int = 1
     blueprint_id: Optional[str] = None
+    source: Optional[str] = None
+    python_envs_dir: Optional[str] = None
+    runs_root: Optional[str] = None
+    generated_bundles_dir: Optional[str] = None
+    bundle_cache_dir: Optional[str] = None
     include_files: bool = True
     include_docker: bool = True
     include_dead: bool = True

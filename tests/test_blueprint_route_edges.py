@@ -1,21 +1,36 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
+from types import ModuleType, SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 
+from mn_api import state
 from mn_api.routes import blueprints
 
 
-def test_blueprint_cleanup_dry_run_and_unsupported_scope(api_client):
+def test_blueprint_cleanup_runs_shared_resource_cleanup(monkeypatch, api_client, tmp_path):
+    calls = []
+    monkeypatch.setattr("mn_api.routes.blueprints.resolve_blueprint_storage", lambda source=None: tmp_path / "catalog")
+    monkeypatch.setattr("mn_api.routes.blueprints.blueprint_ids_from_storage", lambda storage: {"active-bp"})
+    monkeypatch.setattr(
+        "mn_api.routes.blueprints.cleanup_blueprint_resources",
+        lambda **kwargs: calls.append(kwargs) or {"dry_run": kwargs["dry_run"]},
+    )
+
     dry_run = api_client.post("/api/v1/blueprints:cleanup", json={"dry_run": True})
-    unsupported = api_client.post("/api/v1/blueprints:cleanup", json={"blueprint_id": "bp"})
+    explicit = api_client.post("/api/v1/blueprints:cleanup", json={"blueprint_id": "bp"})
 
     assert dry_run.status_code == 200
     assert dry_run.json()["status"] == "planned"
-    assert unsupported.status_code == 501
-    assert unsupported.json()["detail"]["error"] == "unsupported_api_cleanup_scope"
+    assert dry_run.json()["active_blueprint_ids"] == ["active-bp"]
+    assert explicit.status_code == 200
+    assert explicit.json()["status"] == "completed"
+    assert calls[0]["active_blueprint_ids"] == {"active-bp"}
+    assert calls[1]["blueprint_ids"] == {"bp"}
 
 
 def test_blueprint_cleanup_stale_process_scope(monkeypatch, api_client, tmp_path):
@@ -33,19 +48,57 @@ def test_blueprint_cleanup_stale_process_scope(monkeypatch, api_client, tmp_path
     )
 
     assert response.status_code == 200
-    assert response.json()["cleaned"] == "stale_processes"
+    assert response.json()["stale_processes"] is True
     assert calls == [(tmp_path, {"id": "bp"}, {"active-job"}, "api_blueprint_cleanup")]
 
 
-def test_blueprint_update_and_uninstall_report_unsupported_scope(api_client):
-    update = api_client.post("/api/v1/blueprints:update", json={"source": "github"})
-    uninstall = api_client.post("/api/v1/blueprints:uninstall", json={"blueprint_id": "bp", "dry_run": True})
+def test_blueprint_update_pulls_storage_and_cleans_removed_blueprints(monkeypatch, api_client, tmp_path):
+    storage = tmp_path / "storage"
+    storage.mkdir()
+    (storage / "index.json").write_text(json.dumps([{"id": "old-bp"}, {"id": "keep-bp"}]), encoding="utf-8")
+    cleanups = []
 
-    assert update.status_code == 501
-    assert update.json()["detail"]["source"] == "github"
-    assert uninstall.status_code == 501
-    assert uninstall.json()["detail"]["blueprint_id"] == "bp"
-    assert uninstall.json()["detail"]["dry_run"] is True
+    def fake_run_git(_args):
+        (storage / "index.json").write_text(json.dumps([{"id": "keep-bp"}]), encoding="utf-8")
+        return SimpleNamespace(stdout="updated", stderr="")
+
+    monkeypatch.setattr("mn_api.routes.blueprints.run_git", fake_run_git)
+    monkeypatch.setattr(
+        "mn_api.routes.blueprints.cleanup_blueprint_resources",
+        lambda **kwargs: cleanups.append(kwargs) or {"dry_run": kwargs["dry_run"]},
+    )
+
+    update = api_client.post("/api/v1/blueprints:update", json={"source": str(storage)})
+
+    assert update.status_code == 200
+    assert update.json()["blueprints_removed"] == ["old-bp"]
+    assert cleanups[0]["blueprint_ids"] == {"old-bp"}
+    assert cleanups[0]["active_blueprint_ids"] == {"keep-bp"}
+
+
+def test_blueprint_uninstall_dry_run_archives_and_plans_cleanup(monkeypatch, api_client, tmp_path):
+    monkeypatch.setattr("mn_api.routes.blueprints.resolve_mn_home", lambda: tmp_path / "home")
+    monkeypatch.setattr(
+        "mn_api.routes.blueprints.cleanup_blueprint_resources",
+        lambda **kwargs: {"dry_run": kwargs["dry_run"], "blueprint_ids": sorted(kwargs["blueprint_ids"])},
+    )
+    monkeypatch.setattr(
+        "mn_api.routes.blueprints.projected_orphaned_models",
+        lambda blueprint_id: [{"docker_model": f"{blueprint_id}-model"}],
+    )
+
+    uninstall = api_client.post(
+        "/api/v1/blueprints:uninstall",
+        json={"blueprint_id": "bp", "source": str(tmp_path / "storage"), "dry_run": True, "remove_models": True},
+    )
+
+    assert uninstall.status_code == 200
+    body = uninstall.json()
+    assert body["status"] == "planned"
+    assert body["blueprint_id"] == "bp"
+    assert "/home/blueprint_installs/archive/bp-" in body["archive"]
+    assert body["cleanup"]["blueprint_ids"] == ["bp"]
+    assert body["models"]["removed"] == ["bp-model"]
 
 
 def test_blueprint_list_and_health_refresh_local_source_env(monkeypatch, api_client, tmp_path):
@@ -129,13 +182,388 @@ def test_launch_progress_helpers_record_read_and_summarize(monkeypatch, tmp_path
 
 def test_launch_progress_route_reports_completed(monkeypatch, api_client, tmp_path):
     monkeypatch.setattr("mn_api.routes.blueprints.launch_progress_root", lambda: tmp_path)
-    blueprints.record_launch_progress("launch-route", "launch", "failed", "Nope")
+    blueprints.record_launch_progress("launch-route", "launch", "failed", "Nope", {"run_id": "run-1"})
 
     response = api_client.get("/api/v1/blueprints/launch/progress/launch-route")
 
     assert response.status_code == 200
     assert response.json()["completed"] is True
     assert response.json()["status"] == "failed"
+    assert response.json()["run_id"] == "run-1"
+    assert response.json()["error"] == "Nope"
+
+
+def test_launch_progress_websocket_streams_events(monkeypatch, api_client, tmp_path):
+    monkeypatch.setattr("mn_api.routes.blueprints.launch_progress_root", lambda: tmp_path)
+    blueprints.record_launch_progress("launch-ws", "launch", "running", "Accepted", {"run_id": "run-ws"})
+
+    def receive_event(websocket, version):
+        for _ in range(6):
+            message = websocket.receive_json()
+            if message.get("topic") == "launch_progress:launch-ws" and message.get("version") == version:
+                return message
+        raise AssertionError(f"event version {version} was not received")
+
+    with api_client.websocket_connect("/api/v1/realtime?interval=0.25") as websocket:
+        websocket.send_json(
+            {
+                "requestId": "req-1",
+                "action": "subscribe",
+                "topic": "launch_progress:launch-ws",
+                "after": 0,
+            }
+        )
+        subscribed = websocket.receive_json()
+        assert subscribed == {
+            "requestId": "req-1",
+            "action": "subscribed",
+            "topic": "launch_progress:launch-ws",
+            "fromVersion": 1,
+        }
+
+        first = receive_event(websocket, 1)
+        assert first["type"] == "blueprint.launch_progress.launch.running"
+        assert first["patch"]["latest"]["phase"] == "launch"
+        assert first["patch"]["run_id"] == "run-ws"
+
+        blueprints.record_launch_progress("launch-ws", "model_install", "running", "Installing")
+        update = receive_event(websocket, 2)
+        assert update["patch"]["latest"]["phase"] == "model_install"
+
+        blueprints.record_launch_progress("launch-ws", "launch", "completed", "Done", {"job_id": "job-ws"})
+        terminal = receive_event(websocket, 3)
+        assert terminal["patch"]["latest"]["status"] == "completed"
+        assert terminal["patch"]["completed"] is True
+
+
+def test_blueprint_run_returns_submitted_job(monkeypatch, api_client, tmp_path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    blueprint = {"id": "worker_one", "name": "Worker One", "path": "worker_one"}
+    monkeypatch.setattr("mn_api.routes.blueprints.launch_progress_root", lambda: tmp_path / "progress")
+    monkeypatch.setattr("mn_api.routes.blueprints.find_blueprint", lambda _config, blueprint_id: (repo_root, blueprint))
+
+    def fake_record(repo, bp, req):
+        assert repo == repo_root
+        assert bp == blueprint
+        assert req.run_id == "run-submitted"
+        assert req.progress_id == "progress-submitted"
+        blueprints.record_launch_progress(
+            req.progress_id,
+            "launch",
+            "completed",
+            "Launch complete.",
+            {"run_id": req.run_id, "job_id": "job-submitted"},
+        )
+        return {
+            "job_id": "job-submitted",
+            "id": "job-submitted",
+            "run_id": req.run_id,
+            "status": "pending",
+            "progress_id": req.progress_id,
+            "progress_url": f"/api/v1/blueprints/launch/progress/{req.progress_id}",
+        }
+
+    monkeypatch.setattr("mn_api.routes.blueprints.run_blueprint_record", fake_record)
+
+    response = api_client.post(
+        "/api/v1/blueprints/worker_one/runs",
+        json={"run_id": "run-submitted", "progress_id": "progress-submitted", "force": True},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "pending"
+    assert body["run_id"] == "run-submitted"
+    assert body["progress_id"] == "progress-submitted"
+    assert body["progress_url"] == "/api/v1/blueprints/launch/progress/progress-submitted"
+    assert body["job_id"] == "job-submitted"
+
+
+def test_blueprint_run_route_submits_after_real_preflight_with_runtime_environment(monkeypatch, api_client, tmp_path):
+    class FakeRuntimeClient:
+        def __init__(self):
+            self.submissions = []
+
+        def list_jobs(self, _limit=0, _include_terminal=False):
+            return json.dumps({"data": []})
+
+        def resolve_service(self, *_args, **_kwargs):
+            return json.dumps({"services": []})
+
+        def submit_job(self, manifest_json, payloads, **kwargs):
+            self.submissions.append((json.loads(manifest_json), payloads, kwargs))
+            return "job-route-real"
+
+    repo = tmp_path / "catalog"
+    bundle = repo / "vc_assistant"
+    (bundle / "config").mkdir(parents=True)
+    (bundle / "payloads").mkdir()
+    (bundle / "payloads" / "payload.txt").write_text("hello", encoding="utf-8")
+    (bundle / "manifest.json").write_text(
+        json.dumps(
+            {
+                "apiVersion": "mn.workflow/v1",
+                "kind": "Workflow",
+                "workflow": {"workflow_id": "vc_assistant_v1"},
+                "nodes": [
+                    {
+                        "node_id": "worker",
+                        "config": {
+                            "runner_module": "MirrorNeuron.Runner.HostLocal",
+                            "python_environment": {"packages": ["existing-helper==0.1"]},
+                            "environment": {},
+                        },
+                    }
+                ],
+                "edges": [],
+                "skill_dependencies": [
+                    {
+                        "name": "mirrorneuron-blueprint-support-skill",
+                        "source": "gar",
+                        "type": "pip",
+                        "version": "1.2.8",
+                    }
+                ],
+                "metadata": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (bundle / "config" / "default.json").write_text(
+        json.dumps(
+            {
+                "memory_layer": {
+                    "enabled": True,
+                    "enabled_env": "MN_CONTEXT_MEMORY_ENABLED",
+                    "sdk_import_package": "mn_context_engine_sdk",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (repo / "index.json").write_text(
+        json.dumps([{"id": "vc_assistant", "name": "VC Assistant", "path": "vc_assistant"}]),
+        encoding="utf-8",
+    )
+
+    fake_runtime = FakeRuntimeClient()
+    fake_package = ModuleType("mn_cli")
+    fake_package.__path__ = []
+    fake_server_cmds = ModuleType("mn_cli.server_cmds")
+    observed = {}
+
+    def fake_ensure_context_engine_runtime(*, force=False):
+        observed["force"] = force
+        observed["path"] = os.environ.get("PATH")
+        return {"status": "already_running"}
+
+    fake_server_cmds.ensure_context_engine_runtime = fake_ensure_context_engine_runtime
+    monkeypatch.setitem(sys.modules, "mn_cli", fake_package)
+    monkeypatch.setitem(sys.modules, "mn_cli.server_cmds", fake_server_cmds)
+    monkeypatch.setenv("PATH", "/api/process/bin")
+    monkeypatch.setattr(
+        state,
+        "config",
+        SimpleNamespace(
+            api_token="",
+            request_size_limit_bytes=1024 * 1024,
+            blueprint_source="local",
+            blueprint_repo="",
+            blueprint_local=str(repo),
+            active_blueprint_location=str(repo),
+        ),
+    )
+    monkeypatch.setattr(state, "client", fake_runtime)
+    monkeypatch.setattr("mn_api.routes.blueprints.launch_progress_root", lambda: tmp_path / "progress")
+    monkeypatch.setattr("mn_api.routes.blueprints.validate_blueprint_hardware_requirements", lambda *_args, **_kwargs: {"ok": True, "status": "passed", "issues": [], "errors": []})
+    monkeypatch.setattr("mn_api.blueprints.load_model_catalog", lambda: {})
+    monkeypatch.setattr(
+        "mn_api.blueprints.runtime_path_environment",
+        lambda: {
+            "PATH": "/runtime/docker/bin:/api/process/bin",
+            "PYTHONPATH": f"{tmp_path}/workspace/mn-skills:/runtime/python",
+            "MN_WORKSPACE_ROOT": f"{tmp_path}/workspace",
+            "MN_SKILLS_ROOT": f"{tmp_path}/workspace/mn-skills",
+        },
+    )
+
+    response = api_client.post(
+        "/api/v1/blueprints/vc_assistant/runs",
+        json={"run_id": "vc-route-real", "progress_id": "progress-route-real", "force": True},
+    )
+    progress = api_client.get("/api/v1/blueprints/launch/progress/progress-route-real")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "pending"
+    assert body["run_id"] == "vc-route-real"
+    assert body["job_id"] == "job-route-real"
+    assert body["progress_url"] == "/api/v1/blueprints/launch/progress/progress-route-real"
+    assert fake_runtime.submissions
+    submitted_manifest, payloads, submit_kwargs = fake_runtime.submissions[0]
+    assert submitted_manifest["graph_id"] == "vc_assistant_v1"
+    assert "nodes" not in submitted_manifest
+    assert "edges" not in submitted_manifest
+    assert submitted_manifest["flow"]["nodes"][0]["node_id"] == "worker"
+    worker_config = submitted_manifest["flow"]["nodes"][0]["config"]
+    packages = worker_config["python_environment"]["packages"]
+    assert packages[:5] == [
+        "--index-url",
+        "https://us-central1-python.pkg.dev/mirrorneuron-public-packages/agent-skills/simple/",
+        "--extra-index-url",
+        "https://pypi.org/simple",
+        "mirrorneuron-blueprint-support-skill==1.2.8",
+    ]
+    assert packages[-1] == "existing-helper==0.1"
+    worker_env = worker_config["environment"]
+    assert worker_env["PYTHONPATH"] == "/runtime/python"
+    assert "MN_WORKSPACE_ROOT" not in worker_env
+    assert "MN_SKILLS_ROOT" not in worker_env
+    assert submitted_manifest["flow"]["edges"] == []
+    assert submitted_manifest["metadata"]["mn_cli"]["blueprint_id"] == "vc_assistant"
+    assert submitted_manifest["metadata"]["mn_cli"]["blueprint_run_id"] == "vc-route-real"
+    assert payloads == {"payload.txt": b"hello"}
+    assert submit_kwargs == {"force": True}
+    assert observed == {"force": True, "path": "/runtime/docker/bin:/api/process/bin"}
+    assert os.environ["PATH"] == "/api/process/bin"
+    assert progress.status_code == 200
+    assert progress.json()["status"] == "completed"
+    assert progress.json()["job_id"] == "job-route-real"
+
+
+def test_blueprint_launch_returns_progress_session_immediately(monkeypatch, api_client, tmp_path):
+    starts = []
+    monkeypatch.setattr("mn_api.routes.blueprints.launch_progress_root", lambda: tmp_path / "progress")
+    monkeypatch.setattr("mn_api.routes.blueprints.start_async_blueprint_launch", lambda req: starts.append(req))
+
+    response = api_client.post(
+        "/api/v1/blueprints/launch/runs",
+        json={
+            "source": "path",
+            "path": str(tmp_path / "local_worker"),
+            "run_id": "local-run",
+            "progress_id": "local-progress",
+        },
+    )
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["status"] == "launching"
+    assert body["run_id"] == "local-run"
+    assert body["progress_id"] == "local-progress"
+    assert body["progress_url"] == "/api/v1/blueprints/launch/progress/local-progress"
+    assert body["job_id"] is None
+    assert starts[0].source == "path"
+    assert starts[0].path == str(tmp_path / "local_worker")
+    assert starts[0].run_id == "local-run"
+    assert starts[0].progress_id == "local-progress"
+
+
+def test_blueprint_run_generates_progress_id(monkeypatch, api_client, tmp_path):
+    requests = []
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    monkeypatch.setattr("mn_api.routes.blueprints.launch_progress_root", lambda: tmp_path / "progress")
+    monkeypatch.setattr(
+        "mn_api.routes.blueprints.find_blueprint",
+        lambda _config, blueprint_id: (repo_root, {"id": blueprint_id, "name": "Worker One", "path": "worker_one"}),
+    )
+
+    def fake_record(_repo, _bp, req):
+        requests.append(req)
+        return {"job_id": "job-generated", "id": "job-generated", "run_id": req.run_id, "progress_id": req.progress_id}
+
+    monkeypatch.setattr("mn_api.routes.blueprints.run_blueprint_record", fake_record)
+
+    response = api_client.post("/api/v1/blueprints/worker_one/runs", json={})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["run_id"].startswith("worker_one-")
+    assert body["progress_id"].startswith(body["run_id"])
+    assert blueprints.validate_progress_id(body["progress_id"]) == body["progress_id"]
+    assert requests[0].run_id == body["run_id"]
+    assert requests[0].progress_id == body["progress_id"]
+
+
+def test_blueprint_run_progress_polling_reports_success(monkeypatch, api_client, tmp_path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    monkeypatch.setattr("mn_api.routes.blueprints.launch_progress_root", lambda: tmp_path / "progress")
+    monkeypatch.setattr(
+        "mn_api.routes.blueprints.find_blueprint",
+        lambda _config, blueprint_id: (repo_root, {"id": blueprint_id, "name": "Worker One", "path": "worker_one"}),
+    )
+
+    def fake_record(_repo, _blueprint, req):
+        blueprints.record_launch_progress(
+            req.progress_id,
+            "launch",
+            "completed",
+            "Launch complete.",
+            {"run_id": req.run_id, "job_id": "job-async"},
+        )
+        return {
+            "job_id": "job-async",
+            "id": "job-async",
+            "run_id": req.run_id,
+            "progress_id": req.progress_id,
+            "progress_url": f"/api/v1/blueprints/launch/progress/{req.progress_id}",
+        }
+
+    monkeypatch.setattr("mn_api.routes.blueprints.run_blueprint_record", fake_record)
+
+    start = api_client.post("/api/v1/blueprints/worker_one/runs", json={"run_id": "run-ok"})
+    progress = api_client.get(start.json()["progress_url"])
+
+    assert start.status_code == 200
+    assert progress.status_code == 200
+    body = progress.json()
+    assert body["completed"] is True
+    assert body["status"] == "completed"
+    assert body["run_id"] == "run-ok"
+    assert body["job_id"] == "job-async"
+
+
+def test_blueprint_run_progress_polling_reports_background_error(monkeypatch, api_client, tmp_path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    monkeypatch.setattr("mn_api.routes.blueprints.launch_progress_root", lambda: tmp_path / "progress")
+    monkeypatch.setattr(
+        "mn_api.routes.blueprints.find_blueprint",
+        lambda _config, blueprint_id: (repo_root, {"id": blueprint_id, "name": "Worker One", "path": "worker_one"}),
+    )
+
+    def fake_record(_repo, _blueprint, req):
+        blueprints.record_launch_progress(
+            req.progress_id,
+            "launch",
+            "failed",
+            "Runtime model install failed.",
+            {"run_id": req.run_id},
+            severity="error",
+        )
+        return {
+            "job_id": None,
+            "run_id": req.run_id,
+            "progress_id": req.progress_id,
+            "progress_url": f"/api/v1/blueprints/launch/progress/{req.progress_id}",
+        }
+
+    monkeypatch.setattr("mn_api.routes.blueprints.run_blueprint_record", fake_record)
+
+    start = api_client.post("/api/v1/blueprints/worker_one/runs", json={"run_id": "run-error"})
+    progress = api_client.get(start.json()["progress_url"])
+
+    assert start.status_code == 200
+    assert progress.status_code == 200
+    body = progress.json()
+    assert body["completed"] is True
+    assert body["status"] == "failed"
+    assert body["run_id"] == "run-error"
+    assert body["job_id"] is None
+    assert body["error"] == "Runtime model install failed."
 
 
 def test_resolve_launch_source_validates_required_fields(monkeypatch):

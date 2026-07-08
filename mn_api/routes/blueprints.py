@@ -1,14 +1,27 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import json
 import re
+import shutil
+import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
+from mn_sdk import (
+    cleanup_blueprint_resources,
+    load_blueprint_index,
+    load_model_ownership,
+    remove_model_owner,
+    remove_model_record,
+    remove_model_ref,
+)
+from mn_sdk.blueprint_source import run_git
 
 from mn_api import state
 from mn_api.blueprints import (
@@ -143,6 +156,31 @@ def validate_blueprint(
 
 @router.post("/blueprints/launch/runs")
 def run_blueprint_launch(req: BlueprintLaunchRequest, _auth=Depends(require_auth)):
+    resolved_req = resolve_async_blueprint_launch_request(req)
+    record_launch_progress(
+        resolved_req.progress_id,
+        "launch",
+        "running",
+        "Blueprint launch accepted.",
+        {"run_id": resolved_req.run_id, "source": resolved_req.source},
+        label="Launch",
+        detail="The blueprint launch is running in the background.",
+    )
+    start_async_blueprint_launch(resolved_req)
+    return JSONResponse(
+        status_code=202,
+        content={
+            "status": "launching",
+            "run_id": resolved_req.run_id,
+            "job_id": None,
+            "source": resolved_req.source,
+            "progress_id": resolved_req.progress_id,
+            "progress_url": f"/api/v1/blueprints/launch/progress/{resolved_req.progress_id}",
+        },
+    )
+
+
+def run_blueprint_launch_record(req: BlueprintLaunchRequest):
     progress_id = validate_progress_id(req.progress_id)
     record_launch_progress(
         progress_id,
@@ -305,83 +343,497 @@ def run_blueprint(
     _auth=Depends(require_auth),
 ):
     repo_root, blueprint = find_blueprint(_current_config(), blueprint_id)
-    return run_blueprint_record(repo_root, blueprint, req)
+    resolved_req = resolve_async_blueprint_run_request(blueprint_id, req)
+    record_launch_progress(
+        resolved_req.progress_id,
+        "launch",
+        "running",
+        "Blueprint launch accepted.",
+        {"run_id": resolved_req.run_id, "blueprint_id": blueprint_id},
+        label="Launch",
+        detail="The blueprint launch is being submitted to the runtime.",
+    )
+    return run_blueprint_record(repo_root, blueprint, resolved_req)
 
 
 @router.get("/blueprints/launch/progress/{progress_id}")
 def get_launch_progress(progress_id: str, _auth=Depends(require_auth)):
+    return launch_progress_snapshot(progress_id)
+
+
+def launch_progress_snapshot(progress_id: str) -> dict[str, Any]:
     resolved_progress_id = validate_progress_id(progress_id)
     events = read_launch_progress(resolved_progress_id)
     latest = events[-1] if events else None
+    terminal = latest_terminal_launch_event(events)
+    ids = launch_progress_identifiers(events)
+    error = launch_progress_error(events)
     completed = any(
         event.get("phase") == "launch"
         and str(event.get("status") or "").lower() in TERMINAL_LAUNCH_PROGRESS_STATUSES
         for event in events
     )
-    return {
+    response = {
         "version": 1,
         "progress_id": resolved_progress_id,
         "schema_version": "mn.launch_progress.v1",
+        "run_id": ids.get("run_id"),
+        "job_id": ids.get("job_id"),
         "events": events,
         "phases": summarize_launch_progress_phases(events),
         "latest": latest,
         "completed": completed,
-        "status": str(latest.get("status") or "pending") if isinstance(latest, dict) else "pending",
+        "status": (
+            str(terminal.get("status") or "pending")
+            if isinstance(terminal, dict)
+            else str(latest.get("status") or "pending")
+            if isinstance(latest, dict)
+            else "pending"
+        ),
         "current_phase": str(latest.get("phase") or latest.get("step") or "") if isinstance(latest, dict) else None,
     }
+    if error:
+        response["error"] = error
+    return response
+
+
+def resolve_async_blueprint_run_request(blueprint_id: str, req: BlueprintRunRequest | None) -> BlueprintRunRequest:
+    if req is None:
+        req = BlueprintRunRequest()
+    run_id = req.run_id or create_blueprint_run_id(blueprint_id)
+    validate_run_id(run_id)
+    progress_id = validate_progress_id(req.progress_id) or create_blueprint_progress_id(run_id)
+    return BlueprintRunRequest(
+        version=req.version,
+        run_id=run_id,
+        config_overwrite=req.config_overwrite,
+        config_overrides=req.config_overrides,
+        force=req.force,
+        progress_id=progress_id,
+    )
+
+
+def resolve_async_blueprint_launch_request(req: BlueprintLaunchRequest) -> BlueprintLaunchRequest:
+    run_id = req.run_id or create_blueprint_run_id(blueprint_launch_run_id_seed(req))
+    validate_run_id(run_id)
+    progress_id = validate_progress_id(req.progress_id) or create_blueprint_progress_id(run_id)
+    return BlueprintLaunchRequest(
+        version=req.version,
+        run_id=run_id,
+        config_overwrite=req.config_overwrite,
+        config_overrides=req.config_overrides,
+        force=req.force,
+        progress_id=progress_id,
+        source=req.source,
+        blueprint_id=req.blueprint_id,
+        path=req.path,
+        **{"_bundle_path": req.bundle_path},
+    )
+
+
+def blueprint_launch_run_id_seed(req: BlueprintLaunchRequest) -> str:
+    if req.blueprint_id:
+        return sanitize_blueprint_id(req.blueprint_id)
+    for value in (req.path, req.bundle_path):
+        if value:
+            return sanitize_blueprint_id(Path(value).expanduser().name or Path(value).stem)
+    return sanitize_blueprint_id(req.source or "blueprint")
+
+
+def create_blueprint_progress_id(run_id: str) -> str:
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    base = re.sub(r"[^A-Za-z0-9_.:-]+", "_", str(run_id or "blueprint-run")).strip("_.:-") or "blueprint-run"
+    suffix = hashlib.sha1(f"{base}:{time.time_ns()}".encode("utf-8")).hexdigest()[:8]
+    progress_id = f"{base}-{stamp}-{suffix}"
+    if len(progress_id) <= 220:
+        return progress_id
+    keep = 220 - len(stamp) - len(suffix) - 2
+    return f"{base[:keep].rstrip('_.:-')}-{stamp}-{suffix}"
+
+
+def start_async_blueprint_run(repo_root: Path, blueprint: dict[str, Any], req: BlueprintRunRequest) -> threading.Thread:
+    thread = threading.Thread(
+        target=run_blueprint_record_background,
+        args=(repo_root, blueprint, req),
+        name=f"mn-blueprint-run-{req.run_id or blueprint.get('id') or 'unknown'}",
+        daemon=True,
+    )
+    thread.start()
+    return thread
+
+
+def start_async_blueprint_launch(req: BlueprintLaunchRequest) -> threading.Thread:
+    thread = threading.Thread(
+        target=run_blueprint_launch_background,
+        args=(req,),
+        name=f"mn-blueprint-launch-{req.run_id or req.source or 'unknown'}",
+        daemon=True,
+    )
+    thread.start()
+    return thread
+
+
+def run_blueprint_launch_background(req: BlueprintLaunchRequest) -> None:
+    progress_id = req.progress_id
+    run_id = req.run_id
+    try:
+        result = run_blueprint_launch_record(req)
+        if isinstance(result, JSONResponse) and not launch_progress_has_terminal_event(progress_id):
+            record_launch_progress(
+                progress_id,
+                "launch",
+                "failed",
+                json_response_error_message(result),
+                {"run_id": run_id, "status_code": result.status_code},
+                label="Launch",
+                detail="Blueprint launch failed.",
+                severity="error",
+            )
+    except Exception as exc:
+        state.logger.exception("Async blueprint launch failed")
+        if not launch_progress_has_terminal_event(progress_id):
+            record_launch_progress(
+                progress_id,
+                "launch",
+                "failed",
+                str(exc) or "Blueprint launch failed.",
+                {"run_id": run_id},
+                label="Launch",
+                detail="Blueprint launch failed.",
+                severity="error",
+            )
+
+
+def run_blueprint_record_background(repo_root: Path, blueprint: dict[str, Any], req: BlueprintRunRequest) -> None:
+    progress_id = req.progress_id
+    run_id = req.run_id
+    try:
+        result = run_blueprint_record(repo_root, blueprint, req)
+        if isinstance(result, JSONResponse) and not launch_progress_has_terminal_event(progress_id):
+            record_launch_progress(
+                progress_id,
+                "launch",
+                "failed",
+                json_response_error_message(result),
+                {"run_id": run_id, "status_code": result.status_code},
+                label="Launch",
+                detail="Blueprint launch failed.",
+                severity="error",
+            )
+    except Exception as exc:
+        state.logger.exception("Async blueprint run failed")
+        record_launch_progress(
+            progress_id,
+            "launch",
+            "failed",
+            str(exc) or "Blueprint launch failed.",
+            {"run_id": run_id},
+            label="Launch",
+            detail="Blueprint launch failed.",
+            severity="error",
+        )
+
+
+def json_response_error_message(response: JSONResponse) -> str:
+    try:
+        payload = json.loads(response.body.decode("utf-8"))
+    except Exception:
+        return "Blueprint launch failed."
+    if isinstance(payload, dict):
+        for key in ("detail", "title", "error"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        errors = payload.get("errors")
+        if isinstance(errors, list) and errors:
+            first = errors[0]
+            if isinstance(first, dict) and str(first.get("message") or "").strip():
+                return str(first["message"]).strip()
+            if isinstance(first, str) and first.strip():
+                return first.strip()
+    return "Blueprint launch failed."
+
+
+def launch_progress_has_terminal_event(progress_id: str | None) -> bool:
+    return latest_terminal_launch_event(read_launch_progress(progress_id)) is not None
+
+
+def latest_terminal_launch_event(events: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for event in reversed(events):
+        if event.get("phase") != "launch":
+            continue
+        if str(event.get("status") or "").lower() in TERMINAL_LAUNCH_PROGRESS_STATUSES:
+            return event
+    return None
+
+
+def launch_progress_identifiers(events: list[dict[str, Any]]) -> dict[str, str | None]:
+    ids: dict[str, str | None] = {"run_id": None, "job_id": None}
+    for event in events:
+        details = event.get("details") if isinstance(event.get("details"), dict) else {}
+        for key in ("run_id", "job_id"):
+            value = details.get(key)
+            if value is not None:
+                ids[key] = str(value)
+    return ids
+
+
+def launch_progress_error(events: list[dict[str, Any]]) -> str | None:
+    for event in reversed(events):
+        if str(event.get("status") or "").lower() != "failed":
+            continue
+        message = str(event.get("message") or "").strip()
+        if message:
+            return message
+        detail = str(event.get("detail") or "").strip()
+        if detail:
+            return detail
+    return None
 
 
 @router.post("/blueprints:cleanup")
 def cleanup_blueprints(req: BlueprintCleanupRequest, _auth=Depends(require_auth)):
-    if req.dry_run:
-        return {
-            "status": "planned",
-            "dry_run": True,
-            "supported": True,
-            "message": "API cleanup supports stale helper-process cleanup for one blueprint when file and Docker cleanup are disabled.",
-        }
+    explicit_ids = {req.blueprint_id} if req.blueprint_id else set()
+    active_ids = set()
+    stale_processes = False
+
     if req.blueprint_id and not req.include_files and not req.include_docker:
         repo_root, blueprint = find_blueprint(_current_config(), req.blueprint_id)
-        cleanup_stale_blueprint_run_processes(
-            repo_root,
-            blueprint,
-            active_job_ids=runtime_active_job_ids(),
-            reason="api_blueprint_cleanup",
-        )
-        return {"status": "completed", "blueprint_id": req.blueprint_id, "cleaned": "stale_processes"}
-    raise HTTPException(
-        status_code=501,
-        detail={
-            "error": "unsupported_api_cleanup_scope",
-            "message": "Full blueprint file, Docker, and catalog cleanup remains a local CLI operation.",
-            "supported": {"blueprint_id": "required", "include_files": False, "include_docker": False},
-        },
+        if not req.dry_run:
+            cleanup_stale_blueprint_run_processes(
+                repo_root,
+                blueprint,
+                active_job_ids=runtime_active_job_ids(),
+                reason="api_blueprint_cleanup",
+            )
+        stale_processes = True
+    elif req.include_dead and not explicit_ids:
+        active_ids = blueprint_ids_from_storage(resolve_blueprint_storage(req.source))
+
+    summary = cleanup_blueprint_resources(
+        blueprint_ids=explicit_ids,
+        active_blueprint_ids=active_ids,
+        python_envs_dir=optional_path(req.python_envs_dir),
+        runs_root=optional_path(req.runs_root),
+        generated_bundles_dir=optional_path(req.generated_bundles_dir),
+        bundle_cache_dir=optional_path(req.bundle_cache_dir),
+        include_dead=req.include_dead,
+        include_docker=req.include_docker,
+        include_files=req.include_files,
+        dry_run=req.dry_run,
     )
+    return {
+        "status": "planned" if req.dry_run else "completed",
+        "blueprint_id": req.blueprint_id,
+        "active_blueprint_ids": sorted(active_ids),
+        "stale_processes": stale_processes,
+        "summary": summary,
+    }
 
 
 @router.post("/blueprints:update")
 def update_blueprints(req: BlueprintUpdateRequest, _auth=Depends(require_auth)):
-    raise HTTPException(
-        status_code=501,
-        detail={
-            "error": "unsupported_api_blueprint_update",
-            "message": "Blueprint library git updates are intentionally local CLI operations.",
-            "source": req.source,
+    storage_dir = resolve_blueprint_storage(req.source)
+    if not storage_dir.exists():
+        raise HTTPException(status_code=404, detail=f"Blueprint storage not found at {storage_dir}")
+    before_ids = blueprint_ids_from_storage(storage_dir)
+    warning = None
+    try:
+        git_result = run_git(["-C", str(storage_dir), "pull", "--ff-only"])
+    except subprocess.CalledProcessError as exc:
+        warning = (exc.stderr or exc.stdout or str(exc)).strip()
+        git_result = None
+
+    try:
+        load_blueprint_index(storage_dir / "index.json")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error loading updated blueprint index: {exc}") from exc
+
+    after_ids = blueprint_ids_from_storage(storage_dir)
+    removed_ids = before_ids - after_ids
+    cleanup_summary = None
+    if removed_ids or after_ids:
+        cleanup_summary = cleanup_blueprint_resources(
+            blueprint_ids=removed_ids,
+            active_blueprint_ids=after_ids,
+            include_dead=True,
+            include_docker=True,
+            dry_run=False,
+        )
+    return {
+        "status": "completed",
+        "storage": str(storage_dir),
+        "blueprints_before": len(before_ids),
+        "blueprints_after": len(after_ids),
+        "blueprints_removed": sorted(removed_ids),
+        "git": {
+            "stdout": (git_result.stdout or "").strip() if git_result else "",
+            "stderr": (git_result.stderr or "").strip() if git_result else warning or "",
+            "warning": warning,
         },
-    )
+        "cleanup": cleanup_summary,
+    }
 
 
 @router.post("/blueprints:uninstall")
 def uninstall_blueprints(req: BlueprintUninstallRequest, _auth=Depends(require_auth)):
-    raise HTTPException(
-        status_code=501,
-        detail={
-            "error": "unsupported_api_blueprint_uninstall",
-            "message": "Blueprint uninstall can remove local files, Docker resources, and models, so it remains a local CLI operation.",
-            "blueprint_id": req.blueprint_id,
-            "dry_run": req.dry_run,
-        },
+    if req.keep_models and req.remove_models:
+        raise HTTPException(status_code=400, detail="Use only one of keep_models or remove_models.")
+
+    storage_dir = resolve_blueprint_storage(req.source)
+    blueprint_ids = {req.blueprint_id} if req.blueprint_id else blueprint_ids_from_storage(storage_dir)
+    archive_path = None
+    storage_removed = False
+    if req.blueprint_id:
+        archive_path = archive_blueprint_install(req.blueprint_id, storage_dir=storage_dir, dry_run=req.dry_run)
+    elif storage_dir.exists() and not req.dry_run:
+        shutil.rmtree(storage_dir)
+        storage_removed = True
+
+    cleanup_summary = None
+    if not req.keep_resources:
+        cleanup_summary = cleanup_blueprint_resources(
+            blueprint_ids=blueprint_ids,
+            active_blueprint_ids=set(),
+            include_dead=True,
+            include_docker=True,
+            include_files=True,
+            dry_run=req.dry_run,
+        )
+
+    model_summary = uninstall_blueprint_models(
+        req.blueprint_id,
+        keep_models=req.keep_models,
+        remove_models=req.remove_models,
+        dry_run=req.dry_run,
     )
+    return {
+        "status": "planned" if req.dry_run else "completed",
+        "blueprint_id": req.blueprint_id,
+        "storage": str(storage_dir),
+        "storage_removed": storage_removed,
+        "archive": str(archive_path) if archive_path else None,
+        "blueprint_ids": sorted(blueprint_ids),
+        "cleanup": cleanup_summary,
+        "models": model_summary,
+    }
+
+
+def optional_path(value: str | None) -> Path | None:
+    return Path(value).expanduser() if value else None
+
+
+def resolve_blueprint_storage(source: str | None) -> Path:
+    if source:
+        return Path(source).expanduser()
+    repo_root, _blueprints = load_blueprint_catalog(_current_config())
+    return repo_root
+
+
+def blueprint_ids_from_storage(storage_dir: Path) -> set[str]:
+    index_path = storage_dir / "index.json"
+    if not index_path.exists():
+        return set()
+    try:
+        entries = load_blueprint_index(index_path)
+    except Exception:
+        return set()
+    ids: set[str] = set()
+    for entry in entries:
+        blueprint_id = entry.get("id")
+        if isinstance(blueprint_id, str) and blueprint_id.strip():
+            ids.add(blueprint_id.strip())
+            continue
+        path = entry.get("path")
+        if isinstance(path, str) and path.strip():
+            manifest_path = storage_dir / path / "manifest.json"
+            if not manifest_path.exists():
+                continue
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            metadata = manifest.get("metadata") if isinstance(manifest, dict) else {}
+            manifest_blueprint_id = metadata.get("blueprint_id") if isinstance(metadata, dict) else None
+            if isinstance(manifest_blueprint_id, str) and manifest_blueprint_id.strip():
+                ids.add(manifest_blueprint_id.strip())
+    return ids
+
+
+def archive_blueprint_install(blueprint_id: str, *, storage_dir: Path, dry_run: bool) -> Path:
+    install_dir = resolve_mn_home() / "blueprint_installs"
+    record_path = install_dir / f"{blueprint_id}.json"
+    payload: dict[str, Any]
+    if record_path.is_file():
+        try:
+            payload = json.loads(record_path.read_text(encoding="utf-8"))
+        except Exception:
+            payload = {}
+    else:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    payload.setdefault("version", 1)
+    payload.setdefault("schema_version", "mn.blueprint.install.v1")
+    payload.setdefault("blueprint_id", blueprint_id)
+    payload.setdefault("storage_dir", str(storage_dir))
+    payload["archived_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    archive_dir = install_dir / "archive"
+    archive_path = archive_dir / f"{blueprint_id}-{int(time.time())}.json"
+    if dry_run:
+        return archive_path
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    archive_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    record_path.unlink(missing_ok=True)
+    return archive_path
+
+
+def uninstall_blueprint_models(
+    blueprint_id: str | None,
+    *,
+    keep_models: bool,
+    remove_models: bool,
+    dry_run: bool,
+) -> dict[str, Any]:
+    if not blueprint_id:
+        return {"orphaned": [], "removed": [], "kept": []}
+    orphaned = projected_orphaned_models(blueprint_id) if dry_run else remove_model_owner(blueprint_id)
+    removed: list[str] = []
+    kept: list[str] = []
+    if keep_models:
+        return {"orphaned": orphaned, "removed": removed, "kept": [model_name_from_record(record) for record in orphaned]}
+    for record in orphaned:
+        model = model_name_from_record(record)
+        if not model:
+            continue
+        if remove_models:
+            if not dry_run:
+                remove_model_ref(model, force=True)
+                remove_model_record(model)
+            removed.append(model)
+        else:
+            kept.append(model)
+    return {"orphaned": orphaned, "removed": removed, "kept": kept}
+
+
+def projected_orphaned_models(blueprint_id: str) -> list[dict[str, Any]]:
+    ledger = load_model_ownership()
+    orphaned: list[dict[str, Any]] = []
+    for record in ledger.get("models", {}).values():
+        if not isinstance(record, dict):
+            continue
+        owners = dict(record.get("owners") or {})
+        owners.pop(blueprint_id, None)
+        if owners or record.get("manual") or str(record.get("provider") or "docker_model_runner") != "docker_model_runner":
+            continue
+        projected = dict(record)
+        projected["owners"] = {}
+        orphaned.append(projected)
+    return orphaned
+
+
+def model_name_from_record(record: dict[str, Any]) -> str:
+    return str(record.get("docker_model") or record.get("model") or "")
 
 
 def run_blueprint_record(
@@ -634,6 +1086,7 @@ def run_blueprint_record(
             "validation": validation,
             "model_install": model_install,
             "progress_id": progress_id,
+            "progress_url": f"/api/v1/blueprints/launch/progress/{progress_id}" if progress_id else None,
             "web_ui_service": web_ui_service or None,
         }
     except Exception as exc:

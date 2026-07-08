@@ -20,6 +20,11 @@ python3.11 -m venv .venv
 .venv/bin/python -m pytest -q
 ```
 
+For OtterDesk consumer compatibility checks covering async blueprint launch,
+REST launch progress, and `WS /realtime` launch-progress events, see the
+MirrorNeuron API Compatibility Tests section in
+`../otterdesk-desktop-app/README.md`.
+
 Start the local API:
 
 ```bash
@@ -92,7 +97,7 @@ All paths below are under `/api/v1`.
 - Nodes/resources: `GET /resource`, `POST /resource`, `POST /nodes/{node_name}/reconcile`, `POST /nodes/{node_name}/drain`, `POST /nodes/{node_name}/undrain`, `POST /nodes/{node_name}/maintenance`
 - Services: `GET /services`, `GET /services/{name}/resolve`
 - Models: `GET /models`, `GET /models/catalog`, `GET /models/{model_id}`, `POST /models/{model_id}/install`, `POST /models/{model_id}/update`, `DELETE /models/{model_id}`, `GET /models/{model_id}/doctor`, `POST /models/{model_id}/benchmark`
-- Blueprints/runs/bundles: `GET /blueprints`, `POST /blueprints/{blueprint_id}/runs`, `POST /blueprints/launch/runs`, `POST /bundles/upload`, plus `/runs/{run_id}/...` artifact, UI, event, log, human-response, and observability routes.
+- Blueprints/runs/bundles: `GET /blueprints`, async `POST /blueprints/{blueprint_id}/runs`, async `POST /blueprints/launch/runs`, `GET /blueprints/launch/progress/{progress_id}`, `WS /realtime` topic `launch_progress:{progress_id}`, `POST /bundles/upload`, plus `/runs/{run_id}/...` artifact, UI, event, log, human-response, and observability routes.
 
 ## SDK Usage
 

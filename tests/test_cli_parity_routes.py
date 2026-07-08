@@ -144,6 +144,7 @@ API_COVERED_COMMANDS = {
     "blueprint stream",
     "blueprint tail",
     "blueprint uninstall",
+    "blueprint update",
     "blueprint validate",
     "deployment deploy",
     "deployment fail",
@@ -211,7 +212,6 @@ API_COVERED_COMMANDS = {
 
 
 API_UNSUPPORTED_LOCAL_COMMANDS = {
-    "blueprint update",
     "node expose",
     "node refresh-token",
     "runtime ensure-context-engine",

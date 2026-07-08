@@ -115,6 +115,7 @@ COMMAND_ENDPOINTS = {
     "blueprint stream": "/api/v1/runs/{run_id}/stream",
     "blueprint tail": "/api/v1/runs/{run_id}/events",
     "blueprint uninstall": "/api/v1/blueprints:uninstall",
+    "blueprint update": "/api/v1/blueprints:update",
     "blueprint validate": "/api/v1/blueprints/{blueprint_id}/validate",
     "deployment deploy": "/api/v1/deployments",
     "deployment fail": "/api/v1/deployments/{id_or_key}/fail",

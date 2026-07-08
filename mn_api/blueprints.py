@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -15,8 +16,10 @@ from typing import Any, Callable, Dict, Optional
 from urllib.parse import urlparse
 
 from fastapi import HTTPException
+from mn_sdk.bundle_io import load_bundle_payloads
 from mn_sdk import (
     AppError,
+    BlueprintModelOps,
     BlueprintCatalogError,
     cluster_provided_model,
     docker_cli_path_environment,
@@ -31,6 +34,8 @@ from mn_sdk import (
     make_validation_report,
     model_endpoints_json,
     model_service_tags as sdk_model_service_tags,
+    blueprint_model_dependency_summary,
+    install_model_entry,
     prepare_job_submission,
     record_model_owner,
     required_blueprint_models,
@@ -153,6 +158,41 @@ def runtime_path_environment() -> Dict[str, str]:
     env = sdk_runtime_path_environment(workspace_root=workspace_root())
     env["PATH"] = docker_cli_path_environment().get("PATH", config_value("PATH"))
     return env
+
+
+def runtime_process_environment() -> Dict[str, str]:
+    env = subprocess_environment()
+    env.update(runtime_path_environment())
+    return env
+
+
+@contextmanager
+def temporary_process_environment(env: Dict[str, str]):
+    updates = {str(key): str(value) for key, value in env.items() if value is not None}
+    previous = {key: os.environ.get(key) for key in updates}
+    os.environ.update(updates)
+    try:
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def import_mn_cli_helper(module_name: str, function_name: str):
+    try:
+        module = __import__(module_name, fromlist=[function_name])
+    except Exception:
+        package = sys.modules.get("mn_cli")
+        if package is not None and not getattr(package, "__file__", None) and not getattr(package, "__path__", None):
+            sys.modules.pop("mn_cli", None)
+        cli_path = workspace_root() / "mn-cli"
+        if cli_path.joinpath("mn_cli").is_dir() and str(cli_path) not in sys.path:
+            sys.path.insert(0, str(cli_path))
+        module = __import__(module_name, fromlist=[function_name])
+    return getattr(module, function_name)
 
 
 def ensure_runtime_modules_for_submission(
@@ -337,107 +377,32 @@ def install_blueprint_runtime_models(
         raise HTTPException(status_code=500, detail="blueprint manifest.json must be an object")
     manifest = expand_blueprint_manifest_if_source(bundle_root, manifest)
     config = load_blueprint_config(bundle_root, config_overrides=config_overrides)
-    catalog = load_model_catalog()
-    requirements = required_blueprint_models(manifest, config, catalog=catalog)
-    ledger = load_model_ownership()
-    results: list[dict[str, Any]] = []
     service_results: list[dict[str, Any]] = []
-    errors: list[str] = []
-    prepared_docker_models: dict[str, dict[str, Any]] = {}
-    endpoints: dict[str, dict[str, Any]] = {}
     blueprint_id = str(blueprint.get("id") or "")
     blueprint_revision = str(blueprint.get("revision") or "")
-    for requirement in requirements:
-        model_ref = str(requirement.get("model") or "")
-        try:
-            entry = resolve_model_entry(model_ref, catalog=catalog)
-        except KeyError:
-            message = f"{requirement.get('path')}: unknown runtime model {model_ref!r}"
-            results.append({"model": model_ref, "status": "failed", "error": message})
-            errors.append(message)
-            continue
-        provider = str(entry.get("provider") or "docker_model_runner")
-        target = docker_model_name(entry)
-        backend = str(requirement.get("backend") or entry.get("backend") or "auto")
-        base_result = {
-            "id": entry.get("id"),
-            "model": target,
-            "provider": provider,
-            "backend": backend,
-            "path": requirement.get("path"),
-        }
-        if cluster_provided_model(requirement):
-            results.append({**base_result, "status": "cluster_provided"})
-            continue
-        if provider != "docker_model_runner":
-            record_model_owner(
-                entry,
-                blueprint_id=blueprint_id,
-                blueprint_revision=blueprint_revision,
-                install_source=str(repo_root),
-                backend=backend,
-            )
-            results.append({**base_result, "status": "service_required"})
-            continue
-        endpoint = resolve_runtime_model_endpoint_for_api(requirement=requirement, entry=entry)
-        if endpoint:
-            keys = {
-                str(requirement.get("name") or "").strip(),
-                str(requirement.get("model") or "").strip(),
-                str(entry.get("id") or "").strip(),
-                target,
-                str(endpoint.get("model") or "").strip(),
-                str(endpoint.get("runtime_model") or "").strip(),
-            }
-            keys.update(str(alias or "").strip() for alias in entry.get("aliases") or [])
-            for key in keys:
-                if key:
-                    endpoints[key] = endpoint
-            results.append({**base_result, "status": endpoint.get("source") or "cluster_provided", "endpoint": endpoint})
-            continue
-        previous_result = prepared_docker_models.get(target)
-        if previous_result is not None:
-            duplicate_result = {
-                **base_result,
-                "status": previous_result.get("status", "already_installed"),
-                "duplicate_of": previous_result.get("path"),
-            }
-            if previous_result.get("error"):
-                duplicate_result["error"] = previous_result["error"]
-            results.append(duplicate_result)
-            continue
-        preexisting_record = ledger.get("models", {}).get(target)
-        try:
-            installed = docker_model_installed(target)
-        except Exception:
-            installed = False
-        if not installed:
-            command = mn_base_command() + ["model", "install", str(entry.get("id") or model_ref)]
-            if backend and backend != "auto":
-                command.extend(["--backend", backend])
-            if requirement.get("context_size"):
-                command.extend(["--context-size", str(requirement["context_size"])])
-            if force:
-                command.append("--force")
-            result = subprocess.run(command, cwd=str(bundle_root), capture_output=True, text=True, timeout=1200, check=False)
-            if result.returncode != 0:
-                message = (result.stderr or result.stdout or "model install failed").strip()
-                failed_result = {**base_result, "status": "failed", "error": message}
-                prepared_docker_models[target] = failed_result
-                results.append(failed_result)
-                errors.append(message)
-                continue
-        record_model_owner(
-            entry,
-            blueprint_id=blueprint_id,
-            blueprint_revision=blueprint_revision,
-            install_source=str(repo_root),
-            backend=backend,
-            preexisting_manual=installed and not isinstance(preexisting_record, dict),
-        )
-        ready_result = {**base_result, "status": "already_installed" if installed else "installed"}
-        prepared_docker_models[target] = ready_result
-        results.append(ready_result)
+    catalog = load_model_catalog()
+    summary = blueprint_model_dependency_summary(
+        blueprint_id=blueprint_id,
+        blueprint_revision=blueprint_revision,
+        bundle_root=bundle_root,
+        manifest=manifest,
+        config=config,
+        install_source=str(repo_root),
+        force=force,
+        ops=BlueprintModelOps(
+            load_model_catalog=lambda: catalog,
+            required_blueprint_models=required_blueprint_models,
+            load_model_ownership=load_model_ownership,
+            resolve_model_entry=resolve_model_entry,
+            docker_model_name=docker_model_name,
+            cluster_provided_model=cluster_provided_model,
+            record_model_owner=record_model_owner,
+            model_installed=docker_model_installed,
+            install_model_entry=install_model_entry,
+            resolve_model_endpoint=resolve_runtime_model_endpoint_for_api,
+        ),
+    )
+    errors = list(summary.get("errors") or [])
     if not errors and blueprint_requires_context_engine(manifest, config):
         if service_progress is not None:
             service_progress("context_engine_needed", None)
@@ -450,12 +415,14 @@ def install_blueprint_runtime_models(
         elif service_progress is not None:
             service_progress("context_engine_ready", context_result)
     env = {}
+    endpoints = summary.get("endpoints") if isinstance(summary.get("endpoints"), dict) else {}
     if endpoints:
         env["MN_MODEL_ENDPOINTS_JSON"] = model_endpoints_json(endpoints)
-    prepared_json = prepared_runtime_models_json(results)
+    models = summary.get("models") if isinstance(summary.get("models"), list) else []
+    prepared_json = prepared_runtime_models_json(models)
     if prepared_json:
         env["MN_PREPARED_RUNTIME_MODELS_JSON"] = prepared_json
-    return {"ok": not errors, "models": results, "services": service_results, "endpoints": endpoints, "env": env, "errors": errors}
+    return {"ok": not errors, "models": models, "services": service_results, "endpoints": endpoints, "env": env, "errors": errors}
 
 
 def resolve_runtime_model_endpoint_for_api(*, requirement: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any] | None:
@@ -623,10 +590,24 @@ def model_service_tags(entry: dict[str, Any]) -> list[str]:
 
 
 def ensure_context_engine_for_blueprint(bundle_root: Path, *, force: bool = False) -> dict[str, Any]:
+    direct_result = ensure_context_engine_runtime_direct(force=force)
+    if direct_result is not None:
+        return direct_result
+
     command = mn_base_command() + ["runtime", "ensure-context-engine"]
     if force:
         command.append("--force")
-    result = subprocess.run(command, cwd=str(bundle_root), capture_output=True, text=True, timeout=1200, check=False)
+    env = runtime_process_environment()
+    env.setdefault("MN_DEBUG", "1")
+    result = subprocess.run(
+        command,
+        cwd=str(bundle_root),
+        capture_output=True,
+        text=True,
+        timeout=1200,
+        check=False,
+        env=env,
+    )
     base_result: dict[str, Any] = {
         "name": "membrane-context-engine",
         "status": "ready" if result.returncode == 0 else "failed",
@@ -635,6 +616,27 @@ def ensure_context_engine_for_blueprint(bundle_root: Path, *, force: bool = Fals
     if result.returncode != 0:
         base_result["error"] = (result.stderr or result.stdout or "context engine setup failed").strip()
     return base_result
+
+
+def ensure_context_engine_runtime_direct(*, force: bool = False) -> dict[str, Any] | None:
+    try:
+        from mn_cli.server_cmds import ensure_context_engine_runtime
+    except Exception:
+        return None
+    try:
+        with temporary_process_environment(runtime_process_environment()):
+            summary = ensure_context_engine_runtime(force=force)
+    except Exception as exc:
+        return {
+            "name": "membrane-context-engine",
+            "status": "failed",
+            "error": str(exc) or "context engine setup failed",
+        }
+    return {
+        "name": "membrane-context-engine",
+        "status": "ready",
+        **({key: value for key, value in summary.items() if value is not None} if isinstance(summary, dict) else {}),
+    }
 
 
 def local_blueprint_from_path(path: str) -> tuple[Path, Dict[str, Any]]:
@@ -886,6 +888,19 @@ def load_blueprint_bundle(
     metadata["blueprint_id"] = blueprint["id"]
     metadata["blueprint_run_id"] = run_id
     metadata["run_id"] = run_id
+    mn_cli_metadata = metadata.get("mn_cli")
+    if not isinstance(mn_cli_metadata, dict):
+        mn_cli_metadata = {}
+    mn_cli_metadata.update(
+        {
+            "blueprint_id": blueprint["id"],
+            "blueprint_run_id": run_id,
+            "blueprint_source": str(repo_root),
+        }
+    )
+    if blueprint.get("revision"):
+        mn_cli_metadata["blueprint_revision"] = blueprint["revision"]
+    metadata["mn_cli"] = mn_cli_metadata
     if force:
         metadata["mn_validation"] = {
             "force": True,
@@ -908,6 +923,9 @@ def load_blueprint_bundle(
     if config is not None:
         apply_manifest_config_bindings(manifest, config)
         ensure_runtime_modules_for_submission(manifest, config)
+        prepare_skill_runtime_for_submission(manifest, config, bundle_dir=bundle_root)
+        ensure_blueprint_support_sdk_build_context_uploads_for_submission(manifest)
+        refresh_embedded_blueprint_config_for_submission(manifest, config)
         if blueprint_web_ui_enabled(config):
             inject_runtime_web_ui_service_for_submission(
                 manifest,
@@ -918,24 +936,28 @@ def load_blueprint_bundle(
                 env_overrides=env_overrides,
                 reserved_ports=web_ui_reserved_ports,
             )
+    localize_skill_dependencies_for_submission(manifest)
+    inject_skill_dependency_python_environments_for_submission(manifest)
     runtime_env = blueprint_runtime_environment(
         bundle_root,
         config=config,
         config_overrides=config_overrides,
     )
+    if skill_dependency_package_names_for_submission(manifest):
+        runtime_env = release_skill_dependency_runtime_environment_for_submission(runtime_env)
     runtime_env.update(string_env_values(env_overrides))
     runtime_env.setdefault("MN_RUN_ID", run_id)
     runtime_env["MN_RUNS_ROOT"] = runs_root
     expand_manifest_model_service_requirements(manifest, config or {}, env=runtime_env)
     if runtime_env:
         inject_node_environment(manifest, runtime_env)
+        strip_docker_model_runner_placement_requirements_for_submission(manifest)
 
-    payloads: Dict[str, bytes] = {}
-    if payloads_path.is_dir():
-        for payload_path in payloads_path.rglob("*"):
-            if payload_path.is_file():
-                payloads[payload_path.relative_to(payloads_path).as_posix()] = payload_path.read_bytes()
+    payloads = load_bundle_payloads(bundle_root)
+    stage_blueprint_payloads_for_submission(manifest, payloads, bundle_dir=bundle_root)
     payloads.update(runtime_web_ui_support_payloads_for_manifest(manifest))
+    normalize_host_local_uploads_for_submission(manifest)
+    lower_manifest_topology_for_submission(manifest)
     prepared = prepare_job_submission(
         manifest,
         payloads,
@@ -944,6 +966,123 @@ def load_blueprint_bundle(
     )
 
     return prepared.manifest_json, prepared.payloads
+
+
+def prepare_skill_runtime_for_submission(
+    manifest: dict[str, Any],
+    config: dict[str, Any],
+    *,
+    bundle_dir: Path,
+) -> dict[str, Any] | None:
+    helper = import_mn_cli_helper(
+        "mn_cli.libs.run_manifest",
+        "prepare_skill_runtime_for_manifest",
+    )
+    return helper(
+        manifest,
+        config,
+        bundle_dir=bundle_dir,
+        workspace_root=workspace_root(),
+    )
+
+
+def ensure_blueprint_support_sdk_build_context_uploads_for_submission(
+    manifest: dict[str, Any],
+) -> dict[str, Any]:
+    helper = import_mn_cli_helper(
+        "mn_cli.libs.run_manifest",
+        "ensure_blueprint_support_sdk_build_context_uploads",
+    )
+    return helper(manifest)
+
+
+def refresh_embedded_blueprint_config_for_submission(
+    manifest: dict[str, Any],
+    config: dict[str, Any],
+) -> None:
+    helper = import_mn_cli_helper(
+        "mn_cli.libs.run_manifest",
+        "refresh_embedded_blueprint_config",
+    )
+    helper(manifest, config)
+
+
+def localize_skill_dependencies_for_submission(manifest: dict[str, Any]) -> dict[str, Any]:
+    helper = import_mn_cli_helper(
+        "mn_cli.libs.run_manifest",
+        "localize_skill_dependencies_for_dev",
+    )
+    return helper(manifest)
+
+
+def inject_skill_dependency_python_environments_for_submission(
+    manifest: dict[str, Any],
+) -> dict[str, Any]:
+    helper = import_mn_cli_helper(
+        "mn_cli.libs.run_manifest",
+        "inject_skill_dependency_python_environments",
+    )
+    return helper(manifest)
+
+
+def skill_dependency_package_names_for_submission(manifest: dict[str, Any]) -> set[str]:
+    helper = import_mn_cli_helper(
+        "mn_cli.libs.run_manifest",
+        "skill_dependency_package_names",
+    )
+    return helper(manifest)
+
+
+def release_skill_dependency_runtime_environment_for_submission(
+    env: dict[str, str],
+) -> dict[str, str]:
+    helper = import_mn_cli_helper(
+        "mn_cli.libs.run_manifest",
+        "release_skill_dependency_runtime_environment",
+    )
+    return helper(env)
+
+
+def stage_blueprint_payloads_for_submission(
+    manifest: dict[str, Any],
+    payloads: dict[str, bytes],
+    *,
+    bundle_dir: Path,
+) -> None:
+    for function_name in (
+        "stage_upload_path_payloads_for_manifest",
+        "stage_blueprint_support_payloads_for_manifest",
+        "stage_skill_runtime_support_payloads_for_manifest",
+        "stage_skill_dependency_payloads_for_manifest",
+    ):
+        helper = import_mn_cli_helper("mn_cli.libs.run_manifest", function_name)
+        helper(manifest, payloads, bundle_dir=bundle_dir)
+
+
+def strip_docker_model_runner_placement_requirements_for_submission(
+    manifest: dict[str, Any],
+) -> None:
+    helper = import_mn_cli_helper(
+        "mn_cli.libs.run_manifest",
+        "strip_docker_model_runner_placement_requirements",
+    )
+    helper(manifest)
+
+
+def normalize_host_local_uploads_for_submission(manifest: dict[str, Any]) -> None:
+    helper = import_mn_cli_helper(
+        "mn_cli.libs.run_manifest",
+        "normalize_host_local_uploads",
+    )
+    helper(manifest)
+
+
+def lower_manifest_topology_for_submission(manifest: dict[str, Any]) -> None:
+    helper = import_mn_cli_helper(
+        "mn_cli.libs.run_manifest",
+        "lower_manifest_topology_for_runtime_submission",
+    )
+    helper(manifest)
 
 
 def inject_runtime_web_ui_service_for_submission(

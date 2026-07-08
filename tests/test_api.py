@@ -13,7 +13,13 @@ from mn_api.config import ApiConfig
 from mn_api import state
 from mn_api.main import app
 from mn_api.blueprints import parse_cli_field, scheduler_allocated_ports_from_jobs_payload
-from mn_api.routes.blueprints import runtime_blueprint_web_ui_reserved_ports, service_ports_from_payload
+from mn_api.routes.blueprints import (
+    run_blueprint_launch_record,
+    run_blueprint_record,
+    runtime_blueprint_web_ui_reserved_ports,
+    service_ports_from_payload,
+)
+from mn_api.schemas import BlueprintLaunchRequest, BlueprintRunRequest
 from unittest.mock import Mock, patch
 import grpc
 
@@ -34,9 +40,37 @@ class FakeStreamingResponse:
         return iter(self.lines)
 
 
+class _ResponseShim:
+    def __init__(self, response, *, status_code=None):
+        self._response = response
+        self.status_code = status_code if status_code is not None else response.status_code
+        self.headers = getattr(response, "headers", {})
+
+    def json(self):
+        if isinstance(self._response, dict):
+            return self._response
+        return json.loads(self._response.body.decode("utf-8"))
+
+
 class TestAPI(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app)
+
+    def _sync_blueprint_run(self, repo: Path, payload: dict):
+        result = run_blueprint_record(
+            repo.resolve(),
+            {"id": "worker_one", "name": "Worker One", "path": "worker_one"},
+            BlueprintRunRequest(**payload),
+        )
+        if hasattr(result, "body"):
+            return _ResponseShim(result)
+        return _ResponseShim(result, status_code=200)
+
+    def _sync_blueprint_launch(self, payload: dict):
+        result = run_blueprint_launch_record(BlueprintLaunchRequest(**payload))
+        if hasattr(result, "body"):
+            return _ResponseShim(result)
+        return _ResponseShim(result, status_code=200)
 
     def _write_blueprint_repo(self, repo: Path):
         blueprint_dir = repo / "worker_one"
@@ -731,10 +765,7 @@ class TestAPI(unittest.TestCase):
                     "MN_BLUEPRINT_WEB_UI_PORT_END": "61000",
                     "MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE": "prepublished",
                 }):
-                    response = self.client.post(
-                        "/api/v1/blueprints/worker_one/runs",
-                        json={"run_id": "run-web-ui-contract", "force": True},
-                    )
+                    response = self._sync_blueprint_run(repo, {"run_id": "run-web-ui-contract", "force": True})
                     job_record = json.loads((runs_root / "run-web-ui-contract" / "job.json").read_text())
             finally:
                 self._restore_config(original)
@@ -1866,10 +1897,7 @@ class TestAPI(unittest.TestCase):
             try:
                 with patch.dict('os.environ', {"MN_RUNS_ROOT": str(runs_root)}):
                     with patch("mn_api.routes.blueprints.validate_blueprint_hardware_requirements", return_value={"ok": True, "status": "passed", "issues": [], "errors": []}):
-                        response = self.client.post(
-                            "/api/v1/blueprints/worker_one/runs",
-                            json={"run_id": "run-new", "force": True},
-                        )
+                        response = self._sync_blueprint_run(repo, {"run_id": "run-new", "force": True})
                     cleanup_record = json.loads((stale_run / "cleanup_marker.json").read_text())
                     active_marker_exists = (active_run / "cleanup_marker.json").exists()
                     other_marker_exists = (other_run / "cleanup_marker.json").exists()
@@ -3153,10 +3181,7 @@ class TestAPI(unittest.TestCase):
                         "MN_RUNTIME_SHARED_STORAGE_ROOT": str(repo / "shared"),
                     },
                 ):
-                    response = self.client.post(
-                        "/api/v1/blueprints/worker_one/runs",
-                        json={"run_id": "run-123"},
-                    )
+                    response = self._sync_blueprint_run(repo, {"run_id": "run-123"})
                     job_mapping = json.loads((runs_root / "run-123" / "job.json").read_text())
             finally:
                 self._restore_config(original)
@@ -3170,6 +3195,9 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(manifest["run_id"], "run-123")
         self.assertEqual(manifest["metadata"]["blueprint_id"], "worker_one")
         self.assertEqual(manifest["metadata"]["blueprint_run_id"], "run-123")
+        self.assertEqual(manifest["metadata"]["mn_cli"]["blueprint_id"], "worker_one")
+        self.assertEqual(manifest["metadata"]["mn_cli"]["blueprint_run_id"], "run-123")
+        self.assertEqual(manifest["metadata"]["mn_cli"]["blueprint_source"], str(repo.resolve()))
         env = manifest["nodes"][0]["config"]["environment"]
         self.assertEqual(env["MN_RUN_ID"], "run-123")
         self.assertTrue(env["MN_RUNS_ROOT"].startswith(str(repo / "shared" / "submissions" / "run-123-")))
@@ -3193,7 +3221,7 @@ class TestAPI(unittest.TestCase):
             try:
                 with patch.dict('os.environ', {"MN_RUNS_ROOT": str(runs_root)}):
                     with patch("mn_api.routes.blueprints.validate_blueprint_hardware_requirements", return_value={"ok": True, "status": "passed", "issues": [], "errors": []}):
-                        response = self.client.post("/api/v1/blueprints/worker_one/runs", json={"force": True})
+                        response = self._sync_blueprint_run(repo, {"force": True})
                     body = response.json()
                     mapping_exists = (runs_root / body["run_id"] / "job.json").exists()
             finally:
@@ -3206,7 +3234,115 @@ class TestAPI(unittest.TestCase):
         manifest = json.loads(manifest_json)
         self.assertEqual(manifest["metadata"]["run_id"], body["run_id"])
         self.assertEqual(manifest["metadata"]["blueprint_run_id"], body["run_id"])
+        self.assertEqual(manifest["metadata"]["mn_cli"]["blueprint_run_id"], body["run_id"])
         self.assertTrue(mapping_exists)
+
+    @patch('mn_api.state.client')
+    def test_blueprint_run_stages_blueprint_relative_local_inputs_from_api_overrides(self, mock_client):
+        cases = [
+            ("catalog_relative_default", "vc_assistant/examples/sample_inputs"),
+            ("bundle_relative_override", "examples/sample_inputs"),
+        ]
+
+        for label, folder_path in cases:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as tmpdir:
+                mock_client.reset_mock()
+                mock_client.submit_job.return_value = f"job-{label}"
+                repo = Path(tmpdir)
+                runs_root = (repo / "runs").resolve()
+                self._write_blueprint_repo(repo)
+                bundle = repo / "worker_one"
+                (bundle / "manifest.json").write_text(json.dumps({
+                    "graph_id": "worker_one_graph",
+                    "nodes": [{"node_id": "worker", "config": {"environment": {}}}],
+                    "edges": [],
+                    "metadata": {},
+                }))
+                input_dir = bundle / "examples" / "sample_inputs" / "company_a"
+                input_dir.mkdir(parents=True)
+                (input_dir / "memo.txt").write_text("sample memo")
+                config_dir = bundle / "config"
+                config_dir.mkdir()
+                (config_dir / "default.json").write_text(json.dumps({
+                    "document_sources": {"folder_path": "vc_assistant/examples/sample_inputs"},
+                    "inputs": {
+                        "payload": {
+                            "document_folder": "vc_assistant/examples/sample_inputs",
+                            "input_folder": "vc_assistant/examples/sample_inputs",
+                        }
+                    },
+                    "state": {
+                        "document_folder": "vc_assistant/examples/sample_inputs",
+                        "input_folder": "vc_assistant/examples/sample_inputs",
+                    },
+                    "outputs": {"folder_path": "~/Downloads/vc_assistant"},
+                    "local_inputs": {
+                        "folders": [
+                            {
+                                "config_path": "document_sources.folder_path",
+                                "default_config_value": "vc_assistant/examples/sample_inputs",
+                                "source_path": "examples/sample_inputs",
+                                "payload_path": "document_workflow/mn_local_inputs/document_sources",
+                                "linked_config_paths": [
+                                    "inputs.payload.document_folder",
+                                    "inputs.payload.input_folder",
+                                    "state.document_folder",
+                                    "state.input_folder",
+                                ],
+                                "allowed_extensions": [".txt"],
+                            }
+                        ]
+                    },
+                }))
+                original = self._set_blueprint_config(repo)
+                try:
+                    with patch.dict(
+                        'os.environ',
+                        {
+                            "MN_RUNS_ROOT": str(runs_root),
+                            "MN_SHARED_STORAGE_ROOT": str(repo / "shared"),
+                            "MN_RUNTIME_SHARED_STORAGE_ROOT": str(repo / "shared"),
+                        },
+                    ):
+                        response = self._sync_blueprint_run(
+                            repo,
+                            {
+                                "run_id": f"run-{label}",
+                                "config_overrides": {
+                                    "document_sources": {"folder_path": folder_path},
+                                    "inputs": {
+                                        "payload": {
+                                            "document_folder": folder_path,
+                                            "input_folder": folder_path,
+                                        }
+                                    },
+                                },
+                            },
+                        )
+                finally:
+                    self._restore_config(original)
+
+                self.assertEqual(response.status_code, 200)
+                manifest_json, payloads = mock_client.submit_job.call_args.args
+                manifest = json.loads(manifest_json)
+                env = manifest["nodes"][0]["config"]["environment"]
+                injected_config = json.loads(env["MN_BLUEPRINT_CONFIG_JSON"])
+                staged_folder = injected_config["document_sources"]["folder_path"]
+                self.assertTrue(
+                    staged_folder.startswith(str(repo / "shared" / "submissions" / f"run-{label}-")),
+                    staged_folder,
+                )
+                self.assertTrue(staged_folder.endswith("/inputs/document_workflow/mn_local_inputs/document_sources"))
+                self.assertEqual(injected_config["inputs"]["payload"]["document_folder"], staged_folder)
+                self.assertEqual(injected_config["inputs"]["payload"]["input_folder"], staged_folder)
+                self.assertEqual(injected_config["state"]["document_folder"], staged_folder)
+                self.assertEqual(injected_config["state"]["input_folder"], staged_folder)
+                self.assertTrue((Path(staged_folder) / "company_a" / "memo.txt").is_file())
+                self.assertEqual(
+                    manifest["metadata"]["mn_local_inputs"]["folders"][0]["original_path"],
+                    str((bundle / "examples" / "sample_inputs").resolve()),
+                )
+                self.assertEqual(payloads, {"payload.txt": b"hello"})
 
     @patch('mn_api.state.client')
     def test_blueprint_run_starts_event_relay_for_post_launch_batch_worker(self, mock_client):
@@ -3231,10 +3367,7 @@ class TestAPI(unittest.TestCase):
                 with patch.dict('os.environ', {"MN_RUNS_ROOT": str(runs_root)}):
                     with patch('mn_api.blueprints.subprocess.Popen', side_effect=fake_popen):
                         with patch("mn_api.routes.blueprints.validate_blueprint_hardware_requirements", return_value={"ok": True, "status": "passed", "issues": [], "errors": []}):
-                            response = self.client.post(
-                                "/api/v1/blueprints/worker_one/runs",
-                                json={"run_id": "run-post-launch", "force": True},
-                            )
+                            response = self._sync_blueprint_run(repo, {"run_id": "run-post-launch", "force": True})
                         relay_info = json.loads((runs_root / "run-post-launch" / "event_relay.json").read_text())
             finally:
                 self._restore_config(original)
@@ -3283,10 +3416,7 @@ class TestAPI(unittest.TestCase):
             original = self._set_blueprint_config(repo)
             try:
                 with patch.dict('os.environ', {"MN_RUNS_ROOT": str(runs_root)}):
-                    response = self.client.post(
-                        "/api/v1/blueprints/worker_one/runs",
-                        json={"run_id": "run-local-config"},
-                    )
+                    response = self._sync_blueprint_run(repo, {"run_id": "run-local-config"})
             finally:
                 self._restore_config(original)
 
@@ -3367,10 +3497,7 @@ class TestAPI(unittest.TestCase):
             try:
                 with patch.dict('os.environ', {"MN_RUNS_ROOT": str(runs_root)}):
                     with patch('mn_api.blueprints.subprocess.Popen', side_effect=fake_popen):
-                        response = self.client.post(
-                            "/api/v1/blueprints/worker_one/runs",
-                            json={"run_id": "run-pre-launch"},
-                        )
+                        response = self._sync_blueprint_run(repo, {"run_id": "run-pre-launch"})
                         process_info = json.loads((runs_root / "run-pre-launch" / "pre_launch_process.json").read_text())
                         validation_env = (repo / "worker_one" / "validation_env.txt").read_text()
             finally:
@@ -3461,10 +3588,7 @@ class TestAPI(unittest.TestCase):
             original = self._set_blueprint_config(repo)
             try:
                 with patch("mn_api.routes.blueprints.validate_blueprint_hardware_requirements", return_value={"ok": True, "status": "passed", "issues": [], "errors": []}):
-                    response = self.client.post(
-                        "/api/v1/blueprints/launch/runs",
-                        json={"source": "catalog", "blueprint_id": "worker_one"},
-                    )
+                    response = self._sync_blueprint_launch({"source": "catalog", "blueprint_id": "worker_one"})
             finally:
                 self._restore_config(original)
 
@@ -3504,13 +3628,12 @@ class TestAPI(unittest.TestCase):
             try:
                 with patch.dict(os.environ, {"MN_LAUNCH_PROGRESS_DIR": str(repo / "progress")}):
                     with patch("mn_api.routes.blueprints.validate_blueprint_hardware_requirements", return_value={"ok": True, "status": "passed", "issues": [], "errors": []}):
-                        response = self.client.post(
-                            "/api/v1/blueprints/launch/runs",
-                            json={
+                        response = self._sync_blueprint_launch(
+                            {
                                 "source": "catalog",
                                 "blueprint_id": "worker_one",
                                 "progress_id": "launch-api-test",
-                            },
+                            }
                         )
                     progress_response = self.client.get("/api/v1/blueprints/launch/progress/launch-api-test")
             finally:
@@ -3559,16 +3682,15 @@ class TestAPI(unittest.TestCase):
                         "mn_api.routes.blueprints.validate_blueprint_hardware_requirements",
                         return_value={"ok": True, "status": "passed", "issues": [], "errors": []},
                     ), patch(
-                        "mn_api.blueprints.subprocess.run",
-                        return_value=SimpleNamespace(returncode=0, stdout="", stderr=""),
+                        "mn_api.blueprints.ensure_context_engine_runtime_direct",
+                        return_value={"name": "membrane-context-engine", "status": "ready"},
                     ):
-                        response = self.client.post(
-                            "/api/v1/blueprints/launch/runs",
-                            json={
+                        response = self._sync_blueprint_launch(
+                            {
                                 "source": "catalog",
                                 "blueprint_id": "worker_one",
                                 "progress_id": "launch-context-test",
-                            },
+                            }
                         )
                     progress_response = self.client.get("/api/v1/blueprints/launch/progress/launch-context-test")
             finally:
@@ -3613,10 +3735,7 @@ class TestAPI(unittest.TestCase):
             original = self._set_blueprint_config(repo)
             try:
                 with patch("mn_api.routes.blueprints.validate_blueprint_hardware_requirements", return_value={"ok": True, "status": "passed", "issues": [], "errors": []}):
-                    response = self.client.post(
-                        "/api/v1/blueprints/launch/runs",
-                        json={"source": "catalog", "blueprint_id": "worker_one"},
-                    )
+                    response = self._sync_blueprint_launch({"source": "catalog", "blueprint_id": "worker_one"})
             finally:
                 self._restore_config(original)
 
@@ -3639,10 +3758,7 @@ class TestAPI(unittest.TestCase):
             try:
                 with patch('mn_api.state.client') as mock_client:
                     mock_client.get_resource.return_value = json.dumps({"nodes": []})
-                    response = self.client.post(
-                        "/api/v1/blueprints/launch/runs",
-                        json={"source": "catalog", "blueprint_id": "worker_one", "force": True},
-                    )
+                    response = self._sync_blueprint_launch({"source": "catalog", "blueprint_id": "worker_one", "force": True})
             finally:
                 self._restore_config(original)
 
@@ -3668,10 +3784,7 @@ class TestAPI(unittest.TestCase):
                 "nodes": [],
                 "edges": [],
             }))
-            response = self.client.post(
-                "/api/v1/blueprints/launch/runs",
-                json={"source": "path", "path": str(bundle_dir)},
-            )
+            response = self._sync_blueprint_launch({"source": "path", "path": str(bundle_dir)})
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["job_id"], "job-path-cli")
@@ -3692,10 +3805,7 @@ class TestAPI(unittest.TestCase):
             original = self._set_blueprint_config(repo)
             try:
                 with patch("mn_api.routes.blueprints.validate_blueprint_hardware_requirements", return_value={"ok": True, "status": "passed", "issues": [], "errors": []}):
-                    response = self.client.post(
-                        "/api/v1/blueprints/launch/runs",
-                        json={"source": "catalog", "blueprint_id": "worker_one"},
-                    )
+                    response = self._sync_blueprint_launch({"source": "catalog", "blueprint_id": "worker_one"})
             finally:
                 self._restore_config(original)
 
@@ -3747,10 +3857,7 @@ class TestAPI(unittest.TestCase):
             try:
                 with patch.dict('os.environ', {"MN_RUNS_ROOT": str(runs_root)}):
                     with patch("mn_api.routes.blueprints.validate_blueprint_hardware_requirements", return_value={"ok": True, "status": "passed", "issues": [], "errors": []}):
-                        response = self.client.post(
-                            "/api/v1/blueprints/worker_one/runs",
-                            json={"run_id": "run-with-auto-model"},
-                        )
+                        response = self._sync_blueprint_run(repo, {"run_id": "run-with-auto-model"})
             finally:
                 self._restore_config(original)
 
@@ -3770,10 +3877,7 @@ class TestAPI(unittest.TestCase):
             (repo / "worker_one" / "manifest.json").write_text(json.dumps(self._hard_gpu_manifest()))
             original = self._set_blueprint_config(repo)
             try:
-                response = self.client.post(
-                    "/api/v1/blueprints/worker_one/runs",
-                    json={"run_id": "run-hard-gpu", "force": True},
-                )
+                response = self._sync_blueprint_run(repo, {"run_id": "run-hard-gpu", "force": True})
             finally:
                 self._restore_config(original)
 
@@ -3832,10 +3936,7 @@ class TestAPI(unittest.TestCase):
             original = self._set_blueprint_config(repo)
             try:
                 with patch.dict('os.environ', {"MN_RUNS_ROOT": str(runs_root)}):
-                    response = self.client.post(
-                        "/api/v1/blueprints/worker_one/runs",
-                        json={"run_id": "run-dgx-spark"},
-                    )
+                    response = self._sync_blueprint_run(repo, {"run_id": "run-dgx-spark"})
             finally:
                 self._restore_config(original)
 
@@ -3876,14 +3977,8 @@ class TestAPI(unittest.TestCase):
             original = self._set_blueprint_config(repo)
             try:
                 with patch.dict('os.environ', {"MN_RUNS_ROOT": str(repo / "runs")}):
-                    failed = self.client.post(
-                        "/api/v1/blueprints/worker_one/runs",
-                        json={"run_id": "run-validate"},
-                    )
-                    forced = self.client.post(
-                        "/api/v1/blueprints/worker_one/runs",
-                        json={"run_id": "run-force", "force": True},
-                    )
+                    failed = self._sync_blueprint_run(repo, {"run_id": "run-validate"})
+                    forced = self._sync_blueprint_run(repo, {"run_id": "run-force", "force": True})
             finally:
                 self._restore_config(original)
 
@@ -3947,10 +4042,7 @@ class TestAPI(unittest.TestCase):
             original = self._set_blueprint_config(repo)
             try:
                 with patch.dict('os.environ', {"MN_RUNS_ROOT": str(runs_root)}):
-                    response = self.client.post(
-                        "/api/v1/blueprints/worker_one/runs",
-                        json={"run_id": "run-post-cleanup"},
-                    )
+                    response = self._sync_blueprint_run(repo, {"run_id": "run-post-cleanup"})
                     cleanup_record = json.loads((runs_root / "run-post-cleanup" / "post_cleanup_seen.json").read_text())
             finally:
                 self._restore_config(original)

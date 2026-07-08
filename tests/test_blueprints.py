@@ -8,11 +8,12 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
 from fastapi import HTTPException
 
+import mn_api.blueprints as blueprints_module
 from mn_api.blueprints import (
     blueprint_requires_context_engine,
     blueprint_bundle_root,
@@ -173,9 +174,9 @@ class TestBlueprintServices(unittest.TestCase):
     @patch("mn_api.blueprints.record_model_owner")
     @patch("mn_api.blueprints.load_model_ownership")
     @patch("mn_api.blueprints.docker_model_installed")
-    @patch("mn_api.blueprints.subprocess.run")
-    def test_install_blueprint_runtime_models_passes_backend_and_context(self, mock_run, mock_installed, mock_ledger, mock_record):
-        mock_run.return_value = SimpleNamespace(returncode=0, stdout="", stderr="")
+    @patch("mn_api.blueprints.install_model_entry")
+    def test_install_blueprint_runtime_models_passes_backend_and_context(self, mock_install, mock_installed, mock_ledger, mock_record):
+        mock_install.return_value = {"compatibility": {"backend": "llama.cpp"}}
         mock_installed.return_value = False
         mock_ledger.return_value = {"version": 1, "models": {}}
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -201,30 +202,27 @@ class TestBlueprintServices(unittest.TestCase):
             summary = install_blueprint_runtime_models(repo.resolve(), {"id": "worker_one", "path": "worker_one"})
 
         self.assertTrue(summary["ok"])
-        command = mock_run.call_args.args[0]
-        self.assertIn("model", command)
-        self.assertIn("install", command)
-        self.assertIn("gemma4:e2b", command)
-        self.assertIn("--backend", command)
-        self.assertIn("llama.cpp", command)
-        self.assertIn("--context-size", command)
-        self.assertIn("2048", command)
+        mock_install.assert_called_once()
+        self.assertEqual(mock_install.call_args.args[0]["id"], "gemma4:e2b")
+        self.assertEqual(mock_install.call_args.kwargs["backend"], "llama.cpp")
+        self.assertEqual(mock_install.call_args.kwargs["context_size"], 2048)
+        self.assertFalse(mock_install.call_args.kwargs["force"])
         mock_record.assert_called_once()
 
     @patch("mn_api.blueprints.record_model_owner")
     @patch("mn_api.blueprints.load_model_catalog")
     @patch("mn_api.blueprints.load_model_ownership")
     @patch("mn_api.blueprints.docker_model_installed")
-    @patch("mn_api.blueprints.subprocess.run")
+    @patch("mn_api.blueprints.install_model_entry")
     def test_install_blueprint_runtime_models_deduplicates_same_docker_model(
         self,
-        mock_run,
+        mock_install,
         mock_installed,
         mock_ledger,
         mock_catalog,
         mock_record,
     ):
-        mock_run.return_value = SimpleNamespace(returncode=0, stdout="", stderr="")
+        mock_install.return_value = {"compatibility": {"backend": "llama.cpp"}}
         mock_installed.return_value = False
         mock_ledger.return_value = {"version": 1, "models": {}}
         mock_catalog.return_value = {
@@ -275,7 +273,7 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertEqual(summary["models"][0]["status"], "installed")
         self.assertEqual(summary["models"][1]["status"], "installed")
         self.assertEqual(summary["models"][1]["duplicate_of"], "llm.configs.primary")
-        mock_run.assert_called_once()
+        mock_install.assert_called_once()
         mock_record.assert_called_once()
 
     def test_blueprint_requires_context_engine_from_enabled_memory_layer(self):
@@ -298,9 +296,9 @@ class TestBlueprintServices(unittest.TestCase):
                 )
             )
 
-    @patch("mn_api.blueprints.subprocess.run")
-    def test_install_blueprint_runtime_models_ensures_context_engine_when_required(self, mock_run):
-        mock_run.return_value = SimpleNamespace(returncode=0, stdout="", stderr="")
+    @patch("mn_api.blueprints.ensure_context_engine_runtime_direct")
+    def test_install_blueprint_runtime_models_ensures_context_engine_when_required(self, mock_ensure):
+        mock_ensure.return_value = {"name": "membrane-context-engine", "status": "ready"}
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
             bundle = repo / "worker_one"
@@ -329,15 +327,60 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertTrue(summary["ok"])
         self.assertEqual(summary["services"][0]["name"], "membrane-context-engine")
         self.assertEqual(summary["services"][0]["status"], "ready")
-        command = mock_run.call_args.args[0]
-        self.assertEqual(command[-2:], ["runtime", "ensure-context-engine"])
+        mock_ensure.assert_called_once_with(force=False)
+
+    def test_ensure_context_engine_runtime_direct_uses_runtime_environment(self):
+        observed = {}
+        fake_package = ModuleType("mn_cli")
+        fake_package.__path__ = []
+        fake_server_cmds = ModuleType("mn_cli.server_cmds")
+
+        def fake_ensure_context_engine_runtime(*, force=False):
+            observed["force"] = force
+            observed["path"] = os.environ.get("PATH")
+            observed["pythonpath"] = os.environ.get("PYTHONPATH")
+            return {"status": "already_running"}
+
+        fake_server_cmds.ensure_context_engine_runtime = fake_ensure_context_engine_runtime
+
+        with patch.dict(
+            sys.modules,
+            {"mn_cli": fake_package, "mn_cli.server_cmds": fake_server_cmds},
+        ), patch.dict(
+            os.environ,
+            {"PATH": "/base/bin"},
+            clear=True,
+        ), patch.object(
+            blueprints_module,
+            "subprocess_environment",
+            return_value={"PATH": "/config/bin:/base/bin", "MN_API_BASE_URL": "http://api.test"},
+        ), patch.object(
+            blueprints_module,
+            "runtime_path_environment",
+            return_value={"PATH": "/runtime/bin:/config/bin:/base/bin", "PYTHONPATH": "/runtime/python"},
+        ):
+            result = blueprints_module.ensure_context_engine_runtime_direct(force=True)
+            self.assertEqual(os.environ.get("PATH"), "/base/bin")
+            self.assertNotIn("PYTHONPATH", os.environ)
+            self.assertNotIn("MN_API_BASE_URL", os.environ)
+
+        self.assertEqual(result["name"], "membrane-context-engine")
+        self.assertEqual(result["status"], "already_running")
+        self.assertEqual(
+            observed,
+            {
+                "force": True,
+                "path": "/runtime/bin:/config/bin:/base/bin",
+                "pythonpath": "/runtime/python",
+            },
+        )
 
     @patch("mn_api.blueprints.record_model_owner")
     @patch("mn_api.blueprints.load_model_ownership")
     @patch("mn_api.blueprints.docker_model_installed")
-    @patch("mn_api.blueprints.subprocess.run")
-    def test_install_blueprint_runtime_models_failure_does_not_record_owner(self, mock_run, mock_installed, mock_ledger, mock_record):
-        mock_run.return_value = SimpleNamespace(returncode=1, stdout="", stderr="pull failed")
+    @patch("mn_api.blueprints.install_model_entry")
+    def test_install_blueprint_runtime_models_failure_does_not_record_owner(self, mock_install, mock_installed, mock_ledger, mock_record):
+        mock_install.side_effect = RuntimeError("pull failed")
         mock_installed.return_value = False
         mock_ledger.return_value = {"version": 1, "models": {}}
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -364,17 +407,17 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertEqual(summary["models"][0]["status"], "failed")
         self.assertEqual(summary["models"][0]["error"], "pull failed")
         self.assertEqual(summary["errors"], ["pull failed"])
-        self.assertIn("install", mock_run.call_args.args[0])
+        mock_install.assert_called_once()
         mock_record.assert_not_called()
 
     @patch("mn_api.blueprints.record_model_owner")
     @patch("mn_api.blueprints.load_model_catalog")
     @patch("mn_api.blueprints.load_model_ownership")
     @patch("mn_api.blueprints.docker_model_installed")
-    @patch("mn_api.blueprints.subprocess.run")
+    @patch("mn_api.blueprints.install_model_entry")
     def test_install_blueprint_runtime_models_cluster_provided_skips_local_install(
         self,
-        mock_run,
+        mock_install,
         mock_installed,
         mock_ledger,
         mock_catalog,
@@ -415,17 +458,17 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertEqual(summary["models"][0]["status"], "cluster_provided")
         self.assertEqual(summary["models"][0]["model"], "hf.co/acme/video-vlm")
         mock_installed.assert_not_called()
-        mock_run.assert_not_called()
+        mock_install.assert_not_called()
         mock_record.assert_not_called()
 
     @patch("mn_api.blueprints.record_model_owner")
     @patch("mn_api.blueprints.load_model_catalog")
     @patch("mn_api.blueprints.load_model_ownership")
     @patch("mn_api.blueprints.docker_model_installed")
-    @patch("mn_api.blueprints.subprocess.run")
+    @patch("mn_api.blueprints.install_model_entry")
     def test_install_blueprint_runtime_models_uses_registered_nemotron_remote(
         self,
-        mock_run,
+        mock_install,
         mock_installed,
         mock_ledger,
         mock_catalog,
@@ -487,17 +530,17 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertEqual(endpoints["nemotron3:latest"]["api_base"], "http://192.168.4.173:12434/v1")
         self.assertEqual(endpoints["ai/nemotron3:latest"]["runtime_model"], "ai/nemotron3:latest")
         mock_installed.assert_not_called()
-        mock_run.assert_not_called()
+        mock_install.assert_not_called()
         mock_record.assert_not_called()
 
     @patch("mn_api.blueprints.record_model_owner")
     @patch("mn_api.blueprints.load_model_catalog")
     @patch("mn_api.blueprints.load_model_ownership")
     @patch("mn_api.blueprints.docker_model_installed")
-    @patch("mn_api.blueprints.subprocess.run")
+    @patch("mn_api.blueprints.install_model_entry")
     def test_install_blueprint_runtime_models_does_not_prepare_via_core_cluster_node(
         self,
-        mock_run,
+        mock_install,
         mock_installed,
         mock_ledger,
         mock_catalog,
@@ -515,9 +558,7 @@ class TestBlueprintServices(unittest.TestCase):
         }
         mock_ledger.return_value = {"version": 1, "models": {}}
         mock_installed.return_value = False
-        mock_run.return_value.returncode = 0
-        mock_run.return_value.stdout = ""
-        mock_run.return_value.stderr = ""
+        mock_install.return_value = {"compatibility": {"backend": "llama.cpp"}}
         resource_report = {
             "nodes": [
                 {
@@ -559,11 +600,7 @@ class TestBlueprintServices(unittest.TestCase):
             with patch("mn_api.state.client") as mock_client:
                 mock_client.resolve_service.return_value = json.dumps({"services": []})
                 mock_client.get_resource.return_value = json.dumps(resource_report)
-                with patch("mn_api.blueprints.subprocess.run") as mock_run:
-                    mock_run.return_value.returncode = 0
-                    mock_run.return_value.stdout = ""
-                    mock_run.return_value.stderr = ""
-                    summary = install_blueprint_runtime_models(repo.resolve(), {"id": "vc_assistant", "path": "vc_assistant"})
+                summary = install_blueprint_runtime_models(repo.resolve(), {"id": "vc_assistant", "path": "vc_assistant"})
 
         self.assertTrue(summary["ok"])
         self.assertEqual(summary["models"][0]["status"], "installed")
@@ -571,7 +608,7 @@ class TestBlueprintServices(unittest.TestCase):
         prepared = json.loads(summary["env"]["MN_PREPARED_RUNTIME_MODELS_JSON"])
         self.assertIn("ai/nemotron3:latest", prepared)
         mock_installed.assert_called_once()
-        mock_run.assert_called_once()
+        mock_install.assert_called_once()
         self.assertFalse(mock_client.prepare_runtime_model.called)
         mock_record.assert_called_once()
 

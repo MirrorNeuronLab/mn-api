@@ -10,7 +10,7 @@ from mn_api import state
 from mn_api.dependencies import enforce_request_size
 from mn_api.errors import app_error_exception_handler, http_exception_handler, unexpected_exception_handler
 from mn_sdk.errors import AppError
-from mn_api.routes import blueprints, bundles, deployments, jobs, models, runs, schedules, services, system
+from mn_api.routes import blueprints, bundles, deployments, jobs, models, realtime, runs, schedules, services, system
 
 INTERFACE_VERSION = 1
 
@@ -49,6 +49,7 @@ def create_app() -> FastAPI:
     app.include_router(deployments.router)
     app.include_router(jobs.router)
     app.include_router(models.router)
+    app.include_router(realtime.router)
     app.include_router(schedules.router)
     app.include_router(services.router)
     app.include_router(runs.router)
