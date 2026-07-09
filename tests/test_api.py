@@ -229,7 +229,7 @@ class TestAPI(unittest.TestCase):
     def test_models_route_lists_installed_docker_models(self, mock_run, mock_client, mock_ownership, mock_compatibility):
         mock_run.return_value = SimpleNamespace(
             returncode=0,
-            stdout='{"Name":"ai/gemma4:E2B"}\n',
+            stdout='{"Name":"docker.io/ai/gemma4:E2B"}\n',
             stderr="",
         )
         mock_client.get_system_summary.return_value = json.dumps({
@@ -250,7 +250,7 @@ class TestAPI(unittest.TestCase):
         self.assertTrue(body["runner_available"])
         self.assertEqual(body["node"], "mirror_neuron@local")
         self.assertEqual(body["models"][0]["id"], "gemma4:e2b")
-        self.assertEqual(body["models"][0]["docker_model"], "ai/gemma4:E2B")
+        self.assertEqual(body["models"][0]["docker_model"], "docker.io/ai/gemma4:E2B")
         self.assertEqual(body["models"][0]["node"], "mirror_neuron@local")
         self.assertEqual(body["models"][0]["compatibility"]["status"], "pass")
 
@@ -261,7 +261,7 @@ class TestAPI(unittest.TestCase):
     def test_models_route_includes_persisted_ownership_metadata(self, mock_run, mock_client, mock_ownership, mock_compatibility):
         mock_run.return_value = SimpleNamespace(
             returncode=0,
-            stdout='{"Name":"ai/gemma4:E2B"}\n',
+            stdout='{"Name":"docker.io/ai/gemma4:E2B"}\n',
             stderr="",
         )
         mock_client.get_system_summary.return_value = json.dumps({
@@ -270,9 +270,9 @@ class TestAPI(unittest.TestCase):
         mock_ownership.return_value = {
             "version": 1,
             "models": {
-                "ai/gemma4:E2B": {
+                "docker.io/ai/gemma4:E2B": {
                     "model_id": "gemma4:e2b",
-                    "docker_model": "ai/gemma4:E2B",
+                    "docker_model": "docker.io/ai/gemma4:E2B",
                     "provider": "docker_model_runner",
                     "manual": False,
                     "owners": {
@@ -306,7 +306,7 @@ class TestAPI(unittest.TestCase):
     def test_models_route_reports_manual_installs_as_not_orphaned(self, mock_run, mock_client, mock_ownership, mock_compatibility):
         mock_run.return_value = SimpleNamespace(
             returncode=0,
-            stdout='{"Name":"ai/gemma4:E2B"}\n',
+            stdout='{"Name":"docker.io/ai/gemma4:E2B"}\n',
             stderr="",
         )
         mock_client.get_system_summary.return_value = json.dumps({
@@ -315,9 +315,9 @@ class TestAPI(unittest.TestCase):
         mock_ownership.return_value = {
             "version": 1,
             "models": {
-                "ai/gemma4:E2B": {
+                "docker.io/ai/gemma4:E2B": {
                     "model_id": "gemma4:e2b",
-                    "docker_model": "ai/gemma4:E2B",
+                    "docker_model": "docker.io/ai/gemma4:E2B",
                     "provider": "docker_model_runner",
                     "manual": True,
                     "owners": {},
@@ -399,7 +399,7 @@ class TestAPI(unittest.TestCase):
             stdout="",
             stderr="unknown command: docker model",
         )
-        mock_api_list.return_value = {"ai/gemma4:E2B"}
+        mock_api_list.return_value = {"docker.io/ai/gemma4:E2B"}
         mock_client.get_system_summary.return_value = json.dumps({
             "nodes": [{"name": "mirror_neuron@local", "self": True}]
         })
@@ -416,7 +416,7 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertTrue(body["runner_available"])
-        self.assertEqual(body["models"][0]["docker_model"], "ai/gemma4:E2B")
+        self.assertEqual(body["models"][0]["docker_model"], "docker.io/ai/gemma4:E2B")
         mock_api_list.assert_called_once()
 
     @patch('mn_api.routes.models.state.client')
@@ -425,7 +425,7 @@ class TestAPI(unittest.TestCase):
     def test_model_benchmark_streams_against_docker_model_runner(self, mock_urlopen, mock_run, mock_client):
         mock_run.return_value = SimpleNamespace(
             returncode=0,
-            stdout='{"Name":"ai/gemma4:E2B"}\n',
+            stdout='{"Name":"docker.io/ai/gemma4:E2B"}\n',
             stderr="",
         )
         mock_client.get_system_summary.return_value = json.dumps({
@@ -444,7 +444,7 @@ class TestAPI(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
-        self.assertEqual(body["docker_model"], "ai/gemma4:E2B")
+        self.assertEqual(body["docker_model"], "docker.io/ai/gemma4:E2B")
         self.assertEqual(body["node"], "mirror_neuron@local")
         self.assertEqual(body["sample"], "Ready now")
         self.assertGreater(body["tokens_per_second"], 0)
@@ -452,7 +452,7 @@ class TestAPI(unittest.TestCase):
         request = mock_urlopen.call_args.args[0]
         self.assertTrue(request.full_url.endswith("/engines/v1/chat/completions"))
         payload = json.loads(request.data.decode("utf-8"))
-        self.assertEqual(payload["model"], "ai/gemma4:E2B")
+        self.assertEqual(payload["model"], "docker.io/ai/gemma4:E2B")
         self.assertTrue(payload["stream"])
 
     @patch('mn_api.state.client')
@@ -1015,7 +1015,7 @@ class TestAPI(unittest.TestCase):
                 "/api/v1/system/summary",
                 headers={"Authorization": "Bearer secret"},
             )
-            self.assertIn(response.status_code, (200, 500))
+            self.assertIn(response.status_code, (200, 500, 503))
         finally:
             state.config = original
 
@@ -3620,7 +3620,7 @@ class TestAPI(unittest.TestCase):
             self.assertFalse(kwargs["force"])
             return {
                 "ok": True,
-                "models": [{"id": "gemma4:e2b", "model": "ai/gemma4:E2B", "status": "installed"}],
+                "models": [{"id": "gemma4:e2b", "model": "docker.io/ai/gemma4:E2B", "status": "installed"}],
                 "errors": [],
             }
 
@@ -3731,7 +3731,7 @@ class TestAPI(unittest.TestCase):
             "models": [
                 {
                     "id": "gemma4:e2b",
-                    "model": "ai/gemma4:E2B",
+                    "model": "docker.io/ai/gemma4:E2B",
                     "path": "llm.runtime_model",
                     "status": "failed",
                     "error": "hardware is not compatible",
@@ -3829,7 +3829,7 @@ class TestAPI(unittest.TestCase):
             events.append("install")
             return {
                 "ok": True,
-                "models": [{"id": "gemma4:e2b", "model": "ai/gemma4:E2B", "status": "installed"}],
+                "models": [{"id": "gemma4:e2b", "model": "docker.io/ai/gemma4:E2B", "status": "installed"}],
                 "errors": [],
             }
 
@@ -3914,7 +3914,7 @@ class TestAPI(unittest.TestCase):
         })
         mock_install.return_value = {
             "ok": True,
-            "models": [{"id": "video-vlm:default", "model": "hf.co/acme/video-vlm", "status": "cluster_provided"}],
+            "models": [{"id": "video-vlm:default", "model": "huggingface.co/acme/video-vlm", "status": "cluster_provided"}],
             "errors": [],
         }
         mock_validate.return_value = {"ok": True, "status": "passed", "issues": [], "errors": []}

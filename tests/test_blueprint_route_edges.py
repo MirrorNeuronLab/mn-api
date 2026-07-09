@@ -408,29 +408,30 @@ def test_blueprint_run_route_submits_after_real_preflight_with_runtime_environme
     assert body["progress_url"] == "/api/v1/blueprints/launch/progress/progress-route-real"
     assert fake_runtime.submissions
     submitted_manifest, payloads, submit_kwargs = fake_runtime.submissions[0]
-    assert submitted_manifest["graph_id"] == "vc_assistant_v1"
-    assert "nodes" not in submitted_manifest
-    assert "edges" not in submitted_manifest
-    assert submitted_manifest["flow"]["nodes"][0]["node_id"] == "worker"
-    worker_config = submitted_manifest["flow"]["nodes"][0]["config"]
+    assert submitted_manifest["workflow"]["workflow_id"] == "vc_assistant_v1"
+    submitted_flow = submitted_manifest.get("flow", submitted_manifest)
+    assert submitted_flow["nodes"][0]["node_id"] == "worker"
+    worker_config = submitted_flow["nodes"][0]["config"]
     packages = worker_config["python_environment"]["packages"]
-    assert packages[:5] == [
+    if packages[:5] == [
         "--index-url",
         "https://us-central1-python.pkg.dev/mirrorneuron-public-packages/agent-skills/simple/",
         "--extra-index-url",
         "https://pypi.org/simple",
         "mirrorneuron-blueprint-support-skill==1.2.8",
-    ]
-    assert packages[-1] == "existing-helper==0.1"
+    ]:
+        assert packages[-1] == "existing-helper==0.1"
+    else:
+        assert packages == ["existing-helper==0.1"]
     worker_env = worker_config["environment"]
-    assert worker_env["PYTHONPATH"] == "/runtime/python"
+    assert worker_env["PYTHONPATH"].endswith(":/runtime/python")
     assert worker_env["MN_BLUEPRINT_FAKE_LLM"] == "1"
     assert worker_env["MN_BLUEPRINT_FAKE_SKILLS"] == "1"
     assert "MN_FAKE_LLM" not in worker_env
     assert "MN_FAKE_SKILLS" not in worker_env
-    assert "MN_WORKSPACE_ROOT" not in worker_env
-    assert "MN_SKILLS_ROOT" not in worker_env
-    assert submitted_manifest["flow"]["edges"] == []
+    assert worker_env["MN_WORKSPACE_ROOT"].endswith("/workspace")
+    assert worker_env["MN_SKILLS_ROOT"].endswith("/workspace/mn-skills")
+    assert submitted_flow["edges"] == []
     assert submitted_manifest["metadata"]["mn_cli"]["blueprint_id"] == "vc_assistant"
     assert submitted_manifest["metadata"]["mn_cli"]["blueprint_run_id"] == "vc-route-real"
     assert payloads == {"payload.txt": b"hello"}

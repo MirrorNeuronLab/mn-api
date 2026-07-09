@@ -3,6 +3,8 @@ import ast
 import json
 from pathlib import Path
 
+import pytest
+
 from fastapi.testclient import TestClient
 
 from mn_api import state
@@ -109,6 +111,8 @@ def test_job_backup_restore_routes_encode_bundle_bytes(monkeypatch):
 
 def test_api_and_cli_resource_paths_share_sdk_logic(monkeypatch):
     cli_root = Path(__file__).resolve().parents[2] / "mn-cli"
+    if not cli_root.is_dir():
+        pytest.skip("mn-cli sibling repository is not available")
     from mn_api.routes.system import ensure_combined_resource_totals as api_normalize
     from mn_sdk import ensure_combined_resource_totals as sdk_normalize
 
@@ -244,6 +248,8 @@ APP_GROUPS = {
 
 def _cli_command_inventory() -> set[str]:
     cli_root = Path(__file__).resolve().parents[2] / "mn-cli" / "mn_cli"
+    if not cli_root.is_dir():
+        pytest.skip("mn-cli sibling repository is not available")
     files = [cli_root / "main.py", *sorted((cli_root / "libs").glob("*.py"))]
     commands: set[str] = set()
     for path in files:

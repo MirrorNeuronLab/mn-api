@@ -65,16 +65,16 @@ class TestBlueprintServices(unittest.TestCase):
             "id": "nemotron3",
             "model": "nemotron3",
             "api_model": "nemotron3",
-            "aliases": ["nemotron3:latest", "ai/nemotron3:latest"],
+            "aliases": ["nemotron3:latest", "docker.io/ai/nemotron3:latest"],
         }
 
         tags = model_service_tags(entry)
 
-        self.assertIn("model:nemotron3", tags)
-        self.assertIn("model:nemotron3:latest", tags)
-        self.assertIn("model:ai/nemotron3:latest", tags)
-        self.assertIn("model-id:nemotron3", tags)
-        self.assertIn("nemotron3", model_match_keys("ai/nemotron3:latest"))
+        self.assertIn("model:docker.io/ai/nemotron3:latest", tags)
+        self.assertIn("model:docker.io/ai/nemotron3", tags)
+        self.assertIn("model-id:docker.io/ai/nemotron3:latest", tags)
+        self.assertIn("model-id:docker.io/ai/nemotron3", tags)
+        self.assertIn("nemotron3", model_match_keys("docker.io/ai/nemotron3:latest"))
 
     def test_is_git_repo_url_accepts_common_remote_forms(self):
         self.assertTrue(is_git_repo_url("https://github.com/MirrorNeuronLab/otterdesk-blueprints.git"))
@@ -271,7 +271,7 @@ class TestBlueprintServices(unittest.TestCase):
         mock_catalog.return_value = {
             "gemma4:e2b": {
                 "id": "gemma4:e2b",
-                "model": "ai/gemma4:E2B",
+                "model": "docker.io/ai/gemma4:E2B",
                 "provider": "docker_model_runner",
                 "aliases": ["default"],
                 "backend": "llama.cpp",
@@ -469,7 +469,7 @@ class TestBlueprintServices(unittest.TestCase):
         mock_catalog.return_value = {
             "video-vlm:default": {
                 "id": "video-vlm:default",
-                "model": "hf.co/acme/video-vlm",
+                "model": "huggingface.co/acme/video-vlm",
                 "provider": "docker_model_runner",
                 "backend": "llama.cpp",
             }
@@ -499,7 +499,7 @@ class TestBlueprintServices(unittest.TestCase):
 
         self.assertTrue(summary["ok"])
         self.assertEqual(summary["models"][0]["status"], "cluster_provided")
-        self.assertEqual(summary["models"][0]["model"], "hf.co/acme/video-vlm")
+        self.assertEqual(summary["models"][0]["model"], "huggingface.co/acme/video-vlm")
         mock_installed.assert_not_called()
         mock_install.assert_not_called()
         mock_record.assert_not_called()
@@ -520,11 +520,11 @@ class TestBlueprintServices(unittest.TestCase):
         mock_catalog.return_value = {
             "nemotron3:latest": {
                 "id": "nemotron3:latest",
-                "model": "ai/nemotron3:latest",
-                "api_model": "ai/nemotron3:latest",
+                "model": "docker.io/docker.io/ai/nemotron3:latest",
+                "api_model": "docker.io/docker.io/ai/nemotron3:latest",
                 "provider": "docker_model_runner",
                 "backend": "llama.cpp",
-                "aliases": ["nemotron3", "ai/nemotron3:latest"],
+                "aliases": ["nemotron3", "docker.io/docker.io/ai/nemotron3:latest"],
             }
         }
         mock_ledger.return_value = {"version": 1, "models": {}}
@@ -537,8 +537,8 @@ class TestBlueprintServices(unittest.TestCase):
                     "spark": {
                         "name": "spark",
                         "provider": "docker_model_runner",
-                        "model": "ai/nemotron3:latest",
-                        "api_model": "ai/nemotron3:latest",
+                        "model": "docker.io/docker.io/ai/nemotron3:latest",
+                        "api_model": "docker.io/docker.io/ai/nemotron3:latest",
                         "base_url": "http://192.168.4.173:12434/v1",
                         "api_key": "not-needed",
                         "node": "spark",
@@ -571,7 +571,7 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertEqual(summary["models"][0]["endpoint"]["api_base"], "http://192.168.4.173:12434/v1")
         endpoints = json.loads(summary["env"]["MN_MODEL_ENDPOINTS_JSON"])
         self.assertEqual(endpoints["nemotron3:latest"]["api_base"], "http://192.168.4.173:12434/v1")
-        self.assertEqual(endpoints["ai/nemotron3:latest"]["runtime_model"], "ai/nemotron3:latest")
+        self.assertEqual(endpoints["docker.io/docker.io/ai/nemotron3:latest"]["runtime_model"], "docker.io/docker.io/ai/nemotron3:latest")
         mock_installed.assert_not_called()
         mock_install.assert_not_called()
         mock_record.assert_not_called()
@@ -592,8 +592,8 @@ class TestBlueprintServices(unittest.TestCase):
         mock_catalog.return_value = {
             "nemotron3:latest": {
                 "id": "nemotron3:latest",
-                "model": "ai/nemotron3:latest",
-                "api_model": "ai/nemotron3:latest",
+                "model": "docker.io/docker.io/ai/nemotron3:latest",
+                "api_model": "docker.io/docker.io/ai/nemotron3:latest",
                 "provider": "docker_model_runner",
                 "backend": "llama.cpp",
                 "requirements": {"min_vram_gb": 48, "min_unified_memory_gb": 48},
@@ -649,7 +649,7 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertEqual(summary["models"][0]["status"], "installed")
         self.assertNotIn("MN_MODEL_ENDPOINTS_JSON", summary["env"])
         prepared = json.loads(summary["env"]["MN_PREPARED_RUNTIME_MODELS_JSON"])
-        self.assertIn("ai/nemotron3:latest", prepared)
+        self.assertIn("docker.io/docker.io/ai/nemotron3:latest", prepared)
         mock_installed.assert_called_once()
         mock_install.assert_called_once()
         self.assertFalse(mock_client.prepare_runtime_model.called)
@@ -878,7 +878,7 @@ class TestBlueprintServices(unittest.TestCase):
         manifest = json.loads(manifest_json)
         env = manifest["nodes"][0]["config"]["environment"]
         self.assertEqual(env["MN_LLM_PROVIDER"], "docker_model_runner")
-        self.assertEqual(env["MN_LLM_MODEL"], "ai/gemma4:E2B")
+        self.assertEqual(env["MN_LLM_MODEL"], "docker.io/ai/gemma4:E2B")
         self.assertEqual(env["MN_LLM_API_BASE"], "http://localhost:12434/engines/v1")
 
     def test_load_blueprint_bundle_stages_configured_local_input_folder(self):

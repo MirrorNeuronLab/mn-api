@@ -102,7 +102,7 @@ class TestExternalDependencyInjection(unittest.TestCase):
         times = iter([10.0, 10.25, 11.0])
 
         result = models._stream_chat_benchmark(
-            api_model="ai/gemma4:E2B",
+            api_model="docker.io/ai/gemma4:E2B",
             prompt="Ready?",
             max_tokens=32,
             opener=fake_opener,
@@ -117,7 +117,7 @@ class TestExternalDependencyInjection(unittest.TestCase):
         self.assertEqual(timeout, 180)
         self.assertTrue(request.full_url.endswith("/engines/v1/chat/completions"))
         payload = json.loads(request.data.decode("utf-8"))
-        self.assertEqual(payload["model"], "ai/gemma4:E2B")
+        self.assertEqual(payload["model"], "docker.io/ai/gemma4:E2B")
         self.assertEqual(payload["messages"], [{"role": "user", "content": "Ready?"}])
         self.assertTrue(payload["stream"])
 
@@ -130,11 +130,11 @@ class TestExternalDependencyInjection(unittest.TestCase):
 
         result = models._installed_model_names(
             docker_runner=fake_docker,
-            api_model_lister=lambda timeout: {"ai/gemma4:E2B"},
+            api_model_lister=lambda timeout: {"docker.io/ai/gemma4:E2B"},
         )
 
         self.assertTrue(result["available"])
-        self.assertEqual(result["models"], {"ai/gemma4:E2B"})
+        self.assertEqual(result["models"], {"docker.io/ai/gemma4:E2B"})
         self.assertEqual(result["warnings"], ["docker model unavailable"])
         self.assertEqual(
             calls,
