@@ -121,6 +121,135 @@ def test_model_benchmark_rejects_missing_or_non_docker_models(monkeypatch, api_c
     assert "does not expose" in non_docker.json()["detail"]
 
 
+def test_model_benchmark_accepts_internal_alias_when_installed_name_is_equivalent(monkeypatch, api_client):
+    captured = {}
+
+    monkeypatch.setattr(
+        "mn_api.routes.models.load_model_catalog",
+        lambda: {
+            "hf.co/homerquan/mn-context-engine-model-v-Q4_K_M": {
+                "id": "hf.co/homerquan/mn-context-engine-model-v-Q4_K_M",
+                "model": "huggingface.co/homerquan/mn-context-engine-model-v-q4_k_m:latest",
+                "aliases": ["huggingface.co/homerquan/mn-context-engine-model-v-q4_k_m"],
+                "provider": "docker_model_runner",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "mn_api.routes.models._installed_model_names",
+        lambda: {"available": True, "models": {"huggingface.co/homerquan/mn-context-engine-model-v-q4_k_m"}, "warnings": []},
+    )
+    monkeypatch.setattr(
+        "mn_api.routes.models._stream_chat_benchmark",
+        lambda **kwargs: captured.setdefault("payload", kwargs)
+        or {
+            "elapsed_ms": 1.0,
+            "first_token_ms": 0.5,
+            "generated_tokens": 3,
+            "tokens_per_second": 6.0,
+            "sample": "ok",
+            "estimated": True,
+        },
+    )
+
+    response = api_client.post(
+        "/api/v1/models/huggingface.co/homerquan/mn-context-engine-model-v-q4_k_m/benchmark",
+        json={"prompt": "hello", "max_tokens": 32},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["docker_model"] == "huggingface.co/homerquan/mn-context-engine-model-v-q4_k_m:latest"
+    assert captured["payload"]["api_model"] == "huggingface.co/homerquan/mn-context-engine-model-v-q4_k_m:latest"
+
+
+def test_model_benchmark_accepts_hf_domain_variant_when_catalog_uses_huggingface(monkeypatch, api_client):
+    captured = {}
+
+    monkeypatch.setattr(
+        "mn_api.routes.models.load_model_catalog",
+        lambda: {
+            "huggingface.co/jinaai/jina-embeddings-v5-text-small-retrieval:Q4_K_M": {
+                "id": "huggingface.co/jinaai/jina-embeddings-v5-text-small-retrieval:Q4_K_M",
+                "model": "huggingface.co/jinaai/jina-embeddings-v5-text-small-retrieval:Q4_K_M",
+                "provider": "docker_model_runner",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "mn_api.routes.models._installed_model_names",
+        lambda: {
+            "available": True,
+            "models": {"hf.co/jinaai/jina-embeddings-v5-text-small-retrieval:Q4_K_M"},
+            "warnings": [],
+        },
+    )
+    monkeypatch.setattr(
+        "mn_api.routes.models._stream_chat_benchmark",
+        lambda **kwargs: captured.setdefault("payload", kwargs)
+        or {
+            "elapsed_ms": 1.0,
+            "first_token_ms": 0.5,
+            "generated_tokens": 3,
+            "tokens_per_second": 6.0,
+            "sample": "ok",
+            "estimated": True,
+        },
+    )
+
+    response = api_client.post(
+        "/api/v1/models/hf.co/jinaai/jina-embeddings-v5-text-small-retrieval%3AQ4_K_M/benchmark",
+        json={"prompt": "hello", "max_tokens": 16},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["docker_model"] == "huggingface.co/jinaai/jina-embeddings-v5-text-small-retrieval:Q4_K_M"
+    assert captured["payload"]["api_model"] == "huggingface.co/jinaai/jina-embeddings-v5-text-small-retrieval:Q4_K_M"
+
+
+def test_model_benchmark_accepts_latest_alias_when_installed_name_is_equivalent(monkeypatch, api_client):
+    captured = {}
+
+    monkeypatch.setattr(
+        "mn_api.routes.models.load_model_catalog",
+        lambda: {
+            "hf.co/homerquan/mn-context-engine-model-v-Q4_K_M": {
+                "id": "hf.co/homerquan/mn-context-engine-model-v-Q4_K_M",
+                "model": "huggingface.co/homerquan/mn-context-engine-model-v-q4_k_m:latest",
+                "provider": "docker_model_runner",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "mn_api.routes.models._installed_model_names",
+        lambda: {
+            "available": True,
+            "models": {"huggingface.co/homerquan/mn-context-engine-model-v-q4_k_m:latest"},
+            "warnings": [],
+        },
+    )
+    monkeypatch.setattr(
+        "mn_api.routes.models._stream_chat_benchmark",
+        lambda **kwargs: captured.setdefault("payload", kwargs)
+        or {
+            "elapsed_ms": 1.0,
+            "first_token_ms": 0.5,
+            "generated_tokens": 3,
+            "tokens_per_second": 6.0,
+            "sample": "ok",
+            "estimated": True,
+        },
+    )
+
+    response = api_client.post(
+        "/api/v1/models/huggingface.co/homerquan/mn-context-engine-model-v-q4_k_m%3Alatest/benchmark",
+        json={"prompt": "hello", "max_tokens": 32},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["docker_model"] == "huggingface.co/homerquan/mn-context-engine-model-v-q4_k_m:latest"
+    assert captured["payload"]["api_model"] == "huggingface.co/homerquan/mn-context-engine-model-v-q4_k_m:latest"
+
+
 def test_bounded_int_clamps_invalid_values():
     from mn_api.routes.models import _bounded_int
 

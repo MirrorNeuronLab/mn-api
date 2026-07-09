@@ -107,3 +107,61 @@ def test_resolve_entry_or_external_matches_installed_alias(monkeypatch):
 
     assert resolved["id"] == "gemma"
     assert external["external"] is True
+
+
+def test_resolve_entry_or_external_uses_internal_normalization_for_aliases():
+    catalog = {
+        "hf.co/homerquan/mn-context-engine-model-v-Q4_K_M": {
+            "id": "hf.co/homerquan/mn-context-engine-model-v-Q4_K_M",
+            "model": "huggingface.co/homerquan/mn-context-engine-model-v-q4_k_m:latest",
+            "aliases": ["huggingface.co/homerquan/mn-context-engine-model-v-q4_k_m"],
+            "requirements": {},
+        }
+    }
+    installed_models = {"huggingface.co/homerquan/mn-context-engine-model-v-q4_k_m"}
+
+    resolved = models._resolve_entry_or_external(
+        "huggingface.co/homerquan/mn-context-engine-model-v-q4_k_m",
+        catalog=catalog,
+        installed_models=installed_models,
+    )
+
+    assert resolved["model"] == "huggingface.co/homerquan/mn-context-engine-model-v-q4_k_m:latest"
+
+
+def test_resolve_entry_or_external_uses_internal_normalization_for_aliases_with_latest():
+    catalog = {
+        "hf.co/homerquan/mn-context-engine-model-v-Q4_K_M": {
+            "id": "hf.co/homerquan/mn-context-engine-model-v-Q4_K_M",
+            "model": "huggingface.co/homerquan/mn-context-engine-model-v-q4_k_m:latest",
+            "requirements": {},
+        }
+    }
+    installed_models = {"huggingface.co/homerquan/mn-context-engine-model-v-q4_k_m"}
+
+    resolved = models._resolve_entry_or_external(
+        "huggingface.co/homerquan/mn-context-engine-model-v-q4_k_m:latest",
+        catalog=catalog,
+        installed_models=installed_models,
+    )
+
+    assert resolved["model"] == "huggingface.co/homerquan/mn-context-engine-model-v-q4_k_m:latest"
+
+
+def test_resolve_entry_or_external_normalizes_installed_hf_domain_alias():
+    catalog = {
+        "huggingface.co/jinaai/jina-embeddings-v5-text-small-retrieval:Q4_K_M": {
+            "id": "huggingface.co/jinaai/jina-embeddings-v5-text-small-retrieval:Q4_K_M",
+            "model": "huggingface.co/jinaai/jina-embeddings-v5-text-small-retrieval:Q4_K_M",
+            "provider": "docker_model_runner",
+        }
+    }
+    installed_models = {"hf.co/jinaai/jina-embeddings-v5-text-small-retrieval:Q4_K_M"}
+
+    resolved = models._resolve_entry_or_external(
+        "huggingface.co/jinaai/jina-embeddings-v5-text-small-retrieval:Q4_K_M",
+        catalog=catalog,
+        installed_models=installed_models,
+    )
+
+    assert resolved["model"] == "huggingface.co/jinaai/jina-embeddings-v5-text-small-retrieval:Q4_K_M"

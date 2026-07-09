@@ -308,8 +308,29 @@ def _resolve_entry_or_external(
     catalog: dict[str, dict[str, Any]],
     installed_models: set[str],
 ) -> dict[str, Any]:
+    installed_model_keys = {key for model in installed_models for key in docker_model_match_keys(model)}
+    requested_keys = docker_model_match_keys(model)
+
+    def entry_lookup_keys(entry: dict[str, Any]) -> set[str]:
+        candidates = {
+            str(entry.get("id") or ""),
+            str(entry.get("model") or ""),
+            str(entry.get("dmr_model") or ""),
+            str(entry.get("api_model") or ""),
+            str(entry.get("docker_model") or ""),
+            *[str(alias) for alias in entry.get("aliases") or []],
+        }
+        return {key for candidate in candidates for key in docker_model_match_keys(candidate)}
+
     try:
-        return resolve_model_entry(model, catalog=catalog)
+        entry = resolve_model_entry(model, catalog=catalog)
+        if not (docker_model_match_keys(docker_model_name(entry)) & installed_model_keys):
+            for installed_entry in merge_catalog_and_installed_models(catalog=catalog, installed_models=installed_models):
+                if not (docker_model_match_keys(docker_model_name(installed_entry)) & installed_model_keys):
+                    continue
+                if requested_keys & entry_lookup_keys(installed_entry):
+                    return installed_entry
+        return entry
     except KeyError:
         pass
 
