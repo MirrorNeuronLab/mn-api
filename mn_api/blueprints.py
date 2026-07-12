@@ -21,6 +21,10 @@ from mn_sdk import (
     AppError,
     BlueprintModelOps,
     BlueprintCatalogError,
+    Client,
+    ModelPrepareError,
+    build_prepare_runtime_model_request,
+    call_prepare_runtime_model,
     cluster_provided_model,
     docker_cli_path_environment,
     docker_model_installed,
@@ -36,16 +40,20 @@ from mn_sdk import (
     model_service_tags as sdk_model_service_tags,
     blueprint_model_dependency_summary,
     install_model_entry,
+    is_custom_model_requirement,
     prepare_job_submission,
     record_model_owner,
     required_blueprint_models,
     resolve_llm_environment,
+    resolve_custom_model_placement,
+    remote_runtime_model_endpoint,
     resolve_model_endpoint,
     resolve_model_entry,
     run_hardware_requirements_validation,
     run_input_validation,
     run_model_validation,
     run_service_validation,
+    runtime_model_prepare_timeout_seconds,
     validate_input_validation_spec_issues,
     validate_requirements_spec_issues,
     validate_resource_spec_issues,
@@ -422,6 +430,8 @@ def install_blueprint_runtime_models(
             model_installed=docker_model_installed,
             install_model_entry=install_model_entry,
             resolve_model_endpoint=resolve_runtime_model_endpoint_for_api,
+            resolve_cluster_model=resolve_runtime_cluster_model_for_api,
+            install_cluster_model=install_runtime_cluster_model_for_api,
         ),
     )
     errors = list(summary.get("errors") or [])
@@ -447,6 +457,95 @@ def install_blueprint_runtime_models(
     return {"ok": not errors, "models": models, "services": service_results, "endpoints": endpoints, "env": env, "errors": errors}
 
 
+def resolve_runtime_cluster_model_for_api(
+    *,
+    requirement: dict[str, Any],
+    entry: dict[str, Any],
+) -> dict[str, Any] | None:
+    if not is_custom_model_requirement(requirement):
+        return None
+    from mn_api import state
+
+    try:
+        system_summary = json.loads(state.client.get_system_summary())
+    except Exception as exc:
+        raise ModelPrepareError(
+            "model.custom_cluster_inspection_failed",
+            f"could not inspect cluster nodes for custom model placement: {exc}",
+            stage="placement",
+            safe_message="Could not inspect runtime nodes for custom model placement.",
+        ) from exc
+    if not isinstance(system_summary, dict):
+        raise ModelPrepareError(
+            "model.custom_cluster_inspection_failed",
+            "runtime system summary is not a JSON object",
+            stage="placement",
+            safe_message="Runtime node metadata is invalid for custom model placement.",
+        )
+    placement = resolve_custom_model_placement(
+        resource_report=runtime_resource_report(),
+        system_summary=system_summary,
+    )
+    state.logger.info(
+        "custom_model_node_selected model=%s node=%s selection=%s",
+        entry.get("model"),
+        placement.get("node"),
+        json.dumps(placement.get("selection") or {}, sort_keys=True, separators=(",", ":")),
+    )
+    return placement
+
+
+def install_runtime_cluster_model_for_api(
+    *,
+    requirement: dict[str, Any],
+    entry: dict[str, Any],
+    model: dict[str, Any],
+    cluster: dict[str, Any],
+    backend: str,
+    context_size: Any,
+    force: bool,
+) -> dict[str, Any]:
+    from mn_api import state
+
+    node = str(cluster.get("node") or "").strip()
+    native = cluster.get("native_sdk_grpc") if isinstance(cluster.get("native_sdk_grpc"), dict) else {}
+    target = str(native.get("target") or "").strip()
+    host = str(native.get("host") or "").strip()
+    port = str(native.get("port") or "").strip()
+    if not target and host and port:
+        target = f"{host}:{port}"
+    if not node or not target or not host:
+        raise RuntimeError("custom model placement returned incomplete native SDK gRPC metadata")
+
+    current_config = state.refresh_config_from_env()
+    runtime_client = Client(
+        target=target,
+        timeout=runtime_model_prepare_timeout_seconds(),
+        auth_token=getattr(current_config, "grpc_auth_token", None),
+        admin_token=getattr(current_config, "grpc_admin_token", None),
+    )
+    prepare_payload = build_prepare_runtime_model_request(
+        requirement=requirement,
+        entry=entry,
+        model=model,
+        node=node,
+        backend=backend,
+        context_size=context_size,
+        force=force,
+        source="mn-api",
+    )
+    payload = call_prepare_runtime_model(runtime_client, prepare_payload, logger=state.logger)
+    return {
+        "install": payload,
+        "endpoint": remote_runtime_model_endpoint(
+            entry=entry,
+            node=node,
+            node_host=host,
+            payload=payload,
+        ),
+    }
+
+
 def resolve_runtime_model_endpoint_for_api(*, requirement: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any] | None:
     model = str(requirement.get("model") or entry.get("id") or "").strip()
     config = requirement.get("config") if isinstance(requirement.get("config"), dict) else {}
@@ -460,6 +559,9 @@ def resolve_runtime_model_endpoint_for_api(*, requirement: dict[str, Any], entry
             remotes=load_model_remotes(),
         )
     except Exception:
+        from mn_api import state
+
+        state.logger.exception("runtime_model_endpoint_resolution_failed model=%s", model)
         return None
 
 

@@ -1318,3 +1318,111 @@ class TestBlueprintServices(unittest.TestCase):
                 if server is not None and server.poll() is None:
                     server.kill()
                     server.wait(timeout=5)
+
+
+def test_custom_model_api_selects_most_powerful_capable_node():
+    resources = {
+        "nodes": [
+            {
+                "name": "gpu-64",
+                "status": "healthy",
+                "scheduling_eligible": True,
+                "gpu_memory_total_mb": 65536,
+            },
+            {
+                "name": "gpu-128",
+                "status": "healthy",
+                "scheduling_eligible": True,
+                "gpu_memory_total_mb": 131072,
+            },
+        ]
+    }
+    systems = {
+        "nodes": [
+            {
+                "name": name,
+                "status": "healthy",
+                "scheduling_eligible": True,
+                "native_sdk_grpc": {
+                    "enabled": True,
+                    "host": f"{name}.local",
+                    "port": 55052,
+                    "target": f"{name}.local:55052",
+                    "capabilities": ["custom_hf_model_v1"],
+                },
+            }
+            for name in ("gpu-64", "gpu-128")
+        ]
+    }
+    with (
+        patch("mn_api.blueprints.runtime_resource_report", return_value=resources),
+        patch("mn_api.state.client") as client,
+    ):
+        client.get_system_summary.return_value = json.dumps(systems)
+        placement = blueprints_module.resolve_runtime_cluster_model_for_api(
+            requirement={"customize_mode": True},
+            entry={"id": "custom", "model": "huggingface.co/acme/custom:Q4_K_M"},
+        )
+
+    assert placement["node"] == "gpu-128"
+    assert placement["selection"]["gpu_memory_total_mb"] == 131072
+
+
+def test_custom_model_api_prepares_selected_remote_node():
+    runtime_client = unittest.mock.Mock()
+    runtime_client.prepare_runtime_model.return_value = json.dumps(
+        {
+            "status": "installed",
+            "docker_model": "huggingface.co/acme/custom:Q4_K_M",
+            "gateway": {"host_api_base": "http://127.0.0.1:4000/v1"},
+            "endpoint": {
+                "model": "huggingface.co/acme/custom:Q4_K_M",
+                "runtime_model": "huggingface.co/acme/custom:Q4_K_M",
+            },
+        }
+    )
+    cluster = {
+        "node": "gpu-128",
+        "native_sdk_grpc": {
+            "host": "192.168.4.128",
+            "port": 55052,
+            "target": "192.168.4.128:55052",
+        },
+    }
+    with (
+        patch("mn_api.blueprints.Client", return_value=runtime_client) as client_class,
+        patch(
+            "mn_api.state.refresh_config_from_env",
+            return_value=SimpleNamespace(grpc_auth_token="auth", grpc_admin_token="admin"),
+        ),
+    ):
+        result = blueprints_module.install_runtime_cluster_model_for_api(
+            requirement={"model": "hf.co/acme/custom:Q4_K_M"},
+            entry={
+                "id": "huggingface.co/acme/custom:Q4_K_M",
+                "model": "huggingface.co/acme/custom:Q4_K_M",
+                "api_model": "huggingface.co/acme/custom:Q4_K_M",
+                "source_model": "hf.co/acme/custom:Q4_K_M",
+                "customize_mode": True,
+            },
+            model={
+                "id": "huggingface.co/acme/custom:Q4_K_M",
+                "model": "huggingface.co/acme/custom:Q4_K_M",
+            },
+            cluster=cluster,
+            backend="llama.cpp",
+            context_size=4096,
+            force=False,
+        )
+
+        client_class.assert_called_once_with(
+            target="192.168.4.128:55052",
+            timeout=blueprints_module.runtime_model_prepare_timeout_seconds(),
+            auth_token="auth",
+            admin_token="admin",
+        )
+    payload = runtime_client.prepare_runtime_model.call_args.args[0]
+    assert payload["customize_mode"] is True
+    assert payload["source_model"] == "hf.co/acme/custom:Q4_K_M"
+    assert result["endpoint"]["api_base"] == "http://192.168.4.128:4000/v1"
+    assert result["endpoint"]["source"] == "remote-dmr"
