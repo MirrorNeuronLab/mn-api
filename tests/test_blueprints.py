@@ -14,6 +14,7 @@ from unittest.mock import patch
 from fastapi import HTTPException
 
 import mn_api.blueprints as blueprints_module
+from mn_api import state
 from mn_api.blueprints import (
     blueprint_requires_context_engine,
     blueprint_bundle_root,
@@ -793,9 +794,10 @@ class TestBlueprintServices(unittest.TestCase):
     def test_load_blueprint_bundle_prepares_submission_with_runtime_process_environment(self):
         observed = {}
 
-        def fake_prepare_job_submission(manifest, payloads, *, bundle_dir, run_id):
+        def fake_prepare_job_submission(manifest, payloads, *, bundle_dir, run_id, cluster_client=None):
             observed["path"] = os.environ.get("PATH")
             observed["docker_bin"] = os.environ.get("MN_DOCKER_BIN")
+            observed["cluster_client"] = cluster_client
             return SimpleNamespace(manifest_json=json.dumps(manifest), payloads=payloads)
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -826,6 +828,7 @@ class TestBlueprintServices(unittest.TestCase):
 
         self.assertEqual(observed["path"], "/docker/bin:/api/bin")
         self.assertEqual(observed["docker_bin"], "/docker/bin/docker")
+        self.assertIs(observed["cluster_client"], state.client)
 
     def test_load_blueprint_bundle_injects_docker_model_runner_env(self):
         with tempfile.TemporaryDirectory() as tmpdir:

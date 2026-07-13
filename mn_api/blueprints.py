@@ -928,6 +928,8 @@ def load_blueprint_bundle(
     force: bool = False,
     web_ui_reserved_ports: set[int] | None = None,
 ) -> tuple[str, Dict[str, bytes]]:
+    from mn_api import state
+
     bundle_root = validate_blueprint_bundle(repo_root, blueprint)
     manifest_path = bundle_root / "manifest.json"
     payloads_path = bundle_root / "payloads"
@@ -1024,6 +1026,7 @@ def load_blueprint_bundle(
             payloads,
             bundle_dir=bundle_root,
             run_id=run_id,
+            cluster_client=state.client,
         )
 
     return prepared.manifest_json, prepared.payloads
