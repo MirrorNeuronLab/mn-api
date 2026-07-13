@@ -102,6 +102,10 @@ from mn_sdk.runtime_modules import (
     ensure_runtime_modules_for_manifest,
     runtime_path_environment as sdk_runtime_path_environment,
 )
+from mn_sdk.skill_runtime import (
+    prepare_skill_runtime_for_manifest as sdk_prepare_skill_runtime_for_manifest,
+    stage_skill_runtime_payloads_for_manifest as sdk_stage_skill_runtime_payloads_for_manifest,
+)
 from mn_sdk.blueprint_support import (
     inject_runtime_web_ui_service,
     render_manifest_agent_templates,
@@ -1038,11 +1042,7 @@ def prepare_skill_runtime_for_submission(
     *,
     bundle_dir: Path,
 ) -> dict[str, Any] | None:
-    helper = import_mn_cli_helper(
-        "mn_cli.libs.run_manifest",
-        "prepare_skill_runtime_for_manifest",
-    )
-    return helper(
+    return sdk_prepare_skill_runtime_for_manifest(
         manifest,
         config,
         bundle_dir=bundle_dir,
@@ -1116,11 +1116,15 @@ def stage_blueprint_payloads_for_submission(
     for function_name in (
         "stage_upload_path_payloads_for_manifest",
         "stage_blueprint_support_payloads_for_manifest",
-        "stage_skill_runtime_support_payloads_for_manifest",
-        "stage_skill_dependency_payloads_for_manifest",
     ):
         helper = import_mn_cli_helper("mn_cli.libs.run_manifest", function_name)
         helper(manifest, payloads, bundle_dir=bundle_dir)
+    sdk_stage_skill_runtime_payloads_for_manifest(manifest, payloads, bundle_dir=bundle_dir)
+    helper = import_mn_cli_helper(
+        "mn_cli.libs.run_manifest",
+        "stage_skill_dependency_payloads_for_manifest",
+    )
+    helper(manifest, payloads, bundle_dir=bundle_dir)
 
 
 def strip_docker_model_runner_placement_requirements_for_submission(

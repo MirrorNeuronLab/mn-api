@@ -31,7 +31,6 @@ def stub_cli_run_manifest_helpers(monkeypatch):
         return None
 
     helpers = {
-        "prepare_skill_runtime_for_manifest": identity_manifest,
         "ensure_blueprint_support_sdk_build_context_uploads": lambda manifest: {},
         "refresh_embedded_blueprint_config": no_op,
         "localize_skill_dependencies_for_dev": identity_manifest,
@@ -40,7 +39,6 @@ def stub_cli_run_manifest_helpers(monkeypatch):
         "release_skill_dependency_runtime_environment": identity_environment,
         "stage_upload_path_payloads_for_manifest": no_op,
         "stage_blueprint_support_payloads_for_manifest": no_op,
-        "stage_skill_runtime_support_payloads_for_manifest": no_op,
         "stage_skill_dependency_payloads_for_manifest": no_op,
         "strip_docker_model_runner_placement_requirements": no_op,
         "normalize_host_local_uploads": no_op,
