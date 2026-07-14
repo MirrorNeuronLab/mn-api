@@ -106,6 +106,20 @@ from mn_sdk.skill_runtime import (
     prepare_skill_runtime_for_manifest as sdk_prepare_skill_runtime_for_manifest,
     stage_skill_runtime_payloads_for_manifest as sdk_stage_skill_runtime_payloads_for_manifest,
 )
+from mn_sdk.skill_dependencies import skill_dependency_package_names
+from mn_sdk.submission_preparation import (
+    ensure_blueprint_support_sdk_build_context_uploads,
+    inject_skill_dependency_python_environments,
+    localize_skill_dependencies_for_dev,
+    lower_manifest_topology_for_runtime_submission,
+    normalize_host_local_uploads,
+    refresh_embedded_blueprint_config,
+    release_skill_dependency_runtime_environment,
+    stage_blueprint_support_payloads_for_manifest,
+    stage_skill_dependency_payloads_for_manifest,
+    stage_upload_path_payloads_for_manifest,
+    strip_docker_model_runner_placement_requirements,
+)
 from mn_sdk.blueprint_support import (
     inject_runtime_web_ui_service,
     render_manifest_agent_templates,
@@ -213,20 +227,6 @@ def temporary_process_environment(env: Dict[str, str]):
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = value
-
-
-def import_mn_cli_helper(module_name: str, function_name: str):
-    try:
-        module = __import__(module_name, fromlist=[function_name])
-    except Exception:
-        package = sys.modules.get("mn_cli")
-        if package is not None and not getattr(package, "__file__", None) and not getattr(package, "__path__", None):
-            sys.modules.pop("mn_cli", None)
-        cli_path = workspace_root() / "mn-cli"
-        if cli_path.joinpath("mn_cli").is_dir() and str(cli_path) not in sys.path:
-            sys.path.insert(0, str(cli_path))
-        module = __import__(module_name, fromlist=[function_name])
-    return getattr(module, function_name)
 
 
 def ensure_runtime_modules_for_submission(
@@ -1053,58 +1053,34 @@ def prepare_skill_runtime_for_submission(
 def ensure_blueprint_support_sdk_build_context_uploads_for_submission(
     manifest: dict[str, Any],
 ) -> dict[str, Any]:
-    helper = import_mn_cli_helper(
-        "mn_cli.libs.run_manifest",
-        "ensure_blueprint_support_sdk_build_context_uploads",
-    )
-    return helper(manifest)
+    return ensure_blueprint_support_sdk_build_context_uploads(manifest)
 
 
 def refresh_embedded_blueprint_config_for_submission(
     manifest: dict[str, Any],
     config: dict[str, Any],
 ) -> None:
-    helper = import_mn_cli_helper(
-        "mn_cli.libs.run_manifest",
-        "refresh_embedded_blueprint_config",
-    )
-    helper(manifest, config)
+    refresh_embedded_blueprint_config(manifest, config)
 
 
 def localize_skill_dependencies_for_submission(manifest: dict[str, Any]) -> dict[str, Any]:
-    helper = import_mn_cli_helper(
-        "mn_cli.libs.run_manifest",
-        "localize_skill_dependencies_for_dev",
-    )
-    return helper(manifest)
+    return localize_skill_dependencies_for_dev(manifest)
 
 
 def inject_skill_dependency_python_environments_for_submission(
     manifest: dict[str, Any],
 ) -> dict[str, Any]:
-    helper = import_mn_cli_helper(
-        "mn_cli.libs.run_manifest",
-        "inject_skill_dependency_python_environments",
-    )
-    return helper(manifest)
+    return inject_skill_dependency_python_environments(manifest)
 
 
 def skill_dependency_package_names_for_submission(manifest: dict[str, Any]) -> set[str]:
-    helper = import_mn_cli_helper(
-        "mn_cli.libs.run_manifest",
-        "skill_dependency_package_names",
-    )
-    return helper(manifest)
+    return skill_dependency_package_names(manifest)
 
 
 def release_skill_dependency_runtime_environment_for_submission(
     env: dict[str, str],
 ) -> dict[str, str]:
-    helper = import_mn_cli_helper(
-        "mn_cli.libs.run_manifest",
-        "release_skill_dependency_runtime_environment",
-    )
-    return helper(env)
+    return release_skill_dependency_runtime_environment(env)
 
 
 def stage_blueprint_payloads_for_submission(
@@ -1113,44 +1089,24 @@ def stage_blueprint_payloads_for_submission(
     *,
     bundle_dir: Path,
 ) -> None:
-    for function_name in (
-        "stage_upload_path_payloads_for_manifest",
-        "stage_blueprint_support_payloads_for_manifest",
-    ):
-        helper = import_mn_cli_helper("mn_cli.libs.run_manifest", function_name)
-        helper(manifest, payloads, bundle_dir=bundle_dir)
+    stage_upload_path_payloads_for_manifest(manifest, payloads, bundle_dir=bundle_dir)
+    stage_blueprint_support_payloads_for_manifest(manifest, payloads, bundle_dir=bundle_dir)
     sdk_stage_skill_runtime_payloads_for_manifest(manifest, payloads, bundle_dir=bundle_dir)
-    helper = import_mn_cli_helper(
-        "mn_cli.libs.run_manifest",
-        "stage_skill_dependency_payloads_for_manifest",
-    )
-    helper(manifest, payloads, bundle_dir=bundle_dir)
+    stage_skill_dependency_payloads_for_manifest(manifest, payloads, bundle_dir=bundle_dir)
 
 
 def strip_docker_model_runner_placement_requirements_for_submission(
     manifest: dict[str, Any],
 ) -> None:
-    helper = import_mn_cli_helper(
-        "mn_cli.libs.run_manifest",
-        "strip_docker_model_runner_placement_requirements",
-    )
-    helper(manifest)
+    strip_docker_model_runner_placement_requirements(manifest)
 
 
 def normalize_host_local_uploads_for_submission(manifest: dict[str, Any]) -> None:
-    helper = import_mn_cli_helper(
-        "mn_cli.libs.run_manifest",
-        "normalize_host_local_uploads",
-    )
-    helper(manifest)
+    normalize_host_local_uploads(manifest)
 
 
 def lower_manifest_topology_for_submission(manifest: dict[str, Any]) -> None:
-    helper = import_mn_cli_helper(
-        "mn_cli.libs.run_manifest",
-        "lower_manifest_topology_for_runtime_submission",
-    )
-    helper(manifest)
+    lower_manifest_topology_for_runtime_submission(manifest)
 
 
 def inject_runtime_web_ui_service_for_submission(

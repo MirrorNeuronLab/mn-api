@@ -29,14 +29,28 @@ def test_stage_blueprint_payloads_uses_sdk_for_skill_runtime(monkeypatch, tmp_pa
         calls.append(("sdk_skill_runtime", manifest, payloads, bundle_dir))
         payloads["__mn_skill_runtime/docker_worker/Dockerfile"] = b"FROM scratch\n"
 
-    def cli_helper(_module_name, function_name):
+    def stage(function_name):
         def helper(manifest, payloads, *, bundle_dir):
             calls.append((function_name, manifest, payloads, bundle_dir))
 
         return helper
 
     monkeypatch.setattr(blueprints, "sdk_stage_skill_runtime_payloads_for_manifest", stage_skill_runtime)
-    monkeypatch.setattr(blueprints, "import_mn_cli_helper", cli_helper)
+    monkeypatch.setattr(
+        blueprints,
+        "stage_upload_path_payloads_for_manifest",
+        stage("stage_upload_path_payloads_for_manifest"),
+    )
+    monkeypatch.setattr(
+        blueprints,
+        "stage_blueprint_support_payloads_for_manifest",
+        stage("stage_blueprint_support_payloads_for_manifest"),
+    )
+    monkeypatch.setattr(
+        blueprints,
+        "stage_skill_dependency_payloads_for_manifest",
+        stage("stage_skill_dependency_payloads_for_manifest"),
+    )
     manifest = {"metadata": {}}
     payloads: dict[str, bytes] = {}
 

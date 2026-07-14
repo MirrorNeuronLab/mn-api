@@ -424,13 +424,13 @@ def test_blueprint_run_route_submits_after_real_preflight_with_runtime_environme
     else:
         assert packages == ["existing-helper==0.1"]
     worker_env = worker_config["environment"]
-    assert worker_env["PYTHONPATH"].endswith(":/runtime/python")
+    assert worker_env["PYTHONPATH"] == "/runtime/python"
     assert worker_env["MN_BLUEPRINT_FAKE_LLM"] == "1"
     assert worker_env["MN_BLUEPRINT_FAKE_SKILLS"] == "1"
     assert "MN_FAKE_LLM" not in worker_env
     assert "MN_FAKE_SKILLS" not in worker_env
-    assert worker_env["MN_WORKSPACE_ROOT"].endswith("/workspace")
-    assert worker_env["MN_SKILLS_ROOT"].endswith("/workspace/mn-skills")
+    assert "MN_WORKSPACE_ROOT" not in worker_env
+    assert "MN_SKILLS_ROOT" not in worker_env
     assert submitted_flow["edges"] == []
     assert submitted_manifest["metadata"]["mn_cli"]["blueprint_id"] == "vc_assistant"
     assert submitted_manifest["metadata"]["mn_cli"]["blueprint_run_id"] == "vc-route-real"

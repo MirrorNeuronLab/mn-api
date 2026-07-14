@@ -6,7 +6,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from mn_api import state
-from mn_api import blueprints as blueprints_module
 from mn_api.main import app
 
 
@@ -17,41 +16,6 @@ def isolated_mn_home(tmp_path, monkeypatch):
     monkeypatch.delenv("MN_HOST_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MN_RUNTIME_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MN_CONTAINER_SHARED_STORAGE_ROOT", raising=False)
-
-
-@pytest.fixture(autouse=True)
-def stub_cli_run_manifest_helpers(monkeypatch):
-    def identity_manifest(manifest, *args, **kwargs):
-        return manifest
-
-    def identity_environment(environment, *args, **kwargs):
-        return environment
-
-    def no_op(*args, **kwargs):
-        return None
-
-    helpers = {
-        "ensure_blueprint_support_sdk_build_context_uploads": lambda manifest: {},
-        "refresh_embedded_blueprint_config": no_op,
-        "localize_skill_dependencies_for_dev": identity_manifest,
-        "inject_skill_dependency_python_environments": identity_manifest,
-        "skill_dependency_package_names": lambda manifest: set(),
-        "release_skill_dependency_runtime_environment": identity_environment,
-        "stage_upload_path_payloads_for_manifest": no_op,
-        "stage_blueprint_support_payloads_for_manifest": no_op,
-        "stage_skill_dependency_payloads_for_manifest": no_op,
-        "strip_docker_model_runner_placement_requirements": no_op,
-        "normalize_host_local_uploads": no_op,
-        "lower_manifest_topology_for_runtime_submission": no_op,
-    }
-    original = blueprints_module.import_mn_cli_helper
-
-    def resolve_helper(module_name, function_name):
-        if module_name == "mn_cli.libs.run_manifest" and function_name in helpers:
-            return helpers[function_name]
-        return original(module_name, function_name)
-
-    monkeypatch.setattr(blueprints_module, "import_mn_cli_helper", resolve_helper)
 
 
 @pytest.fixture
