@@ -289,7 +289,7 @@ class TestBlueprintServices(unittest.TestCase):
                     "configs": {
                         "primary": {
                             "provider": "docker_model_runner",
-                            "model": "default",
+                            "model": "gemma4:e2b",
                         }
                     },
                     "default_config": "primary",
@@ -880,7 +880,7 @@ class TestBlueprintServices(unittest.TestCase):
 
         manifest = json.loads(manifest_json)
         env = manifest["nodes"][0]["config"]["environment"]
-        self.assertEqual(env["MN_LLM_PROVIDER"], "docker_model_runner")
+        self.assertEqual(env["MN_LLM_PROVIDER"], "litellm")
         self.assertEqual(env["MN_LLM_MODEL"], "docker.io/ai/gemma4:E2B")
         self.assertEqual(env["MN_LLM_API_BASE"], "http://localhost:12434/engines/v1")
 
