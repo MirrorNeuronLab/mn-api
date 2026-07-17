@@ -77,51 +77,63 @@ class TestAPI(unittest.TestCase):
         payloads_dir = blueprint_dir / "payloads"
         payloads_dir.mkdir(parents=True)
         (payloads_dir / "payload.txt").write_text("hello")
-        (blueprint_dir / "manifest.json").write_text(json.dumps({
-            "graph_id": "worker_one_graph",
-            "nodes": [],
-            "edges": [],
-            "metadata": {},
-            "requirements": {
-                "gpu": {
-                    "min_count": 1,
-                    "vendor": "nvidia",
-                    "driver": "cuda",
-                    "min_api_version": "12.0",
-                    "api_version_operator": ">",
-                    "min_memory_mb": 49152,
-                    "memory_operator": ">",
-                    "enforcement": "hard",
+        (blueprint_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "graph_id": "worker_one_graph",
+                    "nodes": [],
+                    "edges": [],
+                    "metadata": {},
+                    "requirements": {
+                        "gpu": {
+                            "min_count": 1,
+                            "vendor": "nvidia",
+                            "driver": "cuda",
+                            "min_api_version": "12.0",
+                            "api_version_operator": ">",
+                            "min_memory_mb": 49152,
+                            "memory_operator": ">",
+                            "enforcement": "hard",
+                        }
+                    },
                 }
-            },
-        }))
-        (repo / "index.json").write_text(json.dumps([
-            {
-                "id": "worker_one",
-                "name": "Worker One",
-                "path": "worker_one",
-                "category": "Business",
-                "description": "A test worker.",
-                "requirements": {
-                    "cpu": {
-                        "min_cores": 1,
+            )
+        )
+        (repo / "index.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "id": "worker_one",
+                        "name": "Worker One",
+                        "path": "worker_one",
+                        "category": "Business",
+                        "description": "A test worker.",
+                        "requirements": {
+                            "cpu": {
+                                "min_cores": 1,
+                            }
+                        },
+                        "product": {
+                            "one_line": "A normalized test worker.",
+                            "agent_role": "Test operator.",
+                            "target_users": "Testers",
+                            "output": "Test output",
+                            "runtime_features": ["testing"],
+                        },
                     }
-                },
-                "product": {
-                    "one_line": "A normalized test worker.",
-                    "agent_role": "Test operator.",
-                    "target_users": "Testers",
-                    "output": "Test output",
-                    "runtime_features": ["testing"],
-                },
-            }
-        ]))
-        (repo / "category.json").write_text(json.dumps({
-            "categories": [
-                {"name": "Business", "slug": "business"},
-                {"name": "Finance", "slug": "finance"},
-            ]
-        }))
+                ]
+            )
+        )
+        (repo / "category.json").write_text(
+            json.dumps(
+                {
+                    "categories": [
+                        {"name": "Business", "slug": "business"},
+                        {"name": "Finance", "slug": "finance"},
+                    ]
+                }
+            )
+        )
 
     def _hard_gpu_manifest(self):
         return {
@@ -222,26 +234,30 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.json()["endpoints"]["core_grpc"], "localhost:55051")
         self.assertIn("client", mock_collect.call_args.kwargs)
 
-    @patch('mn_api.routes.models.assess_model_compatibility')
-    @patch('mn_api.routes.models.load_model_ownership')
-    @patch('mn_api.routes.models.state.client')
-    @patch('mn_api.routes.models.subprocess.run')
-    def test_models_route_lists_installed_docker_models(self, mock_run, mock_client, mock_ownership, mock_compatibility):
+    @patch("mn_api.routes.models.assess_model_compatibility")
+    @patch("mn_api.routes.models.load_model_ownership")
+    @patch("mn_api.routes.models.state.client")
+    @patch("mn_api.routes.models.subprocess.run")
+    def test_models_route_lists_installed_docker_models(
+        self, mock_run, mock_client, mock_ownership, mock_compatibility
+    ):
         mock_run.return_value = SimpleNamespace(
             returncode=0,
             stdout='{"Name":"docker.io/ai/gemma4:E2B"}\n',
             stderr="",
         )
-        mock_client.get_system_summary.return_value = json.dumps({
-            "nodes": [{"name": "mirror_neuron@local", "self": True}]
-        })
+        mock_client.get_system_summary.return_value = json.dumps(
+            {"nodes": [{"name": "mirror_neuron@local", "self": True}]}
+        )
         mock_ownership.return_value = {"version": 1, "models": {}}
-        mock_compatibility.return_value = SimpleNamespace(to_dict=lambda: {
-            "status": "pass",
-            "ok": True,
-            "message": "ready",
-            "warnings": [],
-        })
+        mock_compatibility.return_value = SimpleNamespace(
+            to_dict=lambda: {
+                "status": "pass",
+                "ok": True,
+                "message": "ready",
+                "warnings": [],
+            }
+        )
 
         response = self.client.get("/api/v1/models")
 
@@ -254,19 +270,21 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(body["models"][0]["node"], "mirror_neuron@local")
         self.assertEqual(body["models"][0]["compatibility"]["status"], "pass")
 
-    @patch('mn_api.routes.models.assess_model_compatibility')
-    @patch('mn_api.routes.models.load_model_ownership')
-    @patch('mn_api.routes.models.state.client')
-    @patch('mn_api.routes.models.subprocess.run')
-    def test_models_route_includes_persisted_ownership_metadata(self, mock_run, mock_client, mock_ownership, mock_compatibility):
+    @patch("mn_api.routes.models.assess_model_compatibility")
+    @patch("mn_api.routes.models.load_model_ownership")
+    @patch("mn_api.routes.models.state.client")
+    @patch("mn_api.routes.models.subprocess.run")
+    def test_models_route_includes_persisted_ownership_metadata(
+        self, mock_run, mock_client, mock_ownership, mock_compatibility
+    ):
         mock_run.return_value = SimpleNamespace(
             returncode=0,
             stdout='{"Name":"docker.io/ai/gemma4:E2B"}\n',
             stderr="",
         )
-        mock_client.get_system_summary.return_value = json.dumps({
-            "nodes": [{"name": "mirror_neuron@gpu-node", "self": True}]
-        })
+        mock_client.get_system_summary.return_value = json.dumps(
+            {"nodes": [{"name": "mirror_neuron@gpu-node", "self": True}]}
+        )
         mock_ownership.return_value = {
             "version": 1,
             "models": {
@@ -282,12 +300,14 @@ class TestAPI(unittest.TestCase):
                 }
             },
         }
-        mock_compatibility.return_value = SimpleNamespace(to_dict=lambda: {
-            "status": "pass",
-            "ok": True,
-            "message": "ready",
-            "warnings": [],
-        })
+        mock_compatibility.return_value = SimpleNamespace(
+            to_dict=lambda: {
+                "status": "pass",
+                "ok": True,
+                "message": "ready",
+                "warnings": [],
+            }
+        )
 
         response = self.client.get("/api/v1/models")
 
@@ -299,19 +319,21 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(model["used_by"], ["invoice", "research"])
         self.assertFalse(model["orphaned"])
 
-    @patch('mn_api.routes.models.assess_model_compatibility')
-    @patch('mn_api.routes.models.load_model_ownership')
-    @patch('mn_api.routes.models.state.client')
-    @patch('mn_api.routes.models.subprocess.run')
-    def test_models_route_reports_manual_installs_as_not_orphaned(self, mock_run, mock_client, mock_ownership, mock_compatibility):
+    @patch("mn_api.routes.models.assess_model_compatibility")
+    @patch("mn_api.routes.models.load_model_ownership")
+    @patch("mn_api.routes.models.state.client")
+    @patch("mn_api.routes.models.subprocess.run")
+    def test_models_route_reports_manual_installs_as_not_orphaned(
+        self, mock_run, mock_client, mock_ownership, mock_compatibility
+    ):
         mock_run.return_value = SimpleNamespace(
             returncode=0,
             stdout='{"Name":"docker.io/ai/gemma4:E2B"}\n',
             stderr="",
         )
-        mock_client.get_system_summary.return_value = json.dumps({
-            "nodes": [{"name": "mirror_neuron@gpu-node", "self": True}]
-        })
+        mock_client.get_system_summary.return_value = json.dumps(
+            {"nodes": [{"name": "mirror_neuron@gpu-node", "self": True}]}
+        )
         mock_ownership.return_value = {
             "version": 1,
             "models": {
@@ -324,12 +346,14 @@ class TestAPI(unittest.TestCase):
                 }
             },
         }
-        mock_compatibility.return_value = SimpleNamespace(to_dict=lambda: {
-            "status": "pass",
-            "ok": True,
-            "message": "ready",
-            "warnings": [],
-        })
+        mock_compatibility.return_value = SimpleNamespace(
+            to_dict=lambda: {
+                "status": "pass",
+                "ok": True,
+                "message": "ready",
+                "warnings": [],
+            }
+        )
 
         response = self.client.get("/api/v1/models")
 
@@ -341,19 +365,21 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(model["used_by"], [])
         self.assertFalse(model["orphaned"])
 
-    @patch('mn_api.routes.models.assess_model_compatibility')
-    @patch('mn_api.routes.models.load_model_ownership')
-    @patch('mn_api.routes.models.state.client')
-    @patch('mn_api.routes.models.subprocess.run')
-    def test_models_route_includes_external_installed_model_from_ownership(self, mock_run, mock_client, mock_ownership, mock_compatibility):
+    @patch("mn_api.routes.models.assess_model_compatibility")
+    @patch("mn_api.routes.models.load_model_ownership")
+    @patch("mn_api.routes.models.state.client")
+    @patch("mn_api.routes.models.subprocess.run")
+    def test_models_route_includes_external_installed_model_from_ownership(
+        self, mock_run, mock_client, mock_ownership, mock_compatibility
+    ):
         mock_run.return_value = SimpleNamespace(
             returncode=0,
             stdout='{"Name":"custom/local:latest"}\n',
             stderr="",
         )
-        mock_client.get_system_summary.return_value = json.dumps({
-            "nodes": [{"name": "mirror_neuron@local", "self": True}]
-        })
+        mock_client.get_system_summary.return_value = json.dumps(
+            {"nodes": [{"name": "mirror_neuron@local", "self": True}]}
+        )
         mock_ownership.return_value = {
             "version": 1,
             "models": {
@@ -367,12 +393,14 @@ class TestAPI(unittest.TestCase):
                 }
             },
         }
-        mock_compatibility.return_value = SimpleNamespace(to_dict=lambda: {
-            "status": "unknown",
-            "ok": False,
-            "message": "external model",
-            "warnings": [],
-        })
+        mock_compatibility.return_value = SimpleNamespace(
+            to_dict=lambda: {
+                "status": "unknown",
+                "ok": False,
+                "message": "external model",
+                "warnings": [],
+            }
+        )
 
         response = self.client.get("/api/v1/models")
 
@@ -388,28 +416,32 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(model["nodes"], ["mirror_neuron@local"])
         self.assertFalse(model["orphaned"])
 
-    @patch('mn_api.routes.models.assess_model_compatibility')
-    @patch('mn_api.routes.models.load_model_ownership')
-    @patch('mn_api.routes.models.state.client')
-    @patch('mn_api.routes.models.dmr_api_list_models')
-    @patch('mn_api.routes.models.subprocess.run')
-    def test_models_route_uses_dmr_api_when_docker_model_cli_is_missing(self, mock_run, mock_api_list, mock_client, mock_ownership, mock_compatibility):
+    @patch("mn_api.routes.models.assess_model_compatibility")
+    @patch("mn_api.routes.models.load_model_ownership")
+    @patch("mn_api.routes.models.state.client")
+    @patch("mn_api.routes.models.dmr_api_list_models")
+    @patch("mn_api.routes.models.subprocess.run")
+    def test_models_route_uses_dmr_api_when_docker_model_cli_is_missing(
+        self, mock_run, mock_api_list, mock_client, mock_ownership, mock_compatibility
+    ):
         mock_run.return_value = SimpleNamespace(
             returncode=1,
             stdout="",
             stderr="unknown command: docker model",
         )
         mock_api_list.return_value = {"docker.io/ai/gemma4:E2B"}
-        mock_client.get_system_summary.return_value = json.dumps({
-            "nodes": [{"name": "mirror_neuron@local", "self": True}]
-        })
+        mock_client.get_system_summary.return_value = json.dumps(
+            {"nodes": [{"name": "mirror_neuron@local", "self": True}]}
+        )
         mock_ownership.return_value = {"version": 1, "models": {}}
-        mock_compatibility.return_value = SimpleNamespace(to_dict=lambda: {
-            "status": "pass",
-            "ok": True,
-            "message": "ready",
-            "warnings": [],
-        })
+        mock_compatibility.return_value = SimpleNamespace(
+            to_dict=lambda: {
+                "status": "pass",
+                "ok": True,
+                "message": "ready",
+                "warnings": [],
+            }
+        )
 
         response = self.client.get("/api/v1/models")
 
@@ -419,23 +451,25 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(body["models"][0]["docker_model"], "docker.io/ai/gemma4:E2B")
         mock_api_list.assert_called_once()
 
-    @patch('mn_api.routes.models.state.client')
-    @patch('mn_api.routes.models.subprocess.run')
-    @patch('mn_api.routes.models.urllib.request.urlopen')
+    @patch("mn_api.routes.models.state.client")
+    @patch("mn_api.routes.models.subprocess.run")
+    @patch("mn_api.routes.models.urllib.request.urlopen")
     def test_model_benchmark_streams_against_docker_model_runner(self, mock_urlopen, mock_run, mock_client):
         mock_run.return_value = SimpleNamespace(
             returncode=0,
             stdout='{"Name":"docker.io/ai/gemma4:E2B"}\n',
             stderr="",
         )
-        mock_client.get_system_summary.return_value = json.dumps({
-            "nodes": [{"name": "mirror_neuron@local", "self": True}]
-        })
-        mock_urlopen.return_value = FakeStreamingResponse([
-            b'data: {"choices":[{"delta":{"content":"Ready"}}]}\n\n',
-            b'data: {"choices":[{"delta":{"content":" now"}}]}\n\n',
-            b'data: [DONE]\n\n',
-        ])
+        mock_client.get_system_summary.return_value = json.dumps(
+            {"nodes": [{"name": "mirror_neuron@local", "self": True}]}
+        )
+        mock_urlopen.return_value = FakeStreamingResponse(
+            [
+                b'data: {"choices":[{"delta":{"content":"Ready"}}]}\n\n',
+                b'data: {"choices":[{"delta":{"content":" now"}}]}\n\n',
+                b"data: [DONE]\n\n",
+            ]
+        )
 
         response = self.client.post(
             "/api/v1/models/gemma4%3Ae2b/benchmark",
@@ -455,7 +489,7 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(payload["model"], "docker.io/ai/gemma4:E2B")
         self.assertTrue(payload["stream"])
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_service_routes_proxy_runtime_registry(self, mock_client):
         mock_client.list_services.return_value = json.dumps({"services": [{"name": "blueprint-web-ui"}]})
         mock_client.resolve_service.return_value = json.dumps({"services": [{"name": "blueprint-web-ui"}]})
@@ -486,34 +520,36 @@ class TestAPI(unittest.TestCase):
             passing_only=False,
         )
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_run_ui_falls_back_to_registered_web_ui_service(self, mock_client):
         with tempfile.TemporaryDirectory() as tmpdir:
             runs_root = Path(tmpdir)
             run_dir = runs_root / "run-with-service-ui"
             run_dir.mkdir()
             (run_dir / "job.json").write_text(json.dumps({"job_id": "job-service-ui"}))
-            mock_client.resolve_service.return_value = json.dumps({
-                "services": [
-                    {
-                        "id": "job-service-ui:web_ui_dashboard:blueprint-web-ui",
-                        "name": "blueprint-web-ui",
-                        "job_id": "job-service-ui",
-                        "status": "warning",
-                        "address": "127.0.0.1",
-                        "port": 58101,
-                        "meta": {
-                            "run_id": "run-with-service-ui",
-                            "blueprint_id": "video_watch_assistant",
-                            "title": "Video Dashboard",
-                            "adapter": "gradio",
-                            "url": "http://localhost:58101",
-                            "browser_video_source": "http://127.0.0.1:8889/video-watch/",
-                            "run_ui_path": str(run_dir / "ui.json"),
-                        },
-                    }
-                ]
-            })
+            mock_client.resolve_service.return_value = json.dumps(
+                {
+                    "services": [
+                        {
+                            "id": "job-service-ui:web_ui_dashboard:blueprint-web-ui",
+                            "name": "blueprint-web-ui",
+                            "job_id": "job-service-ui",
+                            "status": "warning",
+                            "address": "127.0.0.1",
+                            "port": 58101,
+                            "meta": {
+                                "run_id": "run-with-service-ui",
+                                "blueprint_id": "video_watch_assistant",
+                                "title": "Video Dashboard",
+                                "adapter": "gradio",
+                                "url": "http://localhost:58101",
+                                "browser_video_source": "http://127.0.0.1:8889/video-watch/",
+                                "run_ui_path": str(run_dir / "ui.json"),
+                            },
+                        }
+                    ]
+                }
+            )
 
             with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
                 response = self.client.get("/api/v1/runs/run-with-service-ui/ui")
@@ -530,29 +566,33 @@ class TestAPI(unittest.TestCase):
             passing_only=False,
         )
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_run_ui_falls_back_to_persisted_web_ui_service_contract(self, mock_client):
         with tempfile.TemporaryDirectory() as tmpdir:
             runs_root = Path(tmpdir)
             run_dir = runs_root / "run-with-persisted-ui"
             run_dir.mkdir()
-            (run_dir / "job.json").write_text(json.dumps({
-                "job_id": "job-persisted-ui",
-                "run_id": "run-with-persisted-ui",
-                "web_ui_service": {
-                    "node_id": "web_ui_dashboard",
-                    "service_name": "blueprint-web-ui",
-                    "run_id": "run-with-persisted-ui",
-                    "blueprint_id": "video_watch_assistant",
-                    "title": "Video Dashboard",
-                    "adapter": "gradio",
-                    "url": "http://localhost:61000",
-                    "host": "127.0.0.1",
-                    "address": "127.0.0.1",
-                    "port": 61000,
-                    "browser_video_source": "http://127.0.0.1:8889/video-watch/",
-                },
-            }))
+            (run_dir / "job.json").write_text(
+                json.dumps(
+                    {
+                        "job_id": "job-persisted-ui",
+                        "run_id": "run-with-persisted-ui",
+                        "web_ui_service": {
+                            "node_id": "web_ui_dashboard",
+                            "service_name": "blueprint-web-ui",
+                            "run_id": "run-with-persisted-ui",
+                            "blueprint_id": "video_watch_assistant",
+                            "title": "Video Dashboard",
+                            "adapter": "gradio",
+                            "url": "http://localhost:61000",
+                            "host": "127.0.0.1",
+                            "address": "127.0.0.1",
+                            "port": 61000,
+                            "browser_video_source": "http://127.0.0.1:8889/video-watch/",
+                        },
+                    }
+                )
+            )
             mock_client.resolve_service.side_effect = RuntimeError("gRPC auth token is required for this RPC")
 
             with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
@@ -567,33 +607,41 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(body["ui"]["metadata"]["registered_by"], "blueprint_job_mapping")
         self.assertEqual(body["ui"]["components"][0]["browser_source"], "http://127.0.0.1:8889/video-watch/")
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_run_ui_falls_back_to_event_relay_web_ui_service_contract(self, mock_client):
         with tempfile.TemporaryDirectory() as tmpdir:
             runs_root = Path(tmpdir)
             run_dir = runs_root / "run-with-relay-ui"
             run_dir.mkdir()
-            (run_dir / "job.json").write_text(json.dumps({
-                "job_id": "job-relay-ui",
-                "run_id": "run-with-relay-ui",
-            }))
-            (run_dir / "event_relay.json").write_text(json.dumps({
-                "job_id": "job-relay-ui",
-                "run_id": "run-with-relay-ui",
-                "service": {
-                    "node_id": "web_ui_dashboard",
-                    "service_name": "blueprint-web-ui",
-                    "run_id": "run-with-relay-ui",
-                    "blueprint_id": "video_watch_assistant",
-                    "title": "Video Dashboard",
-                    "adapter": "gradio",
-                    "url": "http://localhost:61000",
-                    "host": "0.0.0.0",
-                    "address": "127.0.0.1",
-                    "port": 61000,
-                    "browser_video_source": "http://127.0.0.1:8889/video-watch/",
-                },
-            }))
+            (run_dir / "job.json").write_text(
+                json.dumps(
+                    {
+                        "job_id": "job-relay-ui",
+                        "run_id": "run-with-relay-ui",
+                    }
+                )
+            )
+            (run_dir / "event_relay.json").write_text(
+                json.dumps(
+                    {
+                        "job_id": "job-relay-ui",
+                        "run_id": "run-with-relay-ui",
+                        "service": {
+                            "node_id": "web_ui_dashboard",
+                            "service_name": "blueprint-web-ui",
+                            "run_id": "run-with-relay-ui",
+                            "blueprint_id": "video_watch_assistant",
+                            "title": "Video Dashboard",
+                            "adapter": "gradio",
+                            "url": "http://localhost:61000",
+                            "host": "0.0.0.0",
+                            "address": "127.0.0.1",
+                            "port": 61000,
+                            "browser_video_source": "http://127.0.0.1:8889/video-watch/",
+                        },
+                    }
+                )
+            )
             mock_client.resolve_service.side_effect = RuntimeError("gRPC auth token is required for this RPC")
 
             with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
@@ -649,7 +697,12 @@ class TestAPI(unittest.TestCase):
                     "services": [
                         {"job_id": "missing-job", "status": "passing", "port": 61000},
                         {"job_id": "critical-job", "status": "critical", "port": 61001},
-                        {"job_id": "failed-health-job", "status": "warning", "health": {"status": "critical"}, "port": 61002},
+                        {
+                            "job_id": "failed-health-job",
+                            "status": "warning",
+                            "health": {"status": "critical"},
+                            "port": 61002,
+                        },
                         {"job_id": "unknown-status-job", "port": 61003},
                     ]
                 },
@@ -686,9 +739,7 @@ class TestAPI(unittest.TestCase):
 
     @patch("mn_api.state.client")
     def test_runtime_blueprint_web_ui_reserved_ports_falls_back_to_job_placements(self, mock_client):
-        mock_client.list_jobs.return_value = json.dumps(
-            {"data": [{"job_id": "active-job", "status": "running"}]}
-        )
+        mock_client.list_jobs.return_value = json.dumps({"data": [{"job_id": "active-job", "status": "running"}]})
         mock_client.get_job.return_value = json.dumps(
             {
                 "job": {
@@ -698,9 +749,7 @@ class TestAPI(unittest.TestCase):
                         "placements": [
                             {
                                 "agent_id": "web_ui_dashboard",
-                                "allocations": {
-                                    "ports": [{"label": "web_ui", "port": 61000, "protocol": "http"}]
-                                },
+                                "allocations": {"ports": [{"label": "web_ui", "port": 61000, "protocol": "http"}]},
                             }
                         ]
                     },
@@ -715,17 +764,19 @@ class TestAPI(unittest.TestCase):
     @patch("mn_api.state.client")
     def test_runtime_blueprint_web_ui_reserved_ports_uses_live_registry_when_jobs_are_missing(self, mock_client):
         mock_client.list_jobs.return_value = json.dumps({"data": []})
-        mock_client.resolve_service.return_value = json.dumps({
-            "services": [
-                {"job_id": "registry-live-job", "status": "passing", "port": 61000},
-                {"job_id": "registry-stale-job", "status": "critical", "port": 61001},
-            ]
-        })
+        mock_client.resolve_service.return_value = json.dumps(
+            {
+                "services": [
+                    {"job_id": "registry-live-job", "status": "passing", "port": 61000},
+                    {"job_id": "registry-stale-job", "status": "critical", "port": 61001},
+                ]
+            }
+        )
 
         self.assertEqual(runtime_blueprint_web_ui_reserved_ports(), {61000})
         mock_client.get_job.assert_not_called()
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_blueprint_run_persists_runtime_web_ui_service_contract(self, mock_client):
         mock_client.list_jobs.return_value = json.dumps({"data": []})
         mock_client.resolve_service.return_value = json.dumps({"services": []})
@@ -734,37 +785,48 @@ class TestAPI(unittest.TestCase):
             repo = Path(tmpdir)
             runs_root = repo / "runs"
             self._write_blueprint_repo(repo)
-            (repo / "worker_one" / "manifest.json").write_text(json.dumps({
-                "graph_id": "worker_one_graph",
-                "type": "service",
-                "nodes": [],
-                "edges": [],
-                "metadata": {},
-            }))
+            (repo / "worker_one" / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "graph_id": "worker_one_graph",
+                        "type": "service",
+                        "nodes": [],
+                        "edges": [],
+                        "metadata": {},
+                    }
+                )
+            )
             config_dir = repo / "worker_one" / "config"
             config_dir.mkdir()
-            (config_dir / "default.json").write_text(json.dumps({
-                "identity": {"blueprint_id": "worker_one", "name": "Worker One"},
-                "web_ui": {
-                    "enabled": True,
-                    "dashboard": {
-                        "browser_video_source": "http://127.0.0.1:8889/video-watch/",
-                    },
-                    "output": {
-                        "adapter": "gradio",
-                        "auto_generate": True,
-                        "title": "Worker One Dashboard",
-                    },
-                },
-            }))
+            (config_dir / "default.json").write_text(
+                json.dumps(
+                    {
+                        "identity": {"blueprint_id": "worker_one", "name": "Worker One"},
+                        "web_ui": {
+                            "enabled": True,
+                            "dashboard": {
+                                "browser_video_source": "http://127.0.0.1:8889/video-watch/",
+                            },
+                            "output": {
+                                "adapter": "gradio",
+                                "auto_generate": True,
+                                "title": "Worker One Dashboard",
+                            },
+                        },
+                    }
+                )
+            )
             original = self._set_blueprint_config(repo)
             try:
-                with patch.dict(os.environ, {
-                    "MN_RUNS_ROOT": str(runs_root),
-                    "MN_BLUEPRINT_WEB_UI_PORT_START": "61000",
-                    "MN_BLUEPRINT_WEB_UI_PORT_END": "61000",
-                    "MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE": "prepublished",
-                }):
+                with patch.dict(
+                    os.environ,
+                    {
+                        "MN_RUNS_ROOT": str(runs_root),
+                        "MN_BLUEPRINT_WEB_UI_PORT_START": "61000",
+                        "MN_BLUEPRINT_WEB_UI_PORT_END": "61000",
+                        "MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE": "prepublished",
+                    },
+                ):
                     response = self._sync_blueprint_run(repo, {"run_id": "run-web-ui-contract", "force": True})
                     job_record = json.loads((runs_root / "run-web-ui-contract" / "job.json").read_text())
             finally:
@@ -877,8 +939,7 @@ class TestAPI(unittest.TestCase):
             token_dir = Path(tmp) / ".mn"
             token_dir.mkdir()
             (token_dir / "docker-compose.env").write_text(
-                "MN_GRPC_AUTH_TOKEN=stale-auth-from-state\n"
-                "MN_GRPC_ADMIN_TOKEN=stale-admin-from-state\n"
+                "MN_GRPC_AUTH_TOKEN=stale-auth-from-state\nMN_GRPC_ADMIN_TOKEN=stale-admin-from-state\n"
             )
             (token_dir / "grpc_auth.token").write_text("auth-from-file\n")
             (token_dir / "grpc_admin.token").write_text("admin-from-file\n")
@@ -984,11 +1045,9 @@ class TestAPI(unittest.TestCase):
 
                 def fake_refresh_config_from_env():
                     refreshed = refreshed_config["value"]
-                    if (
-                        state._client is not None
-                        and state._grpc_client_settings(refreshed)
-                        != state._grpc_client_settings(state.config)
-                    ):
+                    if state._client is not None and state._grpc_client_settings(
+                        refreshed
+                    ) != state._grpc_client_settings(state.config):
                         state.close_client()
                     state.config = refreshed
                     return state.config
@@ -1042,7 +1101,7 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json(), {"version": 1, "error": "invalid_content_length"})
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_list_jobs_success(self, mock_client):
         mock_client.list_jobs.return_value = '{"data": [{"job_id": "job-1"}]}'
         response = self.client.get("/api/v1/jobs?limit=5&include_terminal=false")
@@ -1050,18 +1109,20 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.json(), {"version": 1, "data": [{"job_id": "job-1"}]})
         mock_client.list_jobs.assert_called_once_with(5, False)
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_list_jobs_reconciles_stale_paused_status_from_workflow_progress(self, mock_client):
-        mock_client.list_jobs.return_value = json.dumps({
-            "data": [
-                {
-                    "job_id": "job-progress",
-                    "status": "paused",
-                    "job_type": "batch",
-                    "recovery_status": "paused_for_review",
-                }
-            ]
-        })
+        mock_client.list_jobs.return_value = json.dumps(
+            {
+                "data": [
+                    {
+                        "job_id": "job-progress",
+                        "status": "paused",
+                        "job_type": "batch",
+                        "recovery_status": "paused_for_review",
+                    }
+                ]
+            }
+        )
 
         with patch(
             "mn_api.routes.jobs._workflow_progress_snapshot_for_job",
@@ -1073,23 +1134,25 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.json()["data"][0]["status"], "running")
         mock_progress.assert_called_once_with("job-progress")
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_list_jobs_status_reconciliation_preserves_recovery_metadata(self, mock_client):
-        mock_client.list_jobs.return_value = json.dumps({
-            "data": [
-                {
-                    "job_id": "job-review",
-                    "status": "paused",
-                    "recovery_status": "paused_for_review",
-                    "recovery_requires_review": True,
-                    "recovery": {
-                        "status": "paused_for_review",
-                        "reason": "worker restart attempts exhausted",
-                        "can_resume": True,
-                    },
-                }
-            ]
-        })
+        mock_client.list_jobs.return_value = json.dumps(
+            {
+                "data": [
+                    {
+                        "job_id": "job-review",
+                        "status": "paused",
+                        "recovery_status": "paused_for_review",
+                        "recovery_requires_review": True,
+                        "recovery": {
+                            "status": "paused_for_review",
+                            "reason": "worker restart attempts exhausted",
+                            "can_resume": True,
+                        },
+                    }
+                ]
+            }
+        )
 
         with patch(
             "mn_api.routes.jobs._workflow_progress_snapshot_for_job",
@@ -1105,11 +1168,9 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(row["recovery"]["reason"], "worker restart attempts exhausted")
         self.assertTrue(row["recovery"]["can_resume"])
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_list_jobs_refreshes_active_rows_from_workflow_progress(self, mock_client):
-        mock_client.list_jobs.return_value = json.dumps({
-            "data": [{"job_id": "job-progress", "status": "running"}]
-        })
+        mock_client.list_jobs.return_value = json.dumps({"data": [{"job_id": "job-progress", "status": "running"}]})
 
         with patch(
             "mn_api.routes.jobs._workflow_progress_snapshot_for_job",
@@ -1121,7 +1182,7 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.json()["data"][0]["status"], "completed")
         mock_progress.assert_called_once_with("job-progress")
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_cleanup_jobs_success(self, mock_client):
         mock_client.clear_jobs.return_value = 3
         response = self.client.post("/api/v1/jobs:cleanup")
@@ -1146,9 +1207,12 @@ class TestAPI(unittest.TestCase):
             def __getattr__(self, name):
                 return getattr(clients.pop(0), name)
 
-        with patch("mn_api.routes.jobs.state.client", ClientProxy()), patch(
-            "mn_api.routes.jobs.state.close_client",
-            close_client,
+        with (
+            patch("mn_api.routes.jobs.state.client", ClientProxy()),
+            patch(
+                "mn_api.routes.jobs.state.close_client",
+                close_client,
+            ),
         ):
             response = self.client.post("/api/v1/jobs:cleanup")
 
@@ -1158,16 +1222,18 @@ class TestAPI(unittest.TestCase):
         second_client.clear_jobs.assert_called_once()
         close_client.assert_called_once()
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_get_system_summary_success(self, mock_client):
         mock_client.get_system_summary.return_value = '{"nodes": [], "jobs": []}'
         response = self.client.get("/api/v1/system/summary")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"version": 1, "nodes": [], "jobs": []})
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_get_resource_success(self, mock_client):
-        mock_client.get_resource.return_value = '{"totals": {"cpu_cores": 8}, "limits": {"cpu": 100, "gpu": 100, "memory": 100}}'
+        mock_client.get_resource.return_value = (
+            '{"totals": {"cpu_cores": 8}, "limits": {"cpu": 100, "gpu": 100, "memory": 100}}'
+        )
         response = self.client.get("/api/v1/resource")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["totals"]["cpu_cores"], 8)
@@ -1176,26 +1242,28 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.json()["combined"]["cpu_cores"], 8)
         mock_client.get_resource.assert_called_once()
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_get_resource_combines_multi_node_resources(self, mock_client):
-        mock_client.get_resource.return_value = json.dumps({
-            "mode": "cluster",
-            "node_count": 2,
-            "nodes": [
-                {
-                    "name": "mn1",
-                    "cpu_cores": 8,
-                    "cpu_model": "AMD Ryzen AI Max+ 395",
-                    "gpu_count": 2,
-                    "gpu_model": "NVIDIA RTX 4090",
-                    "gpu_models": ["NVIDIA RTX 4090", "NVIDIA RTX 6000 Ada"],
-                    "gpu_memory_total_mb": 48_000,
-                    "gpu_memory_free_mb": 32_000,
-                    "memory_gb": 16.0,
-                },
-                {"name": "mn2", "cpu_cores": 4, "gpu_count": 0, "memory_gb": 8.0},
-            ],
-        })
+        mock_client.get_resource.return_value = json.dumps(
+            {
+                "mode": "cluster",
+                "node_count": 2,
+                "nodes": [
+                    {
+                        "name": "mn1",
+                        "cpu_cores": 8,
+                        "cpu_model": "AMD Ryzen AI Max+ 395",
+                        "gpu_count": 2,
+                        "gpu_model": "NVIDIA RTX 4090",
+                        "gpu_models": ["NVIDIA RTX 4090", "NVIDIA RTX 6000 Ada"],
+                        "gpu_memory_total_mb": 48_000,
+                        "gpu_memory_free_mb": 32_000,
+                        "memory_gb": 16.0,
+                    },
+                    {"name": "mn2", "cpu_cores": 4, "gpu_count": 0, "memory_gb": 8.0},
+                ],
+            }
+        )
 
         response = self.client.get("/api/v1/resource")
 
@@ -1214,18 +1282,20 @@ class TestAPI(unittest.TestCase):
             ["NVIDIA RTX 4090", "NVIDIA RTX 6000 Ada"],
         )
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_set_resource_success(self, mock_client):
-        mock_client.set_resource.return_value = json.dumps({
-            "limits": {"cpu": 50, "gpu": 75, "memory": 100},
-            "totals": {
-                "cpu_cores": 8,
-                "gpu_count": 1,
-                "gpu_memory_total_mb": 24_576,
-                "gpu_memory_free_mb": 20_480,
-                "memory_gb": 32.0,
-            },
-        })
+        mock_client.set_resource.return_value = json.dumps(
+            {
+                "limits": {"cpu": 50, "gpu": 75, "memory": 100},
+                "totals": {
+                    "cpu_cores": 8,
+                    "gpu_count": 1,
+                    "gpu_memory_total_mb": 24_576,
+                    "gpu_memory_free_mb": 20_480,
+                    "memory_gb": 32.0,
+                },
+            }
+        )
         response = self.client.put(
             "/api/v1/resource",
             json={"cpu": 50, "gpu": 75, "memory": 100},
@@ -1236,8 +1306,8 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.json()["totals"]["memory_total_gb"], 32.0)
         mock_client.set_resource.assert_called_once_with({"cpu": 50, "gpu": 75, "memory": 100})
 
-    @patch('mn_api.routes.system.Client')
-    @patch('mn_api.state.client')
+    @patch("mn_api.routes.system.Client")
+    @patch("mn_api.state.client")
     def test_add_cluster_node_success(self, mock_client, mock_remote_client_class):
         remote_client = mock_remote_client_class.return_value
         remote_client.network_handshake.return_value = {
@@ -1268,10 +1338,10 @@ class TestAPI(unittest.TestCase):
         self.assertIn("node_info", remote_client.network_handshake.call_args.kwargs)
         mock_client.add_node.assert_called_once_with("mirror_neuron@10.0.0.42", token="join-token")
 
-    @patch('mn_api.routes.system.socket.gethostname', return_value="api-box")
-    @patch('mn_api.routes.system.detect_lan_ip', return_value="192.168.1.9")
-    @patch('mn_api.routes.system.Client')
-    @patch('mn_api.state.client')
+    @patch("mn_api.routes.system.socket.gethostname", return_value="api-box")
+    @patch("mn_api.routes.system.detect_lan_ip", return_value="192.168.1.9")
+    @patch("mn_api.routes.system.Client")
+    @patch("mn_api.state.client")
     def test_add_cluster_node_falls_back_when_default_grpc_port_unavailable(
         self,
         mock_client,
@@ -1283,9 +1353,7 @@ class TestAPI(unittest.TestCase):
             def code(self):
                 return grpc.StatusCode.UNAVAILABLE
 
-        first_remote = SimpleNamespace(
-            network_handshake=Mock(side_effect=UnavailableRpcError())
-        )
+        first_remote = SimpleNamespace(network_handshake=Mock(side_effect=UnavailableRpcError()))
         second_remote = SimpleNamespace(
             network_handshake=Mock(
                 return_value={
@@ -1326,10 +1394,10 @@ class TestAPI(unittest.TestCase):
         )
         mock_client.add_node.assert_called_once_with("mirror_neuron@10.0.0.42", token="join-token")
 
-    @patch('mn_api.routes.system.socket.gethostname', return_value="api-box")
-    @patch('mn_api.routes.system.detect_lan_ip', return_value="192.168.1.9")
-    @patch('mn_api.routes.system.Client')
-    @patch('mn_api.state.client')
+    @patch("mn_api.routes.system.socket.gethostname", return_value="api-box")
+    @patch("mn_api.routes.system.detect_lan_ip", return_value="192.168.1.9")
+    @patch("mn_api.routes.system.Client")
+    @patch("mn_api.state.client")
     def test_add_cluster_node_uses_explicit_grpc_port_without_fallback(
         self,
         mock_client,
@@ -1368,7 +1436,7 @@ class TestAPI(unittest.TestCase):
         )
         mock_client.add_node.assert_called_once_with("mirror_neuron@10.0.0.42", token="join-token")
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_remove_cluster_node_success(self, mock_client):
         mock_client.remove_node.return_value = "disconnected"
 
@@ -1381,8 +1449,8 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.json()["status"], "disconnected")
         mock_client.remove_node.assert_called_once_with("mirror_neuron@10.0.0.42")
 
-    @patch('mn_api.routes.system.Client')
-    @patch('mn_api.state.client')
+    @patch("mn_api.routes.system.Client")
+    @patch("mn_api.state.client")
     def test_add_cluster_node_rejects_invalid_host_before_handshake(self, mock_client, mock_remote_client_class):
         response = self.client.post(
             "/api/v1/system/cluster/nodes:add",
@@ -1394,8 +1462,8 @@ class TestAPI(unittest.TestCase):
         mock_remote_client_class.assert_not_called()
         mock_client.add_node.assert_not_called()
 
-    @patch('mn_api.routes.system.Client')
-    @patch('mn_api.state.client')
+    @patch("mn_api.routes.system.Client")
+    @patch("mn_api.state.client")
     def test_add_cluster_node_rejects_invalid_token_before_handshake(self, mock_client, mock_remote_client_class):
         response = self.client.post(
             "/api/v1/system/cluster/nodes:add",
@@ -1407,7 +1475,7 @@ class TestAPI(unittest.TestCase):
         mock_remote_client_class.assert_not_called()
         mock_client.add_node.assert_not_called()
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_submit_job_success(self, mock_client):
         mock_client.submit_job.return_value = "job-123"
         response = self.client.post(
@@ -1422,7 +1490,7 @@ class TestAPI(unittest.TestCase):
         self.assertIn("mn_storage", manifest["metadata"])
         self.assertEqual(payloads, {"a.txt": b"hello"})
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_upload_bundle_and_submit_by_bundle_path(self, mock_client):
         mock_client.submit_job.return_value = "job-zip"
         archive = io.BytesIO()
@@ -1446,7 +1514,9 @@ class TestAPI(unittest.TestCase):
             json={"_bundle_path": bundle_path},
         )
         self.assertEqual(submit_response.status_code, 200)
-        self.assertEqual(submit_response.json(), {"version": 1, "id": "job-zip", "job_id": "job-zip", "status": "pending"})
+        self.assertEqual(
+            submit_response.json(), {"version": 1, "id": "job-zip", "job_id": "job-zip", "status": "pending"}
+        )
         manifest_json, payloads = mock_client.submit_job.call_args.args
         submitted_manifest = json.loads(manifest_json)
         self.assertEqual(submitted_manifest["graph_id"], "zip_graph")
@@ -1503,23 +1573,33 @@ class TestAPI(unittest.TestCase):
             runs_root = Path(tmp)
             run_dir = runs_root / "blueprint-run-1"
             run_dir.mkdir()
-            (run_dir / "ui.json").write_text(json.dumps({
-                "adapter": "gradio",
-                "title": "Blueprint Run",
-                "refresh_seconds": 1.5,
-                "components": [{"type": "events"}],
-            }))
-            (run_dir / "web_ui.json").write_text(json.dumps({
-                "adapter": "gradio",
-                "url": "http://localhost:7860/runs/blueprint-run-1/ui",
-            }))
+            (run_dir / "ui.json").write_text(
+                json.dumps(
+                    {
+                        "adapter": "gradio",
+                        "title": "Blueprint Run",
+                        "refresh_seconds": 1.5,
+                        "components": [{"type": "events"}],
+                    }
+                )
+            )
+            (run_dir / "web_ui.json").write_text(
+                json.dumps(
+                    {
+                        "adapter": "gradio",
+                        "url": "http://localhost:7860/runs/blueprint-run-1/ui",
+                    }
+                )
+            )
             (run_dir / "job.json").write_text(json.dumps({"job_id": "job-1"}))
             (run_dir / "events.jsonl").write_text(
-                "\n".join([
-                    json.dumps({"type": "first"}),
-                    "not-json",
-                    json.dumps({"type": "last", "payload": {"ok": True}}),
-                ])
+                "\n".join(
+                    [
+                        json.dumps({"type": "first"}),
+                        "not-json",
+                        json.dumps({"type": "last", "payload": {"ok": True}}),
+                    ]
+                )
             )
 
             with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
@@ -1541,78 +1621,102 @@ class TestAPI(unittest.TestCase):
             runs_root = Path(tmp)
             run_dir = runs_root / "observe-run"
             run_dir.mkdir()
-            (run_dir / "run.json").write_text(json.dumps({
-                "run_id": "observe-run",
-                "blueprint_id": "general_human_in_the_loop_workflow",
-                "trace_id": "trc_observe",
-                "status": "running",
-            }))
+            (run_dir / "run.json").write_text(
+                json.dumps(
+                    {
+                        "run_id": "observe-run",
+                        "blueprint_id": "general_human_in_the_loop_workflow",
+                        "trace_id": "trc_observe",
+                        "status": "running",
+                    }
+                )
+            )
             (run_dir / "events.jsonl").write_text(
-                json.dumps({
-                    "ts": "2026-05-22T12:00:00Z",
-                    "run_id": "observe-run",
-                    "blueprint_id": "general_human_in_the_loop_workflow",
-                    "type": "run_started",
-                    "payload": {},
-                })
+                json.dumps(
+                    {
+                        "ts": "2026-05-22T12:00:00Z",
+                        "run_id": "observe-run",
+                        "blueprint_id": "general_human_in_the_loop_workflow",
+                        "type": "run_started",
+                        "payload": {},
+                    }
+                )
                 + "\n"
             )
             (run_dir / "logs.jsonl").write_text(
-                json.dumps({
-                    "ts": "2026-05-22T12:00:01Z",
-                    "run_id": "observe-run",
-                    "blueprint_id": "general_human_in_the_loop_workflow",
-                    "level": "WARN",
-                    "component": "worker",
-                    "message": "needs attention",
-                })
+                json.dumps(
+                    {
+                        "ts": "2026-05-22T12:00:01Z",
+                        "run_id": "observe-run",
+                        "blueprint_id": "general_human_in_the_loop_workflow",
+                        "level": "WARN",
+                        "component": "worker",
+                        "message": "needs attention",
+                    }
+                )
                 + "\n"
             )
             (run_dir / "human.jsonl").write_text(
-                json.dumps({
-                    "ts": "2026-05-22T12:00:02Z",
-                    "run_id": "observe-run",
-                    "blueprint_id": "general_human_in_the_loop_workflow",
-                    "channel": "human",
-                    "type": "human_input_requested",
-                    "payload": {"request_id": "hitl-1", "prompt": "Approve?"},
-                })
+                json.dumps(
+                    {
+                        "ts": "2026-05-22T12:00:02Z",
+                        "run_id": "observe-run",
+                        "blueprint_id": "general_human_in_the_loop_workflow",
+                        "channel": "human",
+                        "type": "human_input_requested",
+                        "payload": {"request_id": "hitl-1", "prompt": "Approve?"},
+                    }
+                )
                 + "\n"
             )
             (run_dir / "resources.jsonl").write_text(
-                json.dumps({
-                    "ts": "2026-05-22T12:00:03Z",
-                    "run_id": "observe-run",
-                    "blueprint_id": "general_human_in_the_loop_workflow",
-                    "component": "worker",
-                    "cpu_pct": 12.5,
-                    "memory_rss_mb": 256,
-                    "gpu": [],
-                    "llm": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15, "calls": 1, "estimated": False},
-                })
+                json.dumps(
+                    {
+                        "ts": "2026-05-22T12:00:03Z",
+                        "run_id": "observe-run",
+                        "blueprint_id": "general_human_in_the_loop_workflow",
+                        "component": "worker",
+                        "cpu_pct": 12.5,
+                        "memory_rss_mb": 256,
+                        "gpu": [],
+                        "llm": {
+                            "input_tokens": 10,
+                            "output_tokens": 5,
+                            "total_tokens": 15,
+                            "calls": 1,
+                            "estimated": False,
+                        },
+                    }
+                )
                 + "\n"
             )
             (run_dir / "timeline.jsonl").write_text(
-                json.dumps({
-                    "schema_version": "mn.timeline.v1",
-                    "ts": "2026-05-22T12:00:04Z",
-                    "run_id": "observe-run",
-                    "blueprint_id": "general_human_in_the_loop_workflow",
-                    "trace_id": "trc_observe",
-                    "span_id": "spn_timeline",
-                    "type": "run_started",
-                    "status": "started",
-                    "summary": "Run started",
-                })
+                json.dumps(
+                    {
+                        "schema_version": "mn.timeline.v1",
+                        "ts": "2026-05-22T12:00:04Z",
+                        "run_id": "observe-run",
+                        "blueprint_id": "general_human_in_the_loop_workflow",
+                        "trace_id": "trc_observe",
+                        "span_id": "spn_timeline",
+                        "type": "run_started",
+                        "status": "started",
+                        "summary": "Run started",
+                    }
+                )
                 + "\n"
             )
-            (run_dir / "observability_summary.json").write_text(json.dumps({
-                "schema_version": "mn.observability_summary.v1",
-                "run_id": "observe-run",
-                "trace_id": "trc_observe",
-                "status": "running",
-                "counts": {"events": 1, "logs": 1, "errors": 0, "timeline": 1},
-            }))
+            (run_dir / "observability_summary.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "mn.observability_summary.v1",
+                        "run_id": "observe-run",
+                        "trace_id": "trc_observe",
+                        "status": "running",
+                        "counts": {"events": 1, "logs": 1, "errors": 0, "timeline": 1},
+                    }
+                )
+            )
 
             with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
                 logs = self.client.get("/api/v1/runs/observe-run/logs?level=INFO")
@@ -1652,7 +1756,9 @@ class TestAPI(unittest.TestCase):
             (run_dir / "errors.001.jsonl").write_text(json.dumps({"error": {"schema_version": "mn.error.v1"}}) + "\n")
             (run_dir / "timeline.jsonl").write_text(json.dumps({"schema_version": "mn.timeline.v1"}) + "\n")
             (run_dir / "timeline.json").write_text(json.dumps({"schema_version": "mn.timeline.compact.v1"}))
-            (run_dir / "observability_summary.json").write_text(json.dumps({"schema_version": "mn.observability_summary.v1"}))
+            (run_dir / "observability_summary.json").write_text(
+                json.dumps({"schema_version": "mn.observability_summary.v1"})
+            )
             (run_dir / "report.md").write_text("# Draft Review Packet\n")
             (run_dir / "packet.pdf").write_bytes(b"%PDF-1.4\n% test pdf\n")
 
@@ -1676,10 +1782,16 @@ class TestAPI(unittest.TestCase):
         self.assertIn("timeline_jsonl", artifact_ids)
         self.assertIn("timeline_json", artifact_ids)
         self.assertIn("observability_summary_json", artifact_ids)
-        summary_ref = next(artifact for artifact in listing.json()["artifacts"] if artifact["artifact_id"] == "observability_summary_json")
+        summary_ref = next(
+            artifact
+            for artifact in listing.json()["artifacts"]
+            if artifact["artifact_id"] == "observability_summary_json"
+        )
         self.assertEqual(summary_ref["content_type"], "application/json")
         self.assertIn("/api/v1/runs/artifact-run/artifacts/observability_summary.json", summary_ref["url"])
-        self.assertIn("/api/v1/runs/artifact-run/artifacts/observability_summary.json/reveal", summary_ref["reveal_url"])
+        self.assertIn(
+            "/api/v1/runs/artifact-run/artifacts/observability_summary.json/reveal", summary_ref["reveal_url"]
+        )
         self.assertEqual(markdown.status_code, 200)
         self.assertIn("# Draft Review Packet", markdown.text)
         self.assertEqual(pdf.status_code, 200)
@@ -1719,12 +1831,14 @@ class TestAPI(unittest.TestCase):
             report.write_text("# Customer Report\n")
             (run_dir / "job.json").write_text(json.dumps({"job_id": "job-output"}))
             (run_dir / "post_launch_hook.json").write_text(json.dumps({"ok": True}))
-            (run_dir / "post_launch_materialized.json").write_text(json.dumps({
-                "ok": True,
-                "output_files": [
-                    {"kind": "report_markdown", "path": str(report)}
-                ],
-            }))
+            (run_dir / "post_launch_materialized.json").write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "output_files": [{"kind": "report_markdown", "path": str(report)}],
+                    }
+                )
+            )
 
             with (
                 patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}),
@@ -1743,7 +1857,8 @@ class TestAPI(unittest.TestCase):
         self.assertIn("post_launch_hook_json", artifact_ids)
         self.assertIn("output_0_report_markdown", artifact_ids)
         output_ref = next(
-            artifact for artifact in artifacts.json()["artifacts"]
+            artifact
+            for artifact in artifacts.json()["artifacts"]
             if artifact["artifact_id"] == "output_0_report_markdown"
         )
         self.assertEqual(output_ref["source"], "post_launch_output")
@@ -1758,7 +1873,7 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(missing.status_code, 404)
         mock_popen.assert_called_once()
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_submit_by_unknown_bundle_path_is_rejected_before_sdk_call(self, mock_client):
         response = self.client.post(
             "/api/v1/jobs",
@@ -1769,14 +1884,14 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.json()["detail"], "unknown uploaded bundle")
         mock_client.submit_job.assert_not_called()
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_cancel_job_success(self, mock_client):
         mock_client.cancel_job.return_value = "cancelled"
         response = self.client.post("/api/v1/jobs/test_job_123/cancel")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"version": 1, "status": "cancelled", "job_id": "test_job_123"})
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_cancel_job_runs_blueprint_post_launch_cleanup(self, mock_client):
         mock_client.cancel_job.return_value = "cancelled"
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1790,44 +1905,60 @@ class TestAPI(unittest.TestCase):
             script_path = scripts_dir / "post-launch.sh"
             script_path.write_text(
                 "#!/usr/bin/env bash\n"
-                "cat > \"$MN_RUN_DIR/post_cleanup_seen.json\" <<EOF\n"
+                'cat > "$MN_RUN_DIR/post_cleanup_seen.json" <<EOF\n'
                 "{\n"
-                "  \"reason\": \"$MN_POST_LAUNCH_REASON\",\n"
-                "  \"run_id\": \"$MN_RUN_ID\",\n"
-                "  \"rtsp_port\": \"$RTSP_PORT\",\n"
-                "  \"state_file\": \"$MN_POST_LAUNCH_STATE_FILE\",\n"
-                "  \"pre_launch_pid\": \"$MN_PRE_LAUNCH_PID\",\n"
-                "  \"pre_launch_pgid\": \"$MN_PRE_LAUNCH_PROCESS_GROUP_ID\"\n"
+                '  "reason": "$MN_POST_LAUNCH_REASON",\n'
+                '  "run_id": "$MN_RUN_ID",\n'
+                '  "rtsp_port": "$RTSP_PORT",\n'
+                '  "state_file": "$MN_POST_LAUNCH_STATE_FILE",\n'
+                '  "pre_launch_pid": "$MN_PRE_LAUNCH_PID",\n'
+                '  "pre_launch_pgid": "$MN_PRE_LAUNCH_PROCESS_GROUP_ID"\n'
                 "}\n"
                 "EOF\n"
             )
-            (run_dir / "job.json").write_text(json.dumps({
-                "job_id": "job-cleanup",
-                "run_id": "run-cancel-cleanup",
-                "blueprint_id": "worker_one",
-            }))
-            (run_dir / "pre_launch.ready").write_text(json.dumps({
-                "status": "ready",
-                "env": {
-                    "RTSP_PORT": "8562",
-                    "VIDEO_SOURCE_URI": "rtsp://host.openshell.internal:8562/video-watch",
-                },
-            }))
-            (run_dir / "pre_launch_process.json").write_text(json.dumps({
-                "pid": 24679,
-                "process_group_id": 24680,
-            }))
-            (run_dir / "post_launch_hook.json").write_text(json.dumps({
-                "command": ["bash", str(script_path)],
-                "script": str(script_path),
-                "cwd": str(bundle_dir),
-                "log": str(run_dir / "post_launch.log"),
-                "run_id": "run-cancel-cleanup",
-                "bundle_dir": str(bundle_dir),
-                "state_file": str(run_dir / "post_launch_state.json"),
-                "pre_launch_ready_file": str(run_dir / "pre_launch.ready"),
-                "pre_launch_process_file": str(run_dir / "pre_launch_process.json"),
-            }))
+            (run_dir / "job.json").write_text(
+                json.dumps(
+                    {
+                        "job_id": "job-cleanup",
+                        "run_id": "run-cancel-cleanup",
+                        "blueprint_id": "worker_one",
+                    }
+                )
+            )
+            (run_dir / "pre_launch.ready").write_text(
+                json.dumps(
+                    {
+                        "status": "ready",
+                        "env": {
+                            "RTSP_PORT": "8562",
+                            "VIDEO_SOURCE_URI": "rtsp://host.openshell.internal:8562/video-watch",
+                        },
+                    }
+                )
+            )
+            (run_dir / "pre_launch_process.json").write_text(
+                json.dumps(
+                    {
+                        "pid": 24679,
+                        "process_group_id": 24680,
+                    }
+                )
+            )
+            (run_dir / "post_launch_hook.json").write_text(
+                json.dumps(
+                    {
+                        "command": ["bash", str(script_path)],
+                        "script": str(script_path),
+                        "cwd": str(bundle_dir),
+                        "log": str(run_dir / "post_launch.log"),
+                        "run_id": "run-cancel-cleanup",
+                        "bundle_dir": str(bundle_dir),
+                        "state_file": str(run_dir / "post_launch_state.json"),
+                        "pre_launch_ready_file": str(run_dir / "pre_launch.ready"),
+                        "pre_launch_process_file": str(run_dir / "pre_launch_process.json"),
+                    }
+                )
+            )
 
             with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
                 response = self.client.post("/api/v1/jobs/job-cleanup/cancel")
@@ -1842,14 +1973,16 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(cleanup_record["pre_launch_pid"], "24679")
         self.assertEqual(cleanup_record["pre_launch_pgid"], "24680")
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_blueprint_run_cleans_stale_same_blueprint_hooks_before_start(self, mock_client):
-        mock_client.list_jobs.return_value = json.dumps({
-            "data": [
-                {"job_id": "job-active", "status": "running"},
-                {"job_id": "job-stale", "status": "failed"},
-            ]
-        })
+        mock_client.list_jobs.return_value = json.dumps(
+            {
+                "data": [
+                    {"job_id": "job-active", "status": "running"},
+                    {"job_id": "job-stale", "status": "failed"},
+                ]
+            }
+        )
         mock_client.submit_job.return_value = "job-new"
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
@@ -1861,10 +1994,10 @@ class TestAPI(unittest.TestCase):
             cleanup_script = scripts_dir / "post-launch.sh"
             cleanup_script.write_text(
                 "#!/usr/bin/env bash\n"
-                "cat > \"$MN_RUN_DIR/cleanup_marker.json\" <<EOF\n"
+                'cat > "$MN_RUN_DIR/cleanup_marker.json" <<EOF\n'
                 "{\n"
-                "  \"reason\": \"$MN_POST_LAUNCH_REASON\",\n"
-                "  \"run_id\": \"$MN_RUN_ID\"\n"
+                '  "reason": "$MN_POST_LAUNCH_REASON",\n'
+                '  "run_id": "$MN_RUN_ID"\n'
                 "}\n"
                 "EOF\n"
             )
@@ -1872,22 +2005,30 @@ class TestAPI(unittest.TestCase):
             def write_run(run_name, job_id, blueprint_id="worker_one"):
                 run_dir = runs_root / run_name
                 run_dir.mkdir(parents=True)
-                (run_dir / "job.json").write_text(json.dumps({
-                    "job_id": job_id,
-                    "run_id": run_name,
-                    "blueprint_id": blueprint_id,
-                }))
-                (run_dir / "post_launch_hook.json").write_text(json.dumps({
-                    "command": ["bash", str(cleanup_script)],
-                    "script": str(cleanup_script),
-                    "cwd": str(bundle_dir),
-                    "log": str(run_dir / "post_launch.log"),
-                    "run_id": run_name,
-                    "bundle_dir": str(bundle_dir),
-                    "state_file": str(run_dir / "post_launch_state.json"),
-                    "pre_launch_ready_file": str(run_dir / "pre_launch.ready"),
-                    "pre_launch_process_file": str(run_dir / "pre_launch_process.json"),
-                }))
+                (run_dir / "job.json").write_text(
+                    json.dumps(
+                        {
+                            "job_id": job_id,
+                            "run_id": run_name,
+                            "blueprint_id": blueprint_id,
+                        }
+                    )
+                )
+                (run_dir / "post_launch_hook.json").write_text(
+                    json.dumps(
+                        {
+                            "command": ["bash", str(cleanup_script)],
+                            "script": str(cleanup_script),
+                            "cwd": str(bundle_dir),
+                            "log": str(run_dir / "post_launch.log"),
+                            "run_id": run_name,
+                            "bundle_dir": str(bundle_dir),
+                            "state_file": str(run_dir / "post_launch_state.json"),
+                            "pre_launch_ready_file": str(run_dir / "pre_launch.ready"),
+                            "pre_launch_process_file": str(run_dir / "pre_launch_process.json"),
+                        }
+                    )
+                )
                 return run_dir
 
             stale_run = write_run("stale-run", "job-stale")
@@ -1895,8 +2036,11 @@ class TestAPI(unittest.TestCase):
             other_run = write_run("other-run", "job-other", blueprint_id="worker_two")
             original = self._set_blueprint_config(repo)
             try:
-                with patch.dict('os.environ', {"MN_RUNS_ROOT": str(runs_root)}):
-                    with patch("mn_api.routes.blueprints.validate_blueprint_hardware_requirements", return_value={"ok": True, "status": "passed", "issues": [], "errors": []}):
+                with patch.dict("os.environ", {"MN_RUNS_ROOT": str(runs_root)}):
+                    with patch(
+                        "mn_api.routes.blueprints.validate_blueprint_hardware_requirements",
+                        return_value={"ok": True, "status": "passed", "issues": [], "errors": []},
+                    ):
                         response = self._sync_blueprint_run(repo, {"run_id": "run-new", "force": True})
                     cleanup_record = json.loads((stale_run / "cleanup_marker.json").read_text())
                     active_marker_exists = (active_run / "cleanup_marker.json").exists()
@@ -1911,12 +2055,12 @@ class TestAPI(unittest.TestCase):
         self.assertFalse(active_marker_exists)
         self.assertFalse(other_marker_exists)
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_cancel_job_grpc_error(self, mock_client):
         class MockRpcError(Exception):
             def details(self):
                 return "job test_job_123 was not found"
-                
+
         mock_client.cancel_job.side_effect = MockRpcError()
         response = self.client.post("/api/v1/jobs/test_job_123/cancel")
         self.assertEqual(response.status_code, 500)
@@ -1925,8 +2069,8 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(payload["detail"], "Execution failed. Run again with --debug for more details.")
         self.assertNotIn("job test_job_123 was not found", repr(payload))
 
-    @patch('mn_api.routes.jobs.cleanup_blueprint_processes_for_job')
-    @patch('mn_api.state.client')
+    @patch("mn_api.routes.jobs.cleanup_blueprint_processes_for_job")
+    @patch("mn_api.state.client")
     def test_cancel_job_runs_blueprint_cleanup_on_backend_error(self, mock_client, mock_cleanup):
         mock_client.cancel_job.side_effect = Exception("backend unavailable")
 
@@ -1939,7 +2083,7 @@ class TestAPI(unittest.TestCase):
         self.assertNotIn("backend unavailable", repr(payload))
         mock_cleanup.assert_called_once_with("test_job_123")
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_cancel_job_generic_error(self, mock_client):
         mock_client.cancel_job.side_effect = Exception("Some generic error")
         response = self.client.post("/api/v1/jobs/test_job_123/cancel")
@@ -1949,7 +2093,7 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(payload["detail"], "Execution failed. Run again with --debug for more details.")
         self.assertNotIn("Some generic error", repr(payload))
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_submit_job_resource_overloaded(self, mock_client):
         class ResourceError(grpc.RpcError):
             def code(self):
@@ -1966,24 +2110,26 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json()["error"], "resource_overloaded")
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_submit_job_input_validation_problem_details(self, mock_client):
         response = self.client.post(
             "/api/v1/jobs",
             json={
-                "manifest_json": json.dumps({
-                    "graph_id": "g",
-                    "input_validation": {
-                        "rules": [
-                            {
-                                "name": "endpoint_url",
-                                "type": "pattern",
-                                "path": "endpoint",
-                                "pattern": "^https://",
-                            }
-                        ]
-                    },
-                }),
+                "manifest_json": json.dumps(
+                    {
+                        "graph_id": "g",
+                        "input_validation": {
+                            "rules": [
+                                {
+                                    "name": "endpoint_url",
+                                    "type": "pattern",
+                                    "path": "endpoint",
+                                    "pattern": "^https://",
+                                }
+                            ]
+                        },
+                    }
+                ),
                 "payloads": {},
             },
         )
@@ -1994,18 +2140,20 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.json()["errors"][0]["location"]["path"], "endpoint")
         mock_client.submit_job.assert_not_called()
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_submit_job_hard_gpu_requirements_block_even_when_forced(self, mock_client):
-        mock_client.get_resource.return_value = json.dumps({
-            "nodes": [
-                {
-                    "name": "cpu-node",
-                    "status": "healthy",
-                    "scheduling_eligible": True,
-                    "devices": [],
-                }
-            ]
-        })
+        mock_client.get_resource.return_value = json.dumps(
+            {
+                "nodes": [
+                    {
+                        "name": "cpu-node",
+                        "status": "healthy",
+                        "scheduling_eligible": True,
+                        "devices": [],
+                    }
+                ]
+            }
+        )
 
         response = self.client.post(
             "/api/v1/jobs",
@@ -2022,7 +2170,7 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.json()["errors"][0]["code"], "requirements.gpu_node_unavailable")
         mock_client.submit_job.assert_not_called()
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_submit_job_requirements_error_problem_details(self, mock_client):
         report = {
             "version": 1,
@@ -2064,46 +2212,48 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.json()["errors"][0]["code"], "requirements.memory_insufficient")
         self.assertEqual(response.json()["errors"][0]["location"]["path"], "memory")
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_get_job_events_success(self, mock_client):
         mock_client.stream_events.return_value = ['{"id": "e1"}', '{"id": "e2"}']
         response = self.client.get("/api/v1/jobs/test_job_123/events")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"version": 1, "data": [{"id": "e1"}, {"id": "e2"}]})
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_get_job_workflow_progress_uses_grpc_job_and_events(self, mock_client):
-        mock_client.get_job.return_value = json.dumps({
-            "job": {
-                "job_id": "job-progress",
-                "status": "running",
-                "submitted_at": "2026-05-31T10:00:00Z",
-                "manifest": {
-                    "id": "workflow-blueprint",
-                    "workflow": {
-                        "workflow_id": "workflow-blueprint_v1",
-                        "entrypoint": "research",
-                        "steps": [{"id": "research", "label": "Research", "run": "research_team"}],
-                    },
-                    "runtime": {
-                        "bindings": {
-                            "research_team": {
-                                "workers": [{"id": "research:docs", "role": "Analyze docs"}]
+        mock_client.get_job.return_value = json.dumps(
+            {
+                "job": {
+                    "job_id": "job-progress",
+                    "status": "running",
+                    "submitted_at": "2026-05-31T10:00:00Z",
+                    "manifest": {
+                        "id": "workflow-blueprint",
+                        "workflow": {
+                            "workflow_id": "workflow-blueprint_v1",
+                            "entrypoint": "research",
+                            "steps": [{"id": "research", "label": "Research", "run": "research_team"}],
+                        },
+                        "runtime": {
+                            "bindings": {
+                                "research_team": {"workers": [{"id": "research:docs", "role": "Analyze docs"}]}
                             }
-                        }
+                        },
                     },
                 },
-            },
-            "summary": {"status": "running"},
-            "agents": [],
-        })
+                "summary": {"status": "running"},
+                "agents": [],
+            }
+        )
         mock_client.stream_events.return_value = [
             json.dumps({"type": "job_running", "timestamp": "2026-05-31T10:00:01Z"}),
-            json.dumps({
-                "type": "workflow_step_attempt_completed",
-                "timestamp": "2026-05-31T10:00:02Z",
-                "payload": {"step": "research", "worker": "research:docs", "tokens": 1200, "tools": 3},
-            }),
+            json.dumps(
+                {
+                    "type": "workflow_step_attempt_completed",
+                    "timestamp": "2026-05-31T10:00:02Z",
+                    "payload": {"step": "research", "worker": "research:docs", "tokens": 1200, "tools": 3},
+                }
+            ),
         ]
 
         response = self.client.get("/api/v1/jobs/job-progress/workflow-progress")
@@ -2117,32 +2267,38 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(body["steps"][0]["agents"][0]["tokens"], 1200)
         mock_client.stream_events.assert_called_once_with("job-progress", follow=False, limit=25)
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_get_job_workflow_progress_enriches_step_and_agent_activity(self, mock_client):
         with tempfile.TemporaryDirectory() as tmp:
             runs_root = Path(tmp)
             run_dir = runs_root / "activity-run"
             run_dir.mkdir()
-            (run_dir / "job.json").write_text(json.dumps({
-                "job_id": "job-activity",
-                "run_id": "activity-run",
-                "status": "running",
-            }))
-            (run_dir / "config.json").write_text(json.dumps({
-                "id": "activity-workflow",
-                "workflow": {
-                    "workflow_id": "activity-workflow_v1",
-                    "entrypoint": "research",
-                    "steps": [{"id": "research", "label": "Research", "run": "research_team"}],
-                },
-                "runtime": {
-                    "bindings": {
-                        "research_team": {
-                            "workers": [{"id": "research:docs", "role": "Analyze docs"}]
-                        }
+            (run_dir / "job.json").write_text(
+                json.dumps(
+                    {
+                        "job_id": "job-activity",
+                        "run_id": "activity-run",
+                        "status": "running",
                     }
-                },
-            }))
+                )
+            )
+            (run_dir / "config.json").write_text(
+                json.dumps(
+                    {
+                        "id": "activity-workflow",
+                        "workflow": {
+                            "workflow_id": "activity-workflow_v1",
+                            "entrypoint": "research",
+                            "steps": [{"id": "research", "label": "Research", "run": "research_team"}],
+                        },
+                        "runtime": {
+                            "bindings": {
+                                "research_team": {"workers": [{"id": "research:docs", "role": "Analyze docs"}]}
+                            }
+                        },
+                    }
+                )
+            )
             persisted_event = {
                 "type": "workflow_step_attempt_completed",
                 "timestamp": "2026-05-31T10:00:03Z",
@@ -2154,22 +2310,30 @@ class TestAPI(unittest.TestCase):
                 },
             }
             (run_dir / "events.jsonl").write_text(json.dumps(persisted_event) + "\n")
-            mock_client.get_job.return_value = json.dumps({
-                "job": {
-                    "job_id": "job-activity",
-                    "run_id": "activity-run",
-                    "status": "running",
-                    "submitted_at": "2026-05-31T10:00:00Z",
-                },
-                "summary": {"status": "running"},
-                "agents": [],
-            })
+            mock_client.get_job.return_value = json.dumps(
+                {
+                    "job": {
+                        "job_id": "job-activity",
+                        "run_id": "activity-run",
+                        "status": "running",
+                        "submitted_at": "2026-05-31T10:00:00Z",
+                    },
+                    "summary": {"status": "running"},
+                    "agents": [],
+                }
+            )
             mock_client.stream_events.return_value = [
-                json.dumps({
-                    "type": "workflow_step_attempt_started",
-                    "timestamp": "2026-05-31T10:00:01Z",
-                    "payload": {"step": "research", "worker": "research:docs", "message": "Reading source documents"},
-                }),
+                json.dumps(
+                    {
+                        "type": "workflow_step_attempt_started",
+                        "timestamp": "2026-05-31T10:00:01Z",
+                        "payload": {
+                            "step": "research",
+                            "worker": "research:docs",
+                            "message": "Reading source documents",
+                        },
+                    }
+                ),
             ]
 
             with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
@@ -2188,32 +2352,38 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(agent["tokens"], 1200)
         self.assertEqual(agent["activity_summary"], "Agent completed: research:docs")
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_get_job_workflow_progress_categorizes_structured_activity(self, mock_client):
         with tempfile.TemporaryDirectory() as tmp:
             runs_root = Path(tmp)
             run_dir = runs_root / "activity-categories"
             run_dir.mkdir()
-            (run_dir / "job.json").write_text(json.dumps({
-                "job_id": "job-activity-categories",
-                "run_id": "activity-categories",
-                "status": "running",
-            }))
-            (run_dir / "config.json").write_text(json.dumps({
-                "id": "activity-workflow",
-                "workflow": {
-                    "workflow_id": "activity-workflow_v1",
-                    "entrypoint": "research",
-                    "steps": [{"id": "research", "label": "Research", "run": "research_team"}],
-                },
-                "runtime": {
-                    "bindings": {
-                        "research_team": {
-                            "workers": [{"id": "research:docs", "role": "Analyze docs"}]
-                        }
+            (run_dir / "job.json").write_text(
+                json.dumps(
+                    {
+                        "job_id": "job-activity-categories",
+                        "run_id": "activity-categories",
+                        "status": "running",
                     }
-                },
-            }))
+                )
+            )
+            (run_dir / "config.json").write_text(
+                json.dumps(
+                    {
+                        "id": "activity-workflow",
+                        "workflow": {
+                            "workflow_id": "activity-workflow_v1",
+                            "entrypoint": "research",
+                            "steps": [{"id": "research", "label": "Research", "run": "research_team"}],
+                        },
+                        "runtime": {
+                            "bindings": {
+                                "research_team": {"workers": [{"id": "research:docs", "role": "Analyze docs"}]}
+                            }
+                        },
+                    }
+                )
+            )
             events = [
                 {
                     "type": "agent_activity",
@@ -2246,7 +2416,9 @@ class TestAPI(unittest.TestCase):
                         "worker": "research:docs",
                         "category": "error",
                         "message": "DockerWorker image build failed",
-                        "result_summary": "long docker setup " + ("x" * 5000) + " ERROR: No matching distribution found for mirrorneuron-blueprint-support-skill",
+                        "result_summary": "long docker setup "
+                        + ("x" * 5000)
+                        + " ERROR: No matching distribution found for mirrorneuron-blueprint-support-skill",
                     },
                 },
                 {
@@ -2260,15 +2432,17 @@ class TestAPI(unittest.TestCase):
                 },
             ]
             (run_dir / "events.jsonl").write_text("\n".join(json.dumps(item) for item in events) + "\n")
-            mock_client.get_job.return_value = json.dumps({
-                "job": {
-                    "job_id": "job-activity-categories",
-                    "run_id": "activity-categories",
-                    "status": "running",
-                },
-                "summary": {"status": "running"},
-                "agents": [],
-            })
+            mock_client.get_job.return_value = json.dumps(
+                {
+                    "job": {
+                        "job_id": "job-activity-categories",
+                        "run_id": "activity-categories",
+                        "status": "running",
+                    },
+                    "summary": {"status": "running"},
+                    "agents": [],
+                }
+            )
             mock_client.stream_events.return_value = []
 
             with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
@@ -2282,14 +2456,16 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(tool_event["target"], "https://www.consumerfinance.gov/consumer-tools/")
         build_event = next(item for item in activities if item["type"] == "docker_worker_build_failed")
         self.assertEqual(build_event["category"], "error")
-        self.assertIn("No matching distribution found for mirrorneuron-blueprint-support-skill", build_event["result_summary"])
+        self.assertIn(
+            "No matching distribution found for mirrorneuron-blueprint-support-skill", build_event["result_summary"]
+        )
         self.assertLess(len(build_event["result_summary"]), 340)
         retry_event = activities[-1]
         self.assertEqual(retry_event["category"], "error")
         self.assertLess(len(retry_event["message"]), 340)
         self.assertIn("[truncated]", retry_event["message"])
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_get_job_events_merges_persisted_run_events_without_duplicates(self, mock_client):
         runtime_event = {
             "type": "job_running",
@@ -2305,15 +2481,23 @@ class TestAPI(unittest.TestCase):
             runs_root = Path(tmp)
             run_dir = runs_root / "events-run"
             run_dir.mkdir()
-            (run_dir / "job.json").write_text(json.dumps({
-                "job_id": "job-events",
-                "run_id": "events-run",
-                "status": "running",
-            }))
-            (run_dir / "events.jsonl").write_text("\n".join([
-                json.dumps(runtime_event),
-                json.dumps(persisted_event),
-            ]))
+            (run_dir / "job.json").write_text(
+                json.dumps(
+                    {
+                        "job_id": "job-events",
+                        "run_id": "events-run",
+                        "status": "running",
+                    }
+                )
+            )
+            (run_dir / "events.jsonl").write_text(
+                "\n".join(
+                    [
+                        json.dumps(runtime_event),
+                        json.dumps(persisted_event),
+                    ]
+                )
+            )
             mock_client.stream_events.return_value = [json.dumps(runtime_event)]
 
             with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
@@ -2323,87 +2507,109 @@ class TestAPI(unittest.TestCase):
         body = response.json()
         self.assertEqual([event["type"] for event in body["data"]], ["job_running", "workflow_step_completed"])
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_get_job_workflow_progress_prefers_run_store_workflow_manifest(self, mock_client):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp) / "video-run"
             run_dir.mkdir()
-            (run_dir / "run.json").write_text(json.dumps({
-                "run_id": "video-run",
-                "trace_id": "trc_video",
-                "status": "running",
-            }))
-            (run_dir / "observability_summary.json").write_text(json.dumps({
-                "schema_version": "mn.observability_summary.v1",
-                "run_id": "video-run",
-                "trace_id": "trc_video",
-                "status": "running",
-                "counts": {"events": 2, "logs": 0, "errors": 0, "timeline": 2},
-            }))
-            (run_dir / "config.json").write_text(json.dumps({
-                "id": "video_watch_assistant",
-                "type": "service",
-                "workflow": {
-                    "workflow_id": "video_watch_assistant_v1",
-                    "entrypoint": "start_video_monitor",
-                    "steps": [
+            (run_dir / "run.json").write_text(
+                json.dumps(
+                    {
+                        "run_id": "video-run",
+                        "trace_id": "trc_video",
+                        "status": "running",
+                    }
+                )
+            )
+            (run_dir / "observability_summary.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "mn.observability_summary.v1",
+                        "run_id": "video-run",
+                        "trace_id": "trc_video",
+                        "status": "running",
+                        "counts": {"events": 2, "logs": 0, "errors": 0, "timeline": 2},
+                    }
+                )
+            )
+            (run_dir / "config.json").write_text(
+                json.dumps(
+                    {
+                        "id": "video_watch_assistant",
+                        "type": "service",
+                        "workflow": {
+                            "workflow_id": "video_watch_assistant_v1",
+                            "entrypoint": "start_video_monitor",
+                            "steps": [
+                                {
+                                    "id": "start_video_monitor",
+                                    "label": "Start Video Monitor",
+                                    "run": "start_video_monitor",
+                                }
+                            ],
+                        },
+                        "runtime": {
+                            "bindings": {
+                                "start_video_monitor": {
+                                    "workers": [
+                                        {
+                                            "id": "video_monitor",
+                                            "alias": "video_monitor",
+                                            "display_name": "Video Monitor",
+                                            "role": "Coordinate video monitoring",
+                                        }
+                                    ]
+                                }
+                            }
+                        },
+                    }
+                )
+            )
+            (run_dir / "events.jsonl").write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "type": "workflow_step_started",
+                                "timestamp": "2026-06-01T10:00:01Z",
+                                "payload": {"step": "start_video_monitor"},
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "type": "workflow_step_attempt_completed",
+                                "timestamp": "2026-06-01T10:00:02Z",
+                                "payload": {"step": "start_video_monitor", "worker": "video_monitor"},
+                            }
+                        ),
+                    ]
+                )
+            )
+            mock_client.get_job.return_value = json.dumps(
+                {
+                    "job": {
+                        "job_id": "job-progress",
+                        "run_id": "video-run",
+                        "job_type": "service",
+                        "status": "running",
+                        "submitted_at": "2026-06-01T10:00:00Z",
+                        "manifest": {
+                            "graph_id": "runtime-wrapper",
+                            "nodes": [{"node_id": "workflow_manifest_executor", "role": "root_coordinator"}],
+                        },
+                    },
+                    "summary": {"status": "running"},
+                    "agents": [
                         {
-                            "id": "start_video_monitor",
-                            "label": "Start Video Monitor",
-                            "run": "start_video_monitor",
+                            "agent_id": "workflow_manifest_executor",
+                            "agent_type": "executor",
+                            "type": "worker",
+                            "status": "paused",
+                            "assigned_node": "mirror_neuron@192.168.4.34",
                         }
                     ],
-                },
-                "runtime": {
-                    "bindings": {
-                        "start_video_monitor": {
-                            "workers": [
-                                {
-                                    "id": "video_monitor",
-                                    "alias": "video_monitor",
-                                    "display_name": "Video Monitor",
-                                    "role": "Coordinate video monitoring",
-                                }
-                            ]
-                        }
-                    }
-                },
-            }))
-            (run_dir / "events.jsonl").write_text("\n".join([
-                json.dumps({
-                    "type": "workflow_step_started",
-                    "timestamp": "2026-06-01T10:00:01Z",
-                    "payload": {"step": "start_video_monitor"},
-                }),
-                json.dumps({
-                    "type": "workflow_step_attempt_completed",
-                    "timestamp": "2026-06-01T10:00:02Z",
-                    "payload": {"step": "start_video_monitor", "worker": "video_monitor"},
-                }),
-            ]))
-            mock_client.get_job.return_value = json.dumps({
-                "job": {
-                    "job_id": "job-progress",
-                    "run_id": "video-run",
-                    "job_type": "service",
-                    "status": "running",
-                    "submitted_at": "2026-06-01T10:00:00Z",
-                    "manifest": {
-                        "graph_id": "runtime-wrapper",
-                        "nodes": [{"node_id": "workflow_manifest_executor", "role": "root_coordinator"}],
-                    },
-                },
-                "summary": {"status": "running"},
-                "agents": [
-                    {
-                        "agent_id": "workflow_manifest_executor",
-                        "agent_type": "executor",
-                        "type": "worker",
-                        "status": "paused",
-                        "assigned_node": "mirror_neuron@192.168.4.34",
-                    }
-                ],
-            })
+                }
+            )
             mock_client.stream_events.return_value = [
                 json.dumps({"type": "job_running", "timestamp": "2026-06-01T10:00:00Z"}),
             ]
@@ -2423,30 +2629,41 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(body["steps"][0]["agents"][0]["display_name"], "Video Monitor")
         self.assertEqual(body["steps"][0]["agents"][0]["assigned_node"], "mirror_neuron@192.168.4.34")
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_get_job_workflow_progress_marks_service_workers_idle_from_runtime_topology(self, mock_client):
-        mock_client.get_job.return_value = json.dumps({
-            "job": {
-                "job_id": "job-progress",
-                "job_type": "service",
-                "graph_id": "video_watch_assistant_v1",
-                "status": "running",
-                "submitted_at": "2026-05-31T10:00:00Z",
-                "runtime_topology": {
-                    "nodes": [
-                        {"node_id": "ingress", "agent_type": "router", "type": "map", "role": "root_coordinator"},
-                        {"node_id": "visual_detector", "agent_type": "executor", "type": "stream", "role": "visual_detector"},
-                    ]
+        mock_client.get_job.return_value = json.dumps(
+            {
+                "job": {
+                    "job_id": "job-progress",
+                    "job_type": "service",
+                    "graph_id": "video_watch_assistant_v1",
+                    "status": "running",
+                    "submitted_at": "2026-05-31T10:00:00Z",
+                    "runtime_topology": {
+                        "nodes": [
+                            {"node_id": "ingress", "agent_type": "router", "type": "map", "role": "root_coordinator"},
+                            {
+                                "node_id": "visual_detector",
+                                "agent_type": "executor",
+                                "type": "stream",
+                                "role": "visual_detector",
+                            },
+                        ]
+                    },
                 },
-            },
-            "summary": {"status": "running"},
-            "agents": [],
-        })
+                "summary": {"status": "running"},
+                "agents": [],
+            }
+        )
         mock_client.stream_events.return_value = [
             json.dumps({"type": "job_running", "timestamp": "2026-05-31T10:00:00Z"}),
             json.dumps({"type": "route_selected", "timestamp": "2026-05-31T10:00:01Z", "agent_id": "ingress"}),
-            json.dumps({"type": "executor_lease_acquired", "timestamp": "2026-05-31T10:00:02Z", "agent_id": "visual_detector"}),
-            json.dumps({"type": "sandbox_job_completed", "timestamp": "2026-05-31T10:00:05Z", "agent_id": "visual_detector"}),
+            json.dumps(
+                {"type": "executor_lease_acquired", "timestamp": "2026-05-31T10:00:02Z", "agent_id": "visual_detector"}
+            ),
+            json.dumps(
+                {"type": "sandbox_job_completed", "timestamp": "2026-05-31T10:00:05Z", "agent_id": "visual_detector"}
+            ),
         ]
 
         response = self.client.get("/api/v1/jobs/job-progress/workflow-progress")
@@ -2459,54 +2676,74 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(body["steps"][0]["status"], "done")
         self.assertEqual(body["agent_count"]["ready"], 2)
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_stream_job_workflow_progress_emits_snapshots(self, mock_client):
-        mock_client.get_job.return_value = json.dumps({
-            "job": {
-                "job_id": "job-progress",
-                "status": "running",
-                "submitted_at": "2026-05-31T10:00:00Z",
-                "manifest": {
-                    "id": "workflow-blueprint",
-                    "workflow": {
-                        "workflow_id": "workflow-blueprint_v1",
-                        "entrypoint": "research",
-                        "steps": [{"id": "research", "label": "Research", "run": "research_team"}],
-                    },
-                    "runtime": {
-                        "bindings": {
-                            "research_team": {"workers": [{"id": "research:docs", "role": "Analyze docs"}]}
-                        }
+        mock_client.get_job.return_value = json.dumps(
+            {
+                "job": {
+                    "job_id": "job-progress",
+                    "status": "running",
+                    "submitted_at": "2026-05-31T10:00:00Z",
+                    "manifest": {
+                        "id": "workflow-blueprint",
+                        "workflow": {
+                            "workflow_id": "workflow-blueprint_v1",
+                            "entrypoint": "research",
+                            "steps": [{"id": "research", "label": "Research", "run": "research_team"}],
+                        },
+                        "runtime": {
+                            "bindings": {
+                                "research_team": {"workers": [{"id": "research:docs", "role": "Analyze docs"}]}
+                            }
+                        },
                     },
                 },
-            },
-            "summary": {"status": "running"},
-            "agents": [],
-        })
-        history_event = json.dumps({
-            "type": "workflow_step_started",
-            "timestamp": "2026-05-31T10:00:01Z",
-            "payload": {"step": "research"},
-        })
+                "summary": {"status": "running"},
+                "agents": [],
+            }
+        )
+        history_event = json.dumps(
+            {
+                "type": "workflow_step_started",
+                "timestamp": "2026-05-31T10:00:01Z",
+                "payload": {"step": "research"},
+            }
+        )
         mock_client.stream_events.side_effect = [
             [history_event],
             [
                 history_event,
-                json.dumps({
-                    "type": "agent_beacon",
-                    "timestamp": "2026-05-31T10:00:01.100Z",
-                    "payload": {"step": "research", "agent_id": "research:docs", "message": "Reading", "progress": 0.2},
-                }),
-                json.dumps({
-                    "type": "agent_beacon",
-                    "timestamp": "2026-05-31T10:00:01.200Z",
-                    "payload": {"step": "research", "agent_id": "research:docs", "message": "Still reading", "progress": 0.3},
-                }),
-                json.dumps({
-                    "type": "workflow_step_attempt_completed",
-                    "timestamp": "2026-05-31T10:00:02Z",
-                    "payload": {"step": "research", "worker": "research:docs"},
-                }),
+                json.dumps(
+                    {
+                        "type": "agent_beacon",
+                        "timestamp": "2026-05-31T10:00:01.100Z",
+                        "payload": {
+                            "step": "research",
+                            "agent_id": "research:docs",
+                            "message": "Reading",
+                            "progress": 0.2,
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "agent_beacon",
+                        "timestamp": "2026-05-31T10:00:01.200Z",
+                        "payload": {
+                            "step": "research",
+                            "agent_id": "research:docs",
+                            "message": "Still reading",
+                            "progress": 0.3,
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "workflow_step_attempt_completed",
+                        "timestamp": "2026-05-31T10:00:02Z",
+                        "payload": {"step": "research", "worker": "research:docs"},
+                    }
+                ),
                 json.dumps({"type": "job_completed", "timestamp": "2026-05-31T10:00:03Z"}),
             ],
         ]
@@ -2520,7 +2757,7 @@ class TestAPI(unittest.TestCase):
         self.assertIn('"status": "completed"', body)
         self.assertIn('"done": 1', body)
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_get_job_defaults_to_compact_artifact_refs_for_large_runs(self, mock_client):
         with tempfile.TemporaryDirectory() as tmp:
             runs_root = Path(tmp)
@@ -2528,61 +2765,83 @@ class TestAPI(unittest.TestCase):
             output_dir = runs_root / "external-outputs"
             run_dir.mkdir()
             output_dir.mkdir()
-            (run_dir / "job.json").write_text(json.dumps({
-                "job_id": "job-large",
-                "run_id": "compact-run",
-                "graph_id": "personal_income_tax_expert_v1",
-                "status": "completed",
-            }))
-            (run_dir / "run.json").write_text(json.dumps({
-                "run_id": "compact-run",
-                "trace_id": "trc_compact",
-                "status": "completed",
-            }))
-            (run_dir / "observability_summary.json").write_text(json.dumps({
-                "schema_version": "mn.observability_summary.v1",
-                "run_id": "compact-run",
-                "trace_id": "trc_compact",
-                "status": "completed",
-                "counts": {"events": 1, "logs": 0, "errors": 0, "timeline": 1},
-            }))
+            (run_dir / "job.json").write_text(
+                json.dumps(
+                    {
+                        "job_id": "job-large",
+                        "run_id": "compact-run",
+                        "graph_id": "personal_income_tax_expert_v1",
+                        "status": "completed",
+                    }
+                )
+            )
+            (run_dir / "run.json").write_text(
+                json.dumps(
+                    {
+                        "run_id": "compact-run",
+                        "trace_id": "trc_compact",
+                        "status": "completed",
+                    }
+                )
+            )
+            (run_dir / "observability_summary.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "mn.observability_summary.v1",
+                        "run_id": "compact-run",
+                        "trace_id": "trc_compact",
+                        "status": "completed",
+                        "counts": {"events": 1, "logs": 0, "errors": 0, "timeline": 1},
+                    }
+                )
+            )
             (run_dir / "resources.jsonl").write_text(
-                json.dumps({
-                    "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                    "run_id": "compact-run",
-                    "llm": {"input_tokens": 42, "output_tokens": 9, "total_tokens": 51, "calls": 1},
-                })
+                json.dumps(
+                    {
+                        "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                        "run_id": "compact-run",
+                        "llm": {"input_tokens": 42, "output_tokens": 9, "total_tokens": 51, "calls": 1},
+                    }
+                )
                 + "\n"
             )
             (run_dir / "result.json").write_text(json.dumps({"ok": True}))
-            (run_dir / "final_artifact.json").write_text(json.dumps({
-                "type": "prepared_1040_tax_packet",
-                "advisor_message": "Draft packet.",
-            }))
+            (run_dir / "final_artifact.json").write_text(
+                json.dumps(
+                    {
+                        "type": "prepared_1040_tax_packet",
+                        "advisor_message": "Draft packet.",
+                    }
+                )
+            )
             (run_dir / "report.md").write_text("# Draft Review Packet\n")
             (run_dir / "tax-review-packet.pdf").write_bytes(b"%PDF-1.4\n")
             external_report = output_dir / "compact-run-report.md"
             external_report.write_text("# Customer Output\n")
-            (run_dir / "post_launch_materialized.json").write_text(json.dumps({
-                "ok": True,
-                "output_files": [
-                    {"kind": "report_markdown", "path": str(external_report)}
-                ],
-            }))
+            (run_dir / "post_launch_materialized.json").write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "output_files": [{"kind": "report_markdown", "path": str(external_report)}],
+                    }
+                )
+            )
 
             huge_log = "x" * (5 * 1024 * 1024)
             mock_client.get_job.side_effect = AssertionError("default job details should not call full gRPC get_job")
             mock_client.stream_events.return_value = [
-                json.dumps({
-                    "type": "job_completed",
-                    "timestamp": "2026-05-25T23:00:00Z",
-                    "agent_id": "tax_manager",
-                    "sandbox": {"logs": huge_log},
-                    "payload": {
-                        "run_id": "compact-run",
-                        "result": {"final_artifact": {"body": huge_log}},
-                    },
-                })
+                json.dumps(
+                    {
+                        "type": "job_completed",
+                        "timestamp": "2026-05-25T23:00:00Z",
+                        "agent_id": "tax_manager",
+                        "sandbox": {"logs": huge_log},
+                        "payload": {
+                            "run_id": "compact-run",
+                            "result": {"final_artifact": {"body": huge_log}},
+                        },
+                    }
+                )
             ]
 
             with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
@@ -2605,31 +2864,39 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(body["resource_usage"]["llm"]["input_tokens"], 42)
         self.assertEqual(body["resource_usage"]["llm"]["output_tokens"], 9)
         self.assertEqual(body["resource_usage"]["llm"]["total_tokens"], 51)
-        output_ref = next(artifact for artifact in body["output_files"] if artifact["artifact_id"] == "output_0_report_markdown")
+        output_ref = next(
+            artifact for artifact in body["output_files"] if artifact["artifact_id"] == "output_0_report_markdown"
+        )
         self.assertEqual(output_ref["source"], "post_launch_output")
         self.assertEqual(output_ref["url"], "/api/v1/runs/compact-run/outputs/0")
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_get_job_compact_upgrades_legacy_failure_reason(self, mock_client):
         with tempfile.TemporaryDirectory() as tmp:
             runs_root = Path(tmp)
             run_dir = runs_root / "failed-run"
             run_dir.mkdir()
-            (run_dir / "job.json").write_text(json.dumps({
-                "job_id": "job-failed",
-                "run_id": "failed-run",
-                "graph_id": "failure_graph",
-                "status": "failed",
-            }))
+            (run_dir / "job.json").write_text(
+                json.dumps(
+                    {
+                        "job_id": "job-failed",
+                        "run_id": "failed-run",
+                        "graph_id": "failure_graph",
+                        "status": "failed",
+                    }
+                )
+            )
             (run_dir / "errors.jsonl").write_text("")
             mock_client.get_job.side_effect = AssertionError("default job details should not call full gRPC get_job")
             mock_client.stream_events.return_value = [
-                json.dumps({
-                    "type": "job_failed",
-                    "timestamp": "2026-06-04T12:00:00Z",
-                    "reason": "workflow step heartbeat deadline exceeded",
-                    "payload": {"run_id": "failed-run", "step_id": "prepare"},
-                })
+                json.dumps(
+                    {
+                        "type": "job_failed",
+                        "timestamp": "2026-06-04T12:00:00Z",
+                        "reason": "workflow step heartbeat deadline exceeded",
+                        "payload": {"run_id": "failed-run", "step_id": "prepare"},
+                    }
+                )
             ]
 
             with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
@@ -2640,42 +2907,59 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(body["failure"]["schema_version"], "mn.error.v1")
         self.assertEqual(body["failure"]["desc"], "Workflow step heartbeat deadline exceeded")
         self.assertEqual(body["summary"]["failure"]["code"], "runtime.failure")
-        self.assertEqual(body["job"]["reason"] if "reason" in body["job"] else body["failure"]["desc"], "Workflow step heartbeat deadline exceeded")
+        self.assertEqual(
+            body["job"]["reason"] if "reason" in body["job"] else body["failure"]["desc"],
+            "Workflow step heartbeat deadline exceeded",
+        )
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_get_job_compact_suppresses_failure_for_completed_job(self, mock_client):
         with tempfile.TemporaryDirectory() as tmp:
             runs_root = Path(tmp)
             run_dir = runs_root / "completed-run"
             run_dir.mkdir()
-            (run_dir / "job.json").write_text(json.dumps({
-                "job_id": "job-completed",
-                "run_id": "completed-run",
-                "graph_id": "invoice_bill_extraction_assistant_v1",
-                "status": "completed",
-            }))
-            (run_dir / "run.json").write_text(json.dumps({
-                "run_id": "completed-run",
-                "status": "completed",
-            }))
+            (run_dir / "job.json").write_text(
+                json.dumps(
+                    {
+                        "job_id": "job-completed",
+                        "run_id": "completed-run",
+                        "graph_id": "invoice_bill_extraction_assistant_v1",
+                        "status": "completed",
+                    }
+                )
+            )
+            (run_dir / "run.json").write_text(
+                json.dumps(
+                    {
+                        "run_id": "completed-run",
+                        "status": "completed",
+                    }
+                )
+            )
             mock_client.get_job.side_effect = AssertionError("default job details should not call full gRPC get_job")
             mock_client.stream_events.return_value = [
-                json.dumps({
-                    "type": "job_running",
-                    "timestamp": "2026-06-04T12:00:00Z",
-                    "payload": {"run_id": "completed-run"},
-                }),
-                json.dumps({
-                    "type": "job_failed",
-                    "timestamp": "2026-06-04T12:00:01Z",
-                    "reason": "fewer than 2 healthy connected runtime nodes observed",
-                    "payload": {"run_id": "completed-run"},
-                }),
-                json.dumps({
-                    "type": "job_completed",
-                    "timestamp": "2026-06-04T12:00:02Z",
-                    "payload": {"run_id": "completed-run"},
-                }),
+                json.dumps(
+                    {
+                        "type": "job_running",
+                        "timestamp": "2026-06-04T12:00:00Z",
+                        "payload": {"run_id": "completed-run"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "job_failed",
+                        "timestamp": "2026-06-04T12:00:01Z",
+                        "reason": "fewer than 2 healthy connected runtime nodes observed",
+                        "payload": {"run_id": "completed-run"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "job_completed",
+                        "timestamp": "2026-06-04T12:00:02Z",
+                        "payload": {"run_id": "completed-run"},
+                    }
+                ),
             ]
 
             with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
@@ -2689,35 +2973,43 @@ class TestAPI(unittest.TestCase):
         self.assertNotIn("failure", body["summary"])
         self.assertTrue(any(event.get("failure") for event in body["events"]))
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_get_job_compact_does_not_promote_reliability_reason_to_failure(self, mock_client):
         with tempfile.TemporaryDirectory() as tmp:
             runs_root = Path(tmp)
             run_dir = runs_root / "running-run"
             run_dir.mkdir()
-            (run_dir / "job.json").write_text(json.dumps({
-                "job_id": "job-running",
-                "run_id": "running-run",
-                "graph_id": "invoice_bill_extraction_assistant_v1",
-                "status": "running",
-            }))
+            (run_dir / "job.json").write_text(
+                json.dumps(
+                    {
+                        "job_id": "job-running",
+                        "run_id": "running-run",
+                        "graph_id": "invoice_bill_extraction_assistant_v1",
+                        "status": "running",
+                    }
+                )
+            )
             mock_client.get_job.side_effect = AssertionError("default job details should not call full gRPC get_job")
             mock_client.stream_events.return_value = [
-                json.dumps({
-                    "type": "reliability_strategy_resolved",
-                    "timestamp": "2026-06-04T12:00:00Z",
-                    "requested_recovery_policy": "auto",
-                    "effective_recovery_policy": "local_restart",
-                    "mode": "single_node",
-                    "degraded": False,
-                    "reason": "fewer than 2 healthy connected runtime nodes observed",
-                    "observed_nodes": ["mirror_neuron@127.0.0.1"],
-                }),
-                json.dumps({
-                    "type": "job_running",
-                    "timestamp": "2026-06-04T12:00:01Z",
-                    "payload": {"run_id": "running-run"},
-                }),
+                json.dumps(
+                    {
+                        "type": "reliability_strategy_resolved",
+                        "timestamp": "2026-06-04T12:00:00Z",
+                        "requested_recovery_policy": "auto",
+                        "effective_recovery_policy": "local_restart",
+                        "mode": "single_node",
+                        "degraded": False,
+                        "reason": "fewer than 2 healthy connected runtime nodes observed",
+                        "observed_nodes": ["mirror_neuron@127.0.0.1"],
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "job_running",
+                        "timestamp": "2026-06-04T12:00:01Z",
+                        "payload": {"run_id": "running-run"},
+                    }
+                ),
             ]
 
             with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
@@ -2731,40 +3023,44 @@ class TestAPI(unittest.TestCase):
         self.assertNotIn("failure", body["summary"])
         self.assertFalse(any(event.get("failure") for event in body["events"]))
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_get_job_workflow_progress_suppresses_failure_for_completed_job(self, mock_client):
-        mock_client.get_job.return_value = json.dumps({
-            "job": {
-                "job_id": "job-completed",
-                "status": "completed",
-                "manifest": {
-                    "id": "invoice-blueprint",
-                    "workflow": {
-                        "workflow_id": "invoice-blueprint_v1",
-                        "entrypoint": "extract",
-                        "steps": [{"id": "extract", "label": "Extract", "run": "extractor"}],
-                    },
-                    "runtime": {
-                        "bindings": {
-                            "extractor": {"workers": [{"id": "extractor", "role": "Extract fields"}]}
-                        }
+        mock_client.get_job.return_value = json.dumps(
+            {
+                "job": {
+                    "job_id": "job-completed",
+                    "status": "completed",
+                    "manifest": {
+                        "id": "invoice-blueprint",
+                        "workflow": {
+                            "workflow_id": "invoice-blueprint_v1",
+                            "entrypoint": "extract",
+                            "steps": [{"id": "extract", "label": "Extract", "run": "extractor"}],
+                        },
+                        "runtime": {
+                            "bindings": {"extractor": {"workers": [{"id": "extractor", "role": "Extract fields"}]}}
+                        },
                     },
                 },
-            },
-            "summary": {"status": "completed"},
-            "agents": [],
-        })
+                "summary": {"status": "completed"},
+                "agents": [],
+            }
+        )
         mock_client.stream_events.return_value = [
-            json.dumps({
-                "type": "workflow_step_attempt_completed",
-                "timestamp": "2026-06-04T12:00:00Z",
-                "payload": {"step": "extract", "worker": "extractor"},
-            }),
-            json.dumps({
-                "type": "job_failed",
-                "timestamp": "2026-06-04T12:00:01Z",
-                "reason": "fewer than 2 healthy connected runtime nodes observed",
-            }),
+            json.dumps(
+                {
+                    "type": "workflow_step_attempt_completed",
+                    "timestamp": "2026-06-04T12:00:00Z",
+                    "payload": {"step": "extract", "worker": "extractor"},
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "job_failed",
+                    "timestamp": "2026-06-04T12:00:01Z",
+                    "reason": "fewer than 2 healthy connected runtime nodes observed",
+                }
+            ),
             json.dumps({"type": "job_completed", "timestamp": "2026-06-04T12:00:02Z"}),
         ]
 
@@ -2775,21 +3071,25 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(body["status"], "completed")
         self.assertNotIn("failure", body)
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_get_job_compact_does_not_treat_agent_completion_as_job_completion(self, mock_client):
         mock_client.get_job.side_effect = AssertionError("default job details should not call full gRPC get_job")
         mock_client.stream_events.return_value = [
-            json.dumps({
-                "type": "job_started",
-                "timestamp": "2026-05-25T23:00:00Z",
-                "payload": {"run_id": "service-run"},
-            }),
-            json.dumps({
-                "type": "sandbox_job_completed",
-                "timestamp": "2026-05-25T23:00:05Z",
-                "agent_id": "visual_detector",
-                "payload": {"exit_code": 0, "run_id": "service-run"},
-            }),
+            json.dumps(
+                {
+                    "type": "job_started",
+                    "timestamp": "2026-05-25T23:00:00Z",
+                    "payload": {"run_id": "service-run"},
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "sandbox_job_completed",
+                    "timestamp": "2026-05-25T23:00:05Z",
+                    "agent_id": "visual_detector",
+                    "payload": {"exit_code": 0, "run_id": "service-run"},
+                }
+            ),
         ]
 
         response = self.client.get("/api/v1/jobs/service-job")
@@ -2799,7 +3099,7 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(body["job"]["status"], "running")
         self.assertEqual(body["summary"]["status"], "running")
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_get_job_compact_infers_lifecycle_status_from_bare_runtime_events(self, mock_client):
         mock_client.get_job.side_effect = AssertionError("default job details should not call full gRPC get_job")
         cases = {
@@ -2812,11 +3112,13 @@ class TestAPI(unittest.TestCase):
         for event_type, expected_status in cases.items():
             with self.subTest(event_type=event_type):
                 mock_client.stream_events.return_value = [
-                    json.dumps({
-                        "type": event_type,
-                        "timestamp": "2026-06-04T12:00:00Z",
-                        "payload": {"run_id": "lifecycle-run"},
-                    })
+                    json.dumps(
+                        {
+                            "type": event_type,
+                            "timestamp": "2026-06-04T12:00:00Z",
+                            "payload": {"run_id": "lifecycle-run"},
+                        }
+                    )
                 ]
 
                 response = self.client.get(f"/api/v1/jobs/{event_type}-job")
@@ -2826,11 +3128,11 @@ class TestAPI(unittest.TestCase):
                 self.assertEqual(body["job"]["status"], expected_status)
                 self.assertEqual(body["summary"]["status"], expected_status)
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_get_job_include_full_keeps_debug_grpc_path(self, mock_client):
-        mock_client.get_job.return_value = json.dumps({
-            "job": {"job_id": "job-full", "graph_id": "graph-1", "status": "running"}
-        })
+        mock_client.get_job.return_value = json.dumps(
+            {"job": {"job_id": "job-full", "graph_id": "graph-1", "status": "running"}}
+        )
 
         response = self.client.get("/api/v1/jobs/job-full?include=full")
 
@@ -2838,26 +3140,58 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.json()["job"]["job_id"], "job-full")
         mock_client.get_job.assert_called_once_with("job-full")
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
+    def test_get_job_result_snapshot_resolves_syncthing_reference(self, mock_client):
+        reference = {
+            "type": "artifact_ref",
+            "version": "mn.staged_artifact/v1",
+            "storage": "syncthing",
+            "kind": "job_result",
+            "submission_id": "submission-1",
+            "run_id": "run-1",
+            "relative_path": "outputs/runs/run-1/artifacts/aa/result.json",
+            "content_type": "application/json",
+            "size_bytes": 11,
+            "sha256": "a" * 64,
+        }
+        mock_client.get_job.return_value = json.dumps({"job": {"job_id": "job-1", "result_ref": reference}})
+
+        with patch(
+            "mn_api.routes.jobs.resolve_json_reference",
+            return_value={"final_artifact": {"ok": True}},
+        ) as resolve:
+            response = self.client.get("/api/v1/jobs/job-1/snapshots/result")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["final_artifact"], {"ok": True})
+        resolve.assert_called_once_with(reference)
+
+    @patch("mn_api.state.client")
     def test_get_job_agent_graph_success(self, mock_client):
-        mock_client.get_job.return_value = json.dumps({
-            "job": {"job_id": "job-1", "graph_id": "graph-1", "status": "running"},
-            "agents": [
-                {"agent_id": "planner", "agent_type": "router", "status": "ready"},
-                {"agent_id": "worker", "agent_type": "executor", "status": "running"},
-            ],
-        })
+        mock_client.get_job.return_value = json.dumps(
+            {
+                "job": {"job_id": "job-1", "graph_id": "graph-1", "status": "running"},
+                "agents": [
+                    {"agent_id": "planner", "agent_type": "router", "status": "ready"},
+                    {"agent_id": "worker", "agent_type": "executor", "status": "running"},
+                ],
+            }
+        )
         mock_client.stream_events.return_value = [
-            json.dumps({
-                "type": "agent_message_received",
-                "timestamp": "2026-04-29T12:00:00Z",
-                "payload": {"from": "planner", "to": "worker", "type": "task"},
-            }),
-            json.dumps({
-                "type": "agent_message_received",
-                "timestamp": "2026-04-29T12:00:01Z",
-                "payload": {"from": "planner", "to": "worker", "type": "task"},
-            }),
+            json.dumps(
+                {
+                    "type": "agent_message_received",
+                    "timestamp": "2026-04-29T12:00:00Z",
+                    "payload": {"from": "planner", "to": "worker", "type": "task"},
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "agent_message_received",
+                    "timestamp": "2026-04-29T12:00:01Z",
+                    "payload": {"from": "planner", "to": "worker", "type": "task"},
+                }
+            ),
         ]
 
         response = self.client.get("/api/v1/jobs/job-1/agent-graph")
@@ -2872,45 +3206,51 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(body["edges"][0]["message_type"], "task")
         self.assertEqual(body["edges"][0]["count"], 2)
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_get_job_agent_graph_includes_manifest_edges(self, mock_client):
         with tempfile.TemporaryDirectory() as tmpdir:
             manifest_path = Path(tmpdir) / "manifest.json"
-            manifest_path.write_text(json.dumps({
-                "graph_id": "graph-1",
-                "nodes": [
-                    {"node_id": "ingress", "agent_type": "router", "type": "generic"},
-                    {"node_id": "source", "agent_type": "executor", "type": "stream"},
-                    {"node_id": "sink", "agent_type": "executor", "type": "stream"},
-                ],
-                "edges": [
+            manifest_path.write_text(
+                json.dumps(
                     {
-                        "edge_id": "ingress_to_source",
-                        "from_node": "ingress",
-                        "to_node": "source",
-                        "message_type": "stream_start",
+                        "graph_id": "graph-1",
+                        "nodes": [
+                            {"node_id": "ingress", "agent_type": "router", "type": "generic"},
+                            {"node_id": "source", "agent_type": "executor", "type": "stream"},
+                            {"node_id": "sink", "agent_type": "executor", "type": "stream"},
+                        ],
+                        "edges": [
+                            {
+                                "edge_id": "ingress_to_source",
+                                "from_node": "ingress",
+                                "to_node": "source",
+                                "message_type": "stream_start",
+                            },
+                            {
+                                "edge_id": "source_to_sink",
+                                "from_node": "source",
+                                "to_node": "sink",
+                                "message_type": "telemetry_event",
+                            },
+                        ],
+                    }
+                )
+            )
+            mock_client.get_job.return_value = json.dumps(
+                {
+                    "job": {
+                        "job_id": "job-1",
+                        "graph_id": "graph-1",
+                        "status": "running",
+                        "manifest_ref": {"manifest_path": str(manifest_path)},
                     },
-                    {
-                        "edge_id": "source_to_sink",
-                        "from_node": "source",
-                        "to_node": "sink",
-                        "message_type": "telemetry_event",
-                    },
-                ],
-            }))
-            mock_client.get_job.return_value = json.dumps({
-                "job": {
-                    "job_id": "job-1",
-                    "graph_id": "graph-1",
-                    "status": "running",
-                    "manifest_ref": {"manifest_path": str(manifest_path)},
-                },
-                "agents": [
-                    {"agent_id": "ingress", "agent_type": "router", "status": "ready"},
-                    {"agent_id": "source", "agent_type": "executor", "status": "running"},
-                    {"agent_id": "sink", "agent_type": "executor", "status": "running"},
-                ],
-            })
+                    "agents": [
+                        {"agent_id": "ingress", "agent_type": "router", "status": "ready"},
+                        {"agent_id": "source", "agent_type": "executor", "status": "running"},
+                        {"agent_id": "sink", "agent_type": "executor", "status": "running"},
+                    ],
+                }
+            )
             mock_client.stream_events.return_value = []
 
             response = self.client.get("/api/v1/jobs/job-1/agent-graph")
@@ -2928,30 +3268,32 @@ class TestAPI(unittest.TestCase):
             },
         )
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_get_job_agent_graph_includes_persisted_topology_edges(self, mock_client):
-        mock_client.get_job.return_value = json.dumps({
-            "job": {
-                "job_id": "job-1",
-                "graph_id": "graph-1",
-                "status": "running",
-                "topology": {
-                    "nodes": [
-                        {"node_id": "source", "agent_type": "executor", "type": "stream"},
-                        {"node_id": "sink", "agent_type": "executor", "type": "stream"},
-                    ],
-                    "edges": [
-                        {
-                            "edge_id": "source_to_sink",
-                            "from_node": "source",
-                            "to_node": "sink",
-                            "message_type": "telemetry_event",
-                        },
-                    ],
+        mock_client.get_job.return_value = json.dumps(
+            {
+                "job": {
+                    "job_id": "job-1",
+                    "graph_id": "graph-1",
+                    "status": "running",
+                    "topology": {
+                        "nodes": [
+                            {"node_id": "source", "agent_type": "executor", "type": "stream"},
+                            {"node_id": "sink", "agent_type": "executor", "type": "stream"},
+                        ],
+                        "edges": [
+                            {
+                                "edge_id": "source_to_sink",
+                                "from_node": "source",
+                                "to_node": "sink",
+                                "message_type": "telemetry_event",
+                            },
+                        ],
+                    },
                 },
-            },
-            "agents": [],
-        })
+                "agents": [],
+            }
+        )
         mock_client.stream_events.return_value = []
 
         response = self.client.get("/api/v1/jobs/job-1/agent-graph")
@@ -2965,25 +3307,29 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(body["edges"][0]["message_type"], "telemetry_event")
         self.assertEqual(body["edges"][0]["count"], 0)
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_get_job_agent_graph_derives_edges_from_message_envelopes(self, mock_client):
-        mock_client.get_job.return_value = json.dumps({
-            "job": {"job_id": "job-1", "graph_id": "graph-1", "status": "running"},
-            "agents": [{"agent_id": "sink", "agent_type": "executor", "status": "running"}],
-        })
+        mock_client.get_job.return_value = json.dumps(
+            {
+                "job": {"job_id": "job-1", "graph_id": "graph-1", "status": "running"},
+                "agents": [{"agent_id": "sink", "agent_type": "executor", "status": "running"}],
+            }
+        )
         mock_client.stream_events.return_value = [
-            json.dumps({
-                "type": "agent_message_received",
-                "timestamp": "2026-04-29T12:00:00Z",
-                "agent_id": "sink",
-                "message": {
-                    "envelope": {
-                        "from": "external-source",
-                        "to": "sink",
-                        "type": "replayed_task",
-                    }
-                },
-            })
+            json.dumps(
+                {
+                    "type": "agent_message_received",
+                    "timestamp": "2026-04-29T12:00:00Z",
+                    "agent_id": "sink",
+                    "message": {
+                        "envelope": {
+                            "from": "external-source",
+                            "to": "sink",
+                            "type": "replayed_task",
+                        }
+                    },
+                }
+            )
         ]
 
         response = self.client.get("/api/v1/jobs/job-1/agent-graph")
@@ -2996,19 +3342,21 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(body["edges"][0]["target"], "sink")
         self.assertEqual(body["edges"][0]["message_type"], "replayed_task")
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_get_job_agent_graph_includes_outbound_edge_metadata(self, mock_client):
-        mock_client.get_job.return_value = json.dumps({
-            "job": {"job_id": "job-1", "graph_id": "graph-1", "status": "running"},
-            "agents": [
-                {
-                    "agent_id": "planner",
-                    "agent_type": "router",
-                    "status": "running",
-                    "metadata": {"outbound_edges": ["worker"]},
-                }
-            ],
-        })
+        mock_client.get_job.return_value = json.dumps(
+            {
+                "job": {"job_id": "job-1", "graph_id": "graph-1", "status": "running"},
+                "agents": [
+                    {
+                        "agent_id": "planner",
+                        "agent_type": "router",
+                        "status": "running",
+                        "metadata": {"outbound_edges": ["worker"]},
+                    }
+                ],
+            }
+        )
         mock_client.stream_events.return_value = []
 
         response = self.client.get("/api/v1/jobs/job-1/agent-graph")
@@ -3021,7 +3369,7 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(body["edges"][0]["source"], "planner")
         self.assertEqual(body["edges"][0]["target"], "worker")
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_get_job_dead_letters_success(self, mock_client):
         mock_client.stream_events.return_value = [
             '{"type": "agent_started"}',
@@ -3032,7 +3380,7 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.json()["data"][0]["reason"], "queue full")
         mock_client.stream_events.assert_called_once_with("test_job_123", follow=False, limit=25)
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_replay_job_dead_letter_reports_not_exposed_without_backend_call(self, mock_client):
         response = self.client.post("/api/v1/jobs/test_job_123/dead-letters/2/replay")
 
@@ -3043,14 +3391,16 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(body["index"], 2)
         mock_client.stream_events.assert_not_called()
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_metrics_success(self, mock_client):
-        mock_client.get_system_summary.return_value = '{"nodes": ["n1"], "jobs": [{"status": "running"}, {"status": "failed"}]}'
+        mock_client.get_system_summary.return_value = (
+            '{"nodes": ["n1"], "jobs": [{"status": "running"}, {"status": "failed"}]}'
+        )
         response = self.client.get("/api/v1/metrics")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["jobs"]["by_status"], {"running": 1, "failed": 1})
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_pause_and_resume_job_success(self, mock_client):
         mock_client.pause_job.return_value = "paused"
         pause_response = self.client.post("/api/v1/jobs/test_job_123/pause")
@@ -3062,7 +3412,7 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(resume_response.status_code, 200)
         self.assertEqual(resume_response.json(), {"version": 1, "status": "running", "job_id": "test_job_123"})
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_pause_and_resume_job_grpc_errors(self, mock_client):
         class MockRpcError(Exception):
             def __init__(self, detail):
@@ -3115,13 +3465,15 @@ class TestAPI(unittest.TestCase):
             repo = Path(tmpdir)
             self._write_blueprint_repo(repo)
             index = json.loads((repo / "index.json").read_text())
-            index.append({
-                "id": "worker_two",
-                "name": "Worker Two",
-                "path": "worker_two",
-                "category": "Finance",
-                "description": "A finance worker.",
-            })
+            index.append(
+                {
+                    "id": "worker_two",
+                    "name": "Worker Two",
+                    "path": "worker_two",
+                    "category": "Finance",
+                    "description": "A finance worker.",
+                }
+            )
             (repo / "index.json").write_text(json.dumps(index))
             original = self._set_blueprint_config(repo)
             try:
@@ -3142,39 +3494,47 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(business_response.status_code, 200)
         self.assertEqual([bp["id"] for bp in business_response.json()["blueprints"]], ["worker_one"])
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_blueprint_run_returns_job_and_run_ids(self, mock_client):
         mock_client.submit_job.return_value = "job-blueprint-1"
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
             runs_root = (repo / "runs").resolve()
             self._write_blueprint_repo(repo)
-            (repo / "worker_one" / "manifest.json").write_text(json.dumps({
-                "graph_id": "worker_one_graph",
-                "nodes": [{"node_id": "worker", "config": {"environment": {}}}],
-                "edges": [],
-                "metadata": {},
-            }))
+            (repo / "worker_one" / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "graph_id": "worker_one_graph",
+                        "nodes": [{"node_id": "worker", "config": {"environment": {}}}],
+                        "edges": [],
+                        "metadata": {},
+                    }
+                )
+            )
             config_dir = repo / "worker_one" / "config"
             config_dir.mkdir()
-            (config_dir / "default.json").write_text(json.dumps({
-                "identity": {"run_id": "stale-run"},
-                "outputs": {"run_root": str(repo / "blueprints" / "worker_one" / "runs")},
-                "manifest_config_bindings": [
+            (config_dir / "default.json").write_text(
+                json.dumps(
                     {
-                        "config_path": "identity.run_id",
-                        "manifest_path": "nodes.*.config.environment.MN_RUN_ID",
-                    },
-                    {
-                        "config_path": "outputs.run_root",
-                        "manifest_path": "nodes.*.config.environment.MN_RUNS_ROOT",
-                    },
-                ],
-            }))
+                        "identity": {"run_id": "stale-run"},
+                        "outputs": {"run_root": str(repo / "blueprints" / "worker_one" / "runs")},
+                        "manifest_config_bindings": [
+                            {
+                                "config_path": "identity.run_id",
+                                "manifest_path": "nodes.*.config.environment.MN_RUN_ID",
+                            },
+                            {
+                                "config_path": "outputs.run_root",
+                                "manifest_path": "nodes.*.config.environment.MN_RUNS_ROOT",
+                            },
+                        ],
+                    }
+                )
+            )
             original = self._set_blueprint_config(repo)
             try:
                 with patch.dict(
-                    'os.environ',
+                    "os.environ",
                     {
                         "MN_RUNS_ROOT": str(runs_root),
                         "MN_SHARED_STORAGE_ROOT": str(repo / "shared"),
@@ -3210,7 +3570,7 @@ class TestAPI(unittest.TestCase):
         self.assertFalse((repo / "blueprints" / "worker_one" / "runs").exists())
         self.assertEqual(payloads, {"payload.txt": b"hello"})
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_blueprint_run_generates_run_id_when_missing(self, mock_client):
         mock_client.submit_job.return_value = "job-blueprint-generated"
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -3219,8 +3579,11 @@ class TestAPI(unittest.TestCase):
             self._write_blueprint_repo(repo)
             original = self._set_blueprint_config(repo)
             try:
-                with patch.dict('os.environ', {"MN_RUNS_ROOT": str(runs_root)}):
-                    with patch("mn_api.routes.blueprints.validate_blueprint_hardware_requirements", return_value={"ok": True, "status": "passed", "issues": [], "errors": []}):
+                with patch.dict("os.environ", {"MN_RUNS_ROOT": str(runs_root)}):
+                    with patch(
+                        "mn_api.routes.blueprints.validate_blueprint_hardware_requirements",
+                        return_value={"ok": True, "status": "passed", "issues": [], "errors": []},
+                    ):
                         response = self._sync_blueprint_run(repo, {"force": True})
                     body = response.json()
                     mapping_exists = (runs_root / body["run_id"] / "job.json").exists()
@@ -3237,7 +3600,7 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(manifest["metadata"]["mn_cli"]["blueprint_run_id"], body["run_id"])
         self.assertTrue(mapping_exists)
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_blueprint_run_stages_blueprint_relative_local_inputs_from_api_overrides(self, mock_client):
         cases = [
             ("catalog_relative_default", "vc_assistant/examples/sample_inputs"),
@@ -3252,52 +3615,60 @@ class TestAPI(unittest.TestCase):
                 runs_root = (repo / "runs").resolve()
                 self._write_blueprint_repo(repo)
                 bundle = repo / "worker_one"
-                (bundle / "manifest.json").write_text(json.dumps({
-                    "graph_id": "worker_one_graph",
-                    "nodes": [{"node_id": "worker", "config": {"environment": {}}}],
-                    "edges": [],
-                    "metadata": {},
-                }))
+                (bundle / "manifest.json").write_text(
+                    json.dumps(
+                        {
+                            "graph_id": "worker_one_graph",
+                            "nodes": [{"node_id": "worker", "config": {"environment": {}}}],
+                            "edges": [],
+                            "metadata": {},
+                        }
+                    )
+                )
                 input_dir = bundle / "examples" / "sample_inputs" / "company_a"
                 input_dir.mkdir(parents=True)
                 (input_dir / "memo.txt").write_text("sample memo")
                 config_dir = bundle / "config"
                 config_dir.mkdir()
-                (config_dir / "default.json").write_text(json.dumps({
-                    "document_sources": {"folder_path": "vc_assistant/examples/sample_inputs"},
-                    "inputs": {
-                        "payload": {
-                            "document_folder": "vc_assistant/examples/sample_inputs",
-                            "input_folder": "vc_assistant/examples/sample_inputs",
+                (config_dir / "default.json").write_text(
+                    json.dumps(
+                        {
+                            "document_sources": {"folder_path": "vc_assistant/examples/sample_inputs"},
+                            "inputs": {
+                                "payload": {
+                                    "document_folder": "vc_assistant/examples/sample_inputs",
+                                    "input_folder": "vc_assistant/examples/sample_inputs",
+                                }
+                            },
+                            "state": {
+                                "document_folder": "vc_assistant/examples/sample_inputs",
+                                "input_folder": "vc_assistant/examples/sample_inputs",
+                            },
+                            "outputs": {"folder_path": "~/Downloads/vc_assistant"},
+                            "local_inputs": {
+                                "folders": [
+                                    {
+                                        "config_path": "document_sources.folder_path",
+                                        "default_config_value": "vc_assistant/examples/sample_inputs",
+                                        "source_path": "examples/sample_inputs",
+                                        "payload_path": "document_workflow/mn_local_inputs/document_sources",
+                                        "linked_config_paths": [
+                                            "inputs.payload.document_folder",
+                                            "inputs.payload.input_folder",
+                                            "state.document_folder",
+                                            "state.input_folder",
+                                        ],
+                                        "allowed_extensions": [".txt"],
+                                    }
+                                ]
+                            },
                         }
-                    },
-                    "state": {
-                        "document_folder": "vc_assistant/examples/sample_inputs",
-                        "input_folder": "vc_assistant/examples/sample_inputs",
-                    },
-                    "outputs": {"folder_path": "~/Downloads/vc_assistant"},
-                    "local_inputs": {
-                        "folders": [
-                            {
-                                "config_path": "document_sources.folder_path",
-                                "default_config_value": "vc_assistant/examples/sample_inputs",
-                                "source_path": "examples/sample_inputs",
-                                "payload_path": "document_workflow/mn_local_inputs/document_sources",
-                                "linked_config_paths": [
-                                    "inputs.payload.document_folder",
-                                    "inputs.payload.input_folder",
-                                    "state.document_folder",
-                                    "state.input_folder",
-                                ],
-                                "allowed_extensions": [".txt"],
-                            }
-                        ]
-                    },
-                }))
+                    )
+                )
                 original = self._set_blueprint_config(repo)
                 try:
                     with patch.dict(
-                        'os.environ',
+                        "os.environ",
                         {
                             "MN_RUNS_ROOT": str(runs_root),
                             "MN_SHARED_STORAGE_ROOT": str(repo / "shared"),
@@ -3344,7 +3715,7 @@ class TestAPI(unittest.TestCase):
                 )
                 self.assertEqual(payloads, {"payload.txt": b"hello"})
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_blueprint_run_starts_event_relay_for_post_launch_batch_worker(self, mock_client):
         mock_client.submit_job.return_value = "job-post-launch"
         mock_client.list_jobs.return_value = json.dumps({"data": []})
@@ -3364,9 +3735,12 @@ class TestAPI(unittest.TestCase):
 
             original = self._set_blueprint_config(repo)
             try:
-                with patch.dict('os.environ', {"MN_RUNS_ROOT": str(runs_root)}):
-                    with patch('mn_api.blueprints.subprocess.Popen', side_effect=fake_popen):
-                        with patch("mn_api.routes.blueprints.validate_blueprint_hardware_requirements", return_value={"ok": True, "status": "passed", "issues": [], "errors": []}):
+                with patch.dict("os.environ", {"MN_RUNS_ROOT": str(runs_root)}):
+                    with patch("mn_api.blueprints.subprocess.Popen", side_effect=fake_popen):
+                        with patch(
+                            "mn_api.routes.blueprints.validate_blueprint_hardware_requirements",
+                            return_value={"ok": True, "status": "passed", "issues": [], "errors": []},
+                        ):
                             response = self._sync_blueprint_run(repo, {"run_id": "run-post-launch", "force": True})
                         relay_info = json.loads((runs_root / "run-post-launch" / "event_relay.json").read_text())
             finally:
@@ -3375,47 +3749,52 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         relay_commands = [command for command in popen_commands if "mn_sdk.blueprint_support.event_relay" in command]
         self.assertEqual(len(relay_commands), 1)
-        self.assertEqual(relay_commands[0][:9], [
-            sys.executable,
-            "-m",
-            "mn_sdk.blueprint_support.event_relay",
-            "--job-id",
-            "job-post-launch",
-            "--run-dir",
-            str(runs_root / "run-post-launch"),
-            "--poll-seconds",
-            "1",
-        ])
+        self.assertEqual(
+            relay_commands[0][:9],
+            [
+                sys.executable,
+                "-m",
+                "mn_sdk.blueprint_support.event_relay",
+                "--job-id",
+                "job-post-launch",
+                "--run-dir",
+                str(runs_root / "run-post-launch"),
+                "--poll-seconds",
+                "1",
+            ],
+        )
         self.assertEqual(relay_info["job_id"], "job-post-launch")
         self.assertEqual(relay_info["run_id"], "run-post-launch")
         self.assertEqual(relay_info["service"], {})
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_blueprint_run_reads_latest_local_repo_config(self, mock_client):
         mock_client.submit_job.return_value = "job-local-config"
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
             runs_root = (repo / "runs").resolve()
             self._write_blueprint_repo(repo)
-            (repo / "worker_one" / "manifest.json").write_text(json.dumps({
-                "graph_id": "worker_one_graph",
-                "nodes": [
+            (repo / "worker_one" / "manifest.json").write_text(
+                json.dumps(
                     {
-                        "node_id": "worker",
-                        "config": {"environment": {}},
+                        "graph_id": "worker_one_graph",
+                        "nodes": [
+                            {
+                                "node_id": "worker",
+                                "config": {"environment": {}},
+                            }
+                        ],
+                        "edges": [],
+                        "metadata": {},
                     }
-                ],
-                "edges": [],
-                "metadata": {},
-            }))
+                )
+            )
             config_dir = repo / "worker_one" / "config"
             config_dir.mkdir()
-            (config_dir / "default.json").write_text(json.dumps({
-                "vl_model": {"model": "edited-local-model"}
-            }))
+            (config_dir / "default.json").write_text(json.dumps({"vl_model": {"model": "edited-local-model"}}))
             original = self._set_blueprint_config(repo)
             try:
-                with patch.dict('os.environ', {"MN_RUNS_ROOT": str(runs_root)}):
+                with patch.dict("os.environ", {"MN_RUNS_ROOT": str(runs_root)}):
                     response = self._sync_blueprint_run(repo, {"run_id": "run-local-config"})
             finally:
                 self._restore_config(original)
@@ -3426,33 +3805,37 @@ class TestAPI(unittest.TestCase):
         submitted_config = json.loads(submitted_env["MN_BLUEPRINT_CONFIG_JSON"])
         self.assertEqual(submitted_config["vl_model"]["model"], "edited-local-model")
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_blueprint_run_starts_pre_launch_before_submit(self, mock_client):
         mock_client.submit_job.return_value = "job-pre-launch"
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
             runs_root = (repo / "runs").resolve()
             self._write_blueprint_repo(repo)
-            (repo / "worker_one" / "manifest.json").write_text(json.dumps({
-                "graph_id": "worker_one_graph",
-                "nodes": [
+            (repo / "worker_one" / "manifest.json").write_text(
+                json.dumps(
                     {
-                        "node_id": "worker",
-                        "config": {"environment": {}},
+                        "graph_id": "worker_one_graph",
+                        "nodes": [
+                            {
+                                "node_id": "worker",
+                                "config": {"environment": {}},
+                            }
+                        ],
+                        "edges": [],
+                        "metadata": {},
+                        "input_validation": {
+                            "rules": [
+                                {
+                                    "name": "pre_launch_env",
+                                    "type": "command",
+                                    "command": [sys.executable, "payloads/check_pre_launch_env.py"],
+                                }
+                            ]
+                        },
                     }
-                ],
-                "edges": [],
-                "metadata": {},
-                "input_validation": {
-                    "rules": [
-                        {
-                            "name": "pre_launch_env",
-                            "type": "command",
-                            "command": [sys.executable, "payloads/check_pre_launch_env.py"],
-                        }
-                    ]
-                },
-            }))
+                )
+            )
             (repo / "worker_one" / "payloads" / "check_pre_launch_env.py").write_text(
                 "import os\n"
                 "from pathlib import Path\n"
@@ -3465,10 +3848,14 @@ class TestAPI(unittest.TestCase):
             script_path.write_text("#!/usr/bin/env bash\n")
             config_dir = repo / "worker_one" / "config"
             config_dir.mkdir()
-            (config_dir / "default.json").write_text(json.dumps({
-                "identity": {"blueprint_id": "worker_one"},
-                "video_source": {"uri": "rtsp://127.0.0.1:8554/video-watch"},
-            }))
+            (config_dir / "default.json").write_text(
+                json.dumps(
+                    {
+                        "identity": {"blueprint_id": "worker_one"},
+                        "video_source": {"uri": "rtsp://127.0.0.1:8554/video-watch"},
+                    }
+                )
+            )
             process = SimpleNamespace(pid=6262, poll=lambda: None)
             captured_env = {}
             pre_launch_commands = []
@@ -3479,26 +3866,32 @@ class TestAPI(unittest.TestCase):
                     return real_popen(_command, **kwargs)
                 pre_launch_commands.append(_command)
                 captured_env.update(kwargs["env"])
-                Path(kwargs["env"]["MN_PRE_LAUNCH_READY_FILE"]).write_text(json.dumps({
-                    "status": "ready",
-                    "env": {
-                        "RTSP_PORT": "8562",
-                        "STREAM_URI": "rtsp://127.0.0.1:8562/video-watch",
-                        "VIDEO_SOURCE_URI": "rtsp://host.openshell.internal:8562/video-watch",
-                    },
-                    "config": {
-                        "video_source": {"uri": "rtsp://127.0.0.1:8562/video-watch"},
-                        "web_ui": {"dashboard": {"default_video_source": "rtsp://127.0.0.1:8562/video-watch"}},
-                    },
-                }))
+                Path(kwargs["env"]["MN_PRE_LAUNCH_READY_FILE"]).write_text(
+                    json.dumps(
+                        {
+                            "status": "ready",
+                            "env": {
+                                "RTSP_PORT": "8562",
+                                "STREAM_URI": "rtsp://127.0.0.1:8562/video-watch",
+                                "VIDEO_SOURCE_URI": "rtsp://host.openshell.internal:8562/video-watch",
+                            },
+                            "config": {
+                                "video_source": {"uri": "rtsp://127.0.0.1:8562/video-watch"},
+                                "web_ui": {"dashboard": {"default_video_source": "rtsp://127.0.0.1:8562/video-watch"}},
+                            },
+                        }
+                    )
+                )
                 return process
 
             original = self._set_blueprint_config(repo)
             try:
-                with patch.dict('os.environ', {"MN_RUNS_ROOT": str(runs_root)}):
-                    with patch('mn_api.blueprints.subprocess.Popen', side_effect=fake_popen):
+                with patch.dict("os.environ", {"MN_RUNS_ROOT": str(runs_root)}):
+                    with patch("mn_api.blueprints.subprocess.Popen", side_effect=fake_popen):
                         response = self._sync_blueprint_run(repo, {"run_id": "run-pre-launch"})
-                        process_info = json.loads((runs_root / "run-pre-launch" / "pre_launch_process.json").read_text())
+                        process_info = json.loads(
+                            (runs_root / "run-pre-launch" / "pre_launch_process.json").read_text()
+                        )
                         validation_env = (repo / "worker_one" / "validation_env.txt").read_text()
             finally:
                 self._restore_config(original)
@@ -3519,27 +3912,29 @@ class TestAPI(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
             self._write_blueprint_repo(repo)
-            (repo / "worker_one" / "manifest.json").write_text(json.dumps({
-                "graph_id": "worker_one_graph",
-                "nodes": [],
-                "edges": [],
-                "metadata": {},
-                "input_validation": {
-                    "rules": [
-                        {
-                            "name": "model_url",
-                            "type": "pattern",
-                            "path": "llm.api_base",
-                            "pattern": "^https?://",
-                        }
-                    ]
-                },
-            }))
+            (repo / "worker_one" / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "graph_id": "worker_one_graph",
+                        "nodes": [],
+                        "edges": [],
+                        "metadata": {},
+                        "input_validation": {
+                            "rules": [
+                                {
+                                    "name": "model_url",
+                                    "type": "pattern",
+                                    "path": "llm.api_base",
+                                    "pattern": "^https?://",
+                                }
+                            ]
+                        },
+                    }
+                )
+            )
             config_dir = repo / "worker_one" / "config"
             config_dir.mkdir()
-            (config_dir / "default.json").write_text(json.dumps({
-                "llm": {"api_base": "not-a-url"}
-            }))
+            (config_dir / "default.json").write_text(json.dumps({"llm": {"api_base": "not-a-url"}}))
             original = self._set_blueprint_config(repo)
             try:
                 response = self.client.post("/api/v1/blueprints/worker_one/validate")
@@ -3561,7 +3956,10 @@ class TestAPI(unittest.TestCase):
             self._write_blueprint_repo(repo)
             original = self._set_blueprint_config(repo)
             try:
-                with patch("mn_api.routes.blueprints.validate_blueprint_hardware_requirements", return_value={"ok": True, "status": "passed", "issues": [], "errors": []}):
+                with patch(
+                    "mn_api.routes.blueprints.validate_blueprint_hardware_requirements",
+                    return_value={"ok": True, "status": "passed", "issues": [], "errors": []},
+                ):
                     response = self.client.post(
                         "/api/v1/blueprints/launch/validate",
                         json={"source": "catalog", "blueprint_id": "worker_one"},
@@ -3577,7 +3975,7 @@ class TestAPI(unittest.TestCase):
         mock_validate.assert_called_once()
         self.assertEqual(mock_validate.call_args.args[0].name, "worker_one")
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_blueprint_launch_run_uses_sdk_submission_for_catalog_blueprint(self, mock_client):
         mock_client.submit_job.return_value = "job-from-sdk"
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -3585,7 +3983,10 @@ class TestAPI(unittest.TestCase):
             self._write_blueprint_repo(repo)
             original = self._set_blueprint_config(repo)
             try:
-                with patch("mn_api.routes.blueprints.validate_blueprint_hardware_requirements", return_value={"ok": True, "status": "passed", "issues": [], "errors": []}):
+                with patch(
+                    "mn_api.routes.blueprints.validate_blueprint_hardware_requirements",
+                    return_value={"ok": True, "status": "passed", "issues": [], "errors": []},
+                ):
                     response = self._sync_blueprint_launch(
                         {
                             "source": "catalog",
@@ -3609,7 +4010,7 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(submitted["metadata"]["mn_cli"]["blueprint_id"], "worker_one")
         self.assertEqual(payloads, {"payload.txt": b"hello"})
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     @patch("mn_api.routes.blueprints.validate_blueprint_inputs")
     @patch("mn_api.routes.blueprints.install_blueprint_runtime_models")
     def test_blueprint_launch_run_installs_models_before_validation(self, mock_install, mock_validate, mock_client):
@@ -3637,7 +4038,10 @@ class TestAPI(unittest.TestCase):
             original = self._set_blueprint_config(repo)
             try:
                 with patch.dict(os.environ, {"MN_LAUNCH_PROGRESS_DIR": str(repo / "progress")}):
-                    with patch("mn_api.routes.blueprints.validate_blueprint_hardware_requirements", return_value={"ok": True, "status": "passed", "issues": [], "errors": []}):
+                    with patch(
+                        "mn_api.routes.blueprints.validate_blueprint_hardware_requirements",
+                        return_value={"ok": True, "status": "passed", "issues": [], "errors": []},
+                    ):
                         response = self._sync_blueprint_launch(
                             {
                                 "source": "catalog",
@@ -3669,7 +4073,7 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(progress_body["events"][-1]["status"], "completed")
         mock_client.submit_job.assert_called_once()
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_blueprint_launch_progress_records_context_engine_when_required(self, mock_client):
         mock_client.submit_job.return_value = "job-context"
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -3677,22 +4081,29 @@ class TestAPI(unittest.TestCase):
             self._write_blueprint_repo(repo)
             config_dir = repo / "worker_one" / "config"
             config_dir.mkdir()
-            (config_dir / "default.json").write_text(json.dumps({
-                "memory_layer": {
-                    "enabled": True,
-                    "enabled_env": "MN_CONTEXT_MEMORY_ENABLED",
-                    "sdk_import_package": "mn_context_engine_sdk",
-                }
-            }))
+            (config_dir / "default.json").write_text(
+                json.dumps(
+                    {
+                        "memory_layer": {
+                            "enabled": True,
+                            "enabled_env": "MN_CONTEXT_MEMORY_ENABLED",
+                            "sdk_import_package": "mn_context_engine_sdk",
+                        }
+                    }
+                )
+            )
             original = self._set_blueprint_config(repo)
             try:
                 with patch.dict(os.environ, {"MN_LAUNCH_PROGRESS_DIR": str(repo / "progress")}):
-                    with patch(
-                        "mn_api.routes.blueprints.validate_blueprint_hardware_requirements",
-                        return_value={"ok": True, "status": "passed", "issues": [], "errors": []},
-                    ), patch(
-                        "mn_api.blueprints.ensure_context_engine_runtime_direct",
-                        return_value={"name": "membrane-context-engine", "status": "ready"},
+                    with (
+                        patch(
+                            "mn_api.routes.blueprints.validate_blueprint_hardware_requirements",
+                            return_value={"ok": True, "status": "passed", "issues": [], "errors": []},
+                        ),
+                        patch(
+                            "mn_api.blueprints.ensure_context_engine_runtime_direct",
+                            return_value={"name": "membrane-context-engine", "status": "ready"},
+                        ),
                     ):
                         response = self._sync_blueprint_launch(
                             {
@@ -3723,7 +4134,7 @@ class TestAPI(unittest.TestCase):
         response = self.client.get("/api/v1/blueprints/launch/progress/bad%20id")
         self.assertEqual(response.status_code, 400)
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     @patch("mn_api.routes.blueprints.install_blueprint_runtime_models")
     def test_blueprint_launch_run_blocks_when_auto_model_install_fails(self, mock_install, mock_client):
         mock_install.return_value = {
@@ -3744,7 +4155,10 @@ class TestAPI(unittest.TestCase):
             self._write_blueprint_repo(repo)
             original = self._set_blueprint_config(repo)
             try:
-                with patch("mn_api.routes.blueprints.validate_blueprint_hardware_requirements", return_value={"ok": True, "status": "passed", "issues": [], "errors": []}):
+                with patch(
+                    "mn_api.routes.blueprints.validate_blueprint_hardware_requirements",
+                    return_value={"ok": True, "status": "passed", "issues": [], "errors": []},
+                ):
                     response = self._sync_blueprint_launch({"source": "catalog", "blueprint_id": "worker_one"})
             finally:
                 self._restore_config(original)
@@ -3755,7 +4169,7 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.json()["errors"][0]["location"]["path"], "llm.runtime_model")
         mock_client.submit_job.assert_not_called()
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     @patch("mn_api.routes.blueprints.install_blueprint_runtime_models")
     def test_blueprint_launch_run_hard_gpu_blocks_before_model_install(self, mock_install, mock_client):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -3765,7 +4179,9 @@ class TestAPI(unittest.TestCase):
             original = self._set_blueprint_config(repo)
             try:
                 mock_client.get_resource.return_value = json.dumps({"nodes": []})
-                response = self._sync_blueprint_launch({"source": "catalog", "blueprint_id": "worker_one", "force": True})
+                response = self._sync_blueprint_launch(
+                    {"source": "catalog", "blueprint_id": "worker_one", "force": True}
+                )
             finally:
                 self._restore_config(original)
 
@@ -3776,18 +4192,22 @@ class TestAPI(unittest.TestCase):
         mock_install.assert_not_called()
         mock_client.submit_job.assert_not_called()
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_blueprint_launch_run_uses_sdk_submission_for_filesystem_path(self, mock_client):
         mock_client.submit_job.return_value = "job-path-sdk"
         with tempfile.TemporaryDirectory() as tmpdir:
             bundle_dir = Path(tmpdir) / "local_worker"
             (bundle_dir / "payloads").mkdir(parents=True)
-            (bundle_dir / "manifest.json").write_text(json.dumps({
-                "graph_id": "local_worker_graph",
-                "job_name": "Local Worker",
-                "nodes": [],
-                "edges": [],
-            }))
+            (bundle_dir / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "graph_id": "local_worker_graph",
+                        "job_name": "Local Worker",
+                        "nodes": [],
+                        "edges": [],
+                    }
+                )
+            )
             response = self._sync_blueprint_launch({"source": "path", "path": str(bundle_dir), "force": True})
 
         self.assertEqual(response.status_code, 200)
@@ -3796,7 +4216,7 @@ class TestAPI(unittest.TestCase):
         manifest_json, _payloads = mock_client.submit_job.call_args.args
         self.assertEqual(json.loads(manifest_json)["graph_id"], "local_worker_graph")
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     @patch("mn_api.routes.blueprints.validate_blueprint_inputs")
     def test_blueprint_launch_validation_failure_blocks_submit(self, mock_validate, mock_client):
         mock_validate.return_value = {
@@ -3810,7 +4230,10 @@ class TestAPI(unittest.TestCase):
             self._write_blueprint_repo(repo)
             original = self._set_blueprint_config(repo)
             try:
-                with patch("mn_api.routes.blueprints.validate_blueprint_hardware_requirements", return_value={"ok": True, "status": "passed", "issues": [], "errors": []}):
+                with patch(
+                    "mn_api.routes.blueprints.validate_blueprint_hardware_requirements",
+                    return_value={"ok": True, "status": "passed", "issues": [], "errors": []},
+                ):
                     response = self._sync_blueprint_launch({"source": "catalog", "blueprint_id": "worker_one"})
             finally:
                 self._restore_config(original)
@@ -3819,7 +4242,7 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.json()["error"], "blueprint_validation_failed")
         mock_client.submit_job.assert_not_called()
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     @patch("mn_api.routes.blueprints.validate_blueprint_inputs")
     @patch("mn_api.routes.blueprints.install_blueprint_runtime_models")
     def test_blueprint_run_installs_models_before_input_validation(self, mock_install, mock_validate, mock_client):
@@ -3846,8 +4269,11 @@ class TestAPI(unittest.TestCase):
             self._write_blueprint_repo(repo)
             original = self._set_blueprint_config(repo)
             try:
-                with patch.dict('os.environ', {"MN_RUNS_ROOT": str(runs_root)}):
-                    with patch("mn_api.routes.blueprints.validate_blueprint_hardware_requirements", return_value={"ok": True, "status": "passed", "issues": [], "errors": []}):
+                with patch.dict("os.environ", {"MN_RUNS_ROOT": str(runs_root)}):
+                    with patch(
+                        "mn_api.routes.blueprints.validate_blueprint_hardware_requirements",
+                        return_value={"ok": True, "status": "passed", "issues": [], "errors": []},
+                    ):
                         response = self._sync_blueprint_run(repo, {"run_id": "run-with-auto-model"})
             finally:
                 self._restore_config(original)
@@ -3859,8 +4285,10 @@ class TestAPI(unittest.TestCase):
 
     @patch("mn_api.routes.blueprints.start_blueprint_pre_launch_hook")
     @patch("mn_api.routes.blueprints.install_blueprint_runtime_models")
-    @patch('mn_api.state.client')
-    def test_blueprint_run_hard_gpu_blocks_before_model_install_prelaunch_and_submit(self, mock_client, mock_install, mock_prelaunch):
+    @patch("mn_api.state.client")
+    def test_blueprint_run_hard_gpu_blocks_before_model_install_prelaunch_and_submit(
+        self, mock_client, mock_install, mock_prelaunch
+    ):
         mock_client.get_resource.return_value = json.dumps({"nodes": []})
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
@@ -3883,7 +4311,7 @@ class TestAPI(unittest.TestCase):
     @patch("mn_api.routes.blueprints.start_blueprint_pre_launch_hook")
     @patch("mn_api.routes.blueprints.validate_blueprint_inputs")
     @patch("mn_api.routes.blueprints.install_blueprint_runtime_models")
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_blueprint_run_hard_gpu_passes_with_dgx_spark_cluster_node(
         self,
         mock_client,
@@ -3891,30 +4319,34 @@ class TestAPI(unittest.TestCase):
         mock_validate,
         mock_prelaunch,
     ):
-        mock_client.get_resource.return_value = json.dumps({
-            "nodes": [
-                {
-                    "name": "spark",
-                    "status": "healthy",
-                    "scheduling_eligible": True,
-                    "devices": [
-                        {
-                            "kind": "gpu",
-                            "type": "nvidia/gpu",
-                            "vendor": "nvidia",
-                            "driver": "cuda",
-                            "name": "NVIDIA GB10",
-                            "api_version": "13.0",
-                            "memory_total_mb": 131072,
-                            "capabilities": ["gpu", "nvidia", "cuda", "nvidia-gb10", "nvidia-dgx-spark"],
-                        }
-                    ],
-                }
-            ]
-        })
+        mock_client.get_resource.return_value = json.dumps(
+            {
+                "nodes": [
+                    {
+                        "name": "spark",
+                        "status": "healthy",
+                        "scheduling_eligible": True,
+                        "devices": [
+                            {
+                                "kind": "gpu",
+                                "type": "nvidia/gpu",
+                                "vendor": "nvidia",
+                                "driver": "cuda",
+                                "name": "NVIDIA GB10",
+                                "api_version": "13.0",
+                                "memory_total_mb": 131072,
+                                "capabilities": ["gpu", "nvidia", "cuda", "nvidia-gb10", "nvidia-dgx-spark"],
+                            }
+                        ],
+                    }
+                ]
+            }
+        )
         mock_install.return_value = {
             "ok": True,
-            "models": [{"id": "video-vlm:default", "model": "huggingface.co/acme/video-vlm", "status": "cluster_provided"}],
+            "models": [
+                {"id": "video-vlm:default", "model": "huggingface.co/acme/video-vlm", "status": "cluster_provided"}
+            ],
             "errors": [],
         }
         mock_validate.return_value = {"ok": True, "status": "passed", "issues": [], "errors": []}
@@ -3926,7 +4358,7 @@ class TestAPI(unittest.TestCase):
             (repo / "worker_one" / "manifest.json").write_text(json.dumps(self._hard_gpu_manifest()))
             original = self._set_blueprint_config(repo)
             try:
-                with patch.dict('os.environ', {"MN_RUNS_ROOT": str(runs_root)}):
+                with patch.dict("os.environ", {"MN_RUNS_ROOT": str(runs_root)}):
                     response = self._sync_blueprint_run(repo, {"run_id": "run-dgx-spark"})
             finally:
                 self._restore_config(original)
@@ -3938,36 +4370,38 @@ class TestAPI(unittest.TestCase):
         mock_prelaunch.assert_called_once()
         mock_client.submit_job.assert_called_once()
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_blueprint_run_validation_failure_blocks_submit_unless_forced(self, mock_client):
         mock_client.submit_job.return_value = "job-forced"
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
             self._write_blueprint_repo(repo)
-            (repo / "worker_one" / "manifest.json").write_text(json.dumps({
-                "graph_id": "worker_one_graph",
-                "nodes": [],
-                "edges": [],
-                "metadata": {},
-                "input_validation": {
-                    "rules": [
-                        {
-                            "name": "model_url",
-                            "type": "pattern",
-                            "path": "llm.api_base",
-                            "pattern": "^https?://",
-                        }
-                    ]
-                },
-            }))
+            (repo / "worker_one" / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "graph_id": "worker_one_graph",
+                        "nodes": [],
+                        "edges": [],
+                        "metadata": {},
+                        "input_validation": {
+                            "rules": [
+                                {
+                                    "name": "model_url",
+                                    "type": "pattern",
+                                    "path": "llm.api_base",
+                                    "pattern": "^https?://",
+                                }
+                            ]
+                        },
+                    }
+                )
+            )
             config_dir = repo / "worker_one" / "config"
             config_dir.mkdir()
-            (config_dir / "default.json").write_text(json.dumps({
-                "llm": {"api_base": "not-a-url"}
-            }))
+            (config_dir / "default.json").write_text(json.dumps({"llm": {"api_base": "not-a-url"}}))
             original = self._set_blueprint_config(repo)
             try:
-                with patch.dict('os.environ', {"MN_RUNS_ROOT": str(repo / "runs")}):
+                with patch.dict("os.environ", {"MN_RUNS_ROOT": str(repo / "runs")}):
                     failed = self._sync_blueprint_run(repo, {"run_id": "run-validate"})
                     forced = self._sync_blueprint_run(repo, {"run_id": "run-force", "force": True})
             finally:
@@ -3984,55 +4418,55 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(json.loads(manifest_json)["metadata"]["mn_validation"]["status"], "skipped")
         self.assertTrue(mock_client.submit_job.call_args.kwargs["force"])
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_blueprint_run_validation_failure_runs_post_launch_cleanup(self, mock_client):
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
             runs_root = (repo / "runs").resolve()
             self._write_blueprint_repo(repo)
-            (repo / "worker_one" / "manifest.json").write_text(json.dumps({
-                "graph_id": "worker_one_graph",
-                "nodes": [],
-                "edges": [],
-                "metadata": {},
-                "input_validation": {
-                    "rules": [
-                        {
-                            "name": "model_url",
-                            "type": "pattern",
-                            "path": "llm.api_base",
-                            "pattern": "^https?://",
-                        }
-                    ]
-                },
-            }))
+            (repo / "worker_one" / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "graph_id": "worker_one_graph",
+                        "nodes": [],
+                        "edges": [],
+                        "metadata": {},
+                        "input_validation": {
+                            "rules": [
+                                {
+                                    "name": "model_url",
+                                    "type": "pattern",
+                                    "path": "llm.api_base",
+                                    "pattern": "^https?://",
+                                }
+                            ]
+                        },
+                    }
+                )
+            )
             scripts_dir = repo / "worker_one" / "scripts"
             scripts_dir.mkdir()
             (scripts_dir / "pre-launch.sh").write_text(
-                "#!/usr/bin/env bash\n"
-                "printf 'ready\\n' > \"$MN_PRE_LAUNCH_READY_FILE\"\n"
-                "while true; do sleep 1; done\n"
+                "#!/usr/bin/env bash\nprintf 'ready\\n' > \"$MN_PRE_LAUNCH_READY_FILE\"\nwhile true; do sleep 1; done\n"
             )
             (scripts_dir / "post-launch.sh").write_text(
                 "#!/usr/bin/env bash\n"
-                "cat > \"$MN_RUN_DIR/post_cleanup_seen.json\" <<EOF\n"
+                'cat > "$MN_RUN_DIR/post_cleanup_seen.json" <<EOF\n'
                 "{\n"
-                "  \"reason\": \"$MN_POST_LAUNCH_REASON\",\n"
-                "  \"run_id\": \"$MN_RUN_ID\",\n"
-                "  \"ready_file\": \"$MN_PRE_LAUNCH_READY_FILE\",\n"
-                "  \"process_file\": \"$MN_PRE_LAUNCH_PROCESS_FILE\",\n"
-                "  \"state_file\": \"$MN_POST_LAUNCH_STATE_FILE\"\n"
+                '  "reason": "$MN_POST_LAUNCH_REASON",\n'
+                '  "run_id": "$MN_RUN_ID",\n'
+                '  "ready_file": "$MN_PRE_LAUNCH_READY_FILE",\n'
+                '  "process_file": "$MN_PRE_LAUNCH_PROCESS_FILE",\n'
+                '  "state_file": "$MN_POST_LAUNCH_STATE_FILE"\n'
                 "}\n"
                 "EOF\n"
             )
             config_dir = repo / "worker_one" / "config"
             config_dir.mkdir()
-            (config_dir / "default.json").write_text(json.dumps({
-                "llm": {"api_base": "not-a-url"}
-            }))
+            (config_dir / "default.json").write_text(json.dumps({"llm": {"api_base": "not-a-url"}}))
             original = self._set_blueprint_config(repo)
             try:
-                with patch.dict('os.environ', {"MN_RUNS_ROOT": str(runs_root)}):
+                with patch.dict("os.environ", {"MN_RUNS_ROOT": str(runs_root)}):
                     response = self._sync_blueprint_run(repo, {"run_id": "run-post-cleanup"})
                     cleanup_record = json.loads((runs_root / "run-post-cleanup" / "post_cleanup_seen.json").read_text())
             finally:
@@ -4047,7 +4481,7 @@ class TestAPI(unittest.TestCase):
         self.assertTrue(cleanup_record["state_file"].endswith("post_launch_state.json"))
         mock_client.submit_job.assert_not_called()
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_blueprint_run_rejects_invalid_run_id_before_submit(self, mock_client):
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
@@ -4065,7 +4499,7 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.json()["detail"], "invalid run id")
         mock_client.submit_job.assert_not_called()
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_blueprint_run_rejects_invalid_config_override_format(self, mock_client):
         response = self.client.post(
             "/api/v1/blueprints/worker_one/runs",
@@ -4075,7 +4509,7 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
         mock_client.submit_job.assert_not_called()
 
-    @patch('mn_api.state.client')
+    @patch("mn_api.state.client")
     def test_blueprint_run_rejects_malformed_manifest_before_submit(self, mock_client):
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
@@ -4098,13 +4532,17 @@ class TestAPI(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
             self._write_blueprint_repo(repo)
-            (repo / "index.json").write_text(json.dumps([
-                {
-                    "id": "worker_one",
-                    "name": "Worker One",
-                    "path": "../outside",
-                }
-            ]))
+            (repo / "index.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "id": "worker_one",
+                            "name": "Worker One",
+                            "path": "../outside",
+                        }
+                    ]
+                )
+            )
             original = self._set_blueprint_config(repo)
             try:
                 response = self.client.post("/api/v1/blueprints/worker_one/install")
@@ -4170,5 +4608,6 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(install_unauthenticated.status_code, 401)
         self.assertEqual(run_unauthenticated.status_code, 401)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     unittest.main()

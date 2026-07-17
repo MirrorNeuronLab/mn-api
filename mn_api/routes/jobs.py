@@ -32,6 +32,13 @@ from mn_sdk import (
     workflow_progress_snapshot,
 )
 from mn_sdk.blueprint_support.observability import read_run_resources
+from mn_sdk.staged_artifacts import (
+    ArtifactIntegrityError,
+    ArtifactNotReadyError,
+    StagedArtifactError,
+    is_staged_artifact_ref,
+    resolve_json_reference,
+)
 
 from mn_api import state
 from mn_api.agent_graph import build_agent_graph
@@ -104,11 +111,7 @@ def submit_job(req: SubmitJobRequest, _auth=Depends(require_auth)):
                 return validation_response
         elif req.manifest_json is not None:
             manifest_json = req.manifest_json
-            payloads_bytes = (
-                {key: value.encode("utf-8") for key, value in req.payloads.items()}
-                if req.payloads
-                else {}
-            )
+            payloads_bytes = {key: value.encode("utf-8") for key, value in req.payloads.items()} if req.payloads else {}
             state.close_client()
             validation_response = _validate_job_manifest(manifest_json, force=req.force)
             if validation_response is not None:
@@ -318,6 +321,50 @@ def get_job(job_id: str, include: str = Query("compact"), _auth=Depends(require_
         return handle_grpc_error(exc)
 
 
+@router.get("/jobs/{job_id}/snapshots/{snapshot_kind}")
+def get_job_snapshot(job_id: str, snapshot_kind: str, _auth=Depends(require_auth)):
+    reference_fields = {
+        "result": "result_ref",
+        "workflow-state": "workflow_state_ref",
+        "workflow_state": "workflow_state_ref",
+    }
+    reference_field = reference_fields.get(snapshot_kind)
+    if reference_field is None:
+        raise HTTPException(status_code=404, detail="unknown job snapshot")
+
+    try:
+        details = json.loads(state.client.get_job(job_id))
+        job = details.get("job") if isinstance(details.get("job"), dict) else details
+        reference = job.get(reference_field) if isinstance(job, dict) else None
+        if not is_staged_artifact_ref(reference) and isinstance(job, dict):
+            result = job.get("result")
+            if isinstance(result, dict):
+                reference = result.get(reference_field)
+        if not is_staged_artifact_ref(reference):
+            raise HTTPException(status_code=404, detail=f"{snapshot_kind} snapshot is unavailable")
+        return resolve_json_reference(reference)
+    except ArtifactNotReadyError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "artifact_not_ready", "retryable": True, "message": str(exc)},
+            headers={"Retry-After": "1"},
+        ) from exc
+    except ArtifactIntegrityError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "artifact_integrity_error", "message": str(exc)},
+        ) from exc
+    except StagedArtifactError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "artifact_resolution_error", "message": str(exc)},
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        return handle_grpc_error(exc)
+
+
 def _normalized_status(value: Any) -> str:
     return str(value or "").strip().lower()
 
@@ -364,10 +411,7 @@ def _reconcile_job_list_statuses(payload: Any) -> Any:
         return payload
     return {
         **payload,
-        "data": [
-            _reconciled_job_list_row(job) if isinstance(job, dict) else job
-            for job in jobs
-        ],
+        "data": [_reconciled_job_list_row(job) if isinstance(job, dict) else job for job in jobs],
     }
 
 
@@ -746,9 +790,7 @@ def _manifest_from_job_details(details: dict[str, Any], *, run_dir: Path | None 
     if isinstance(manifest_ref, dict):
         for raw_path in (
             manifest_ref.get("manifest_path"),
-            Path(str(manifest_ref.get("job_path") or "")) / "manifest.json"
-            if manifest_ref.get("job_path")
-            else None,
+            Path(str(manifest_ref.get("job_path") or "")) / "manifest.json" if manifest_ref.get("job_path") else None,
         ):
             if not raw_path:
                 continue
@@ -796,7 +838,9 @@ def _manifest_from_run_dir(run_dir: Path | None) -> dict[str, Any]:
     return {}
 
 
-def _run_dir_for_details(details: dict[str, Any], events: list[dict[str, Any]], *, job_id: str | None = None) -> Path | None:
+def _run_dir_for_details(
+    details: dict[str, Any], events: list[dict[str, Any]], *, job_id: str | None = None
+) -> Path | None:
     job = _job_from_details(details)
     summary = _summary_from_details(details)
     run_id = _first_string(
@@ -1272,10 +1316,7 @@ def export_job_backup(job_id: str, _auth=Depends(require_auth)):
         return {
             "job_id": job_id,
             "backup_json": backup_json,
-            "bundle_files": {
-                path: base64.b64encode(content).decode("ascii")
-                for path, content in bundle_files.items()
-            },
+            "bundle_files": {path: base64.b64encode(content).decode("ascii") for path, content in bundle_files.items()},
             "encoding": "base64",
         }
     except Exception as exc:
@@ -1285,10 +1326,7 @@ def export_job_backup(job_id: str, _auth=Depends(require_auth)):
 @router.post("/jobs/restore")
 def restore_job_backup(req: RestoreJobBackupRequest, _auth=Depends(require_auth)):
     try:
-        bundle_files = {
-            path: base64.b64decode(content.encode("ascii"))
-            for path, content in req.bundle_files.items()
-        }
+        bundle_files = {path: base64.b64decode(content.encode("ascii")) for path, content in req.bundle_files.items()}
         return json.loads(
             state.client.restore_job_backup(
                 req.backup_json,
