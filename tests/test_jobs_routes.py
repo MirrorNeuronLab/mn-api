@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+import grpc
+import pytest
+from mn_sdk.staged_artifacts import ArtifactIntegrityError, ArtifactNotReadyError, StagedArtifactError
 from starlette.websockets import WebSocketDisconnect
 
 from mn_api import state
@@ -76,6 +79,236 @@ def test_cancel_all_jobs_reports_no_active_jobs(monkeypatch, api_client, fake_ru
         "cancelled_count": 0,
         "cancelled_job_ids": [],
     }
+
+
+def test_cancel_all_jobs_reports_runtime_failure(monkeypatch, api_client):
+    class FailingClient:
+        def list_jobs(self, _limit, _include_terminal):
+            raise RuntimeError("runtime unavailable")
+
+    monkeypatch.setattr(state, "client", FailingClient())
+
+    response = api_client.post("/api/v1/jobs:cancel-all")
+
+    assert response.status_code == 500
+    assert response.json()["error"] == "MN_EXECUTION_FAILED"
+
+
+def test_cancel_all_jobs_cleans_up_when_one_cancellation_fails(monkeypatch, api_client):
+    class FailingCancelClient:
+        def __init__(self):
+            self.calls = []
+
+        def list_jobs(self, _limit, _include_terminal):
+            self.calls.append("list_jobs")
+            return json.dumps({"data": [{"job_id": "job-ok", "status": "running"}, {"job_id": "job-fail", "status": "running"}]})
+
+        def cancel_job(self, job_id):
+            self.calls.append(("cancel_job", job_id))
+            if job_id == "job-fail":
+                raise RuntimeError("cancel failed")
+
+    cleaned = []
+    client = FailingCancelClient()
+    monkeypatch.setattr(state, "client", client)
+    monkeypatch.setattr("mn_api.routes.jobs.cleanup_blueprint_processes_for_job", cleaned.append)
+
+    response = api_client.post("/api/v1/jobs/cancel-all")
+
+    assert response.status_code == 500
+    assert response.json()["error"] == "MN_EXECUTION_FAILED"
+    assert cleaned == ["job-ok", "job-fail"]
+
+
+def test_cleanup_jobs_reports_retry_failure_after_admin_token_error(monkeypatch, api_client):
+    class PermissionDeniedRpcError(grpc.RpcError):
+        def code(self):
+            return grpc.StatusCode.PERMISSION_DENIED
+
+        def details(self):
+            return "ClearJobs requires MN_GRPC_ADMIN_TOKEN"
+
+    class FirstClient:
+        def clear_jobs(self):
+            raise PermissionDeniedRpcError()
+
+    class RetryClient:
+        def clear_jobs(self):
+            raise RuntimeError("retry failed")
+
+    first_client = FirstClient()
+    retry_client = RetryClient()
+    monkeypatch.setattr(state, "client", first_client)
+    monkeypatch.setattr(state, "close_client", lambda: setattr(state, "client", retry_client))
+
+    response = api_client.post("/api/v1/jobs:cleanup")
+
+    assert response.status_code == 500
+    assert response.json()["error"] == "MN_EXECUTION_FAILED"
+
+
+def test_cleanup_jobs_reports_non_admin_runtime_failure(monkeypatch, api_client):
+    class FailingClient:
+        def clear_jobs(self):
+            raise RuntimeError("cleanup unavailable")
+
+    monkeypatch.setattr(state, "client", FailingClient())
+
+    response = api_client.post("/api/v1/jobs:cleanup")
+
+    assert response.status_code == 500
+    assert response.json()["error"] == "MN_EXECUTION_FAILED"
+
+
+def test_cleanup_jobs_does_not_retry_unrelated_rpc_error(monkeypatch, api_client):
+    class UnrelatedRpcError(grpc.RpcError):
+        def code(self):
+            return grpc.StatusCode.INTERNAL
+
+        def details(self):
+            return "permission denied"
+
+    class FailingClient:
+        def clear_jobs(self):
+            raise UnrelatedRpcError()
+
+    monkeypatch.setattr(state, "client", FailingClient())
+
+    response = api_client.post("/api/v1/jobs:cleanup")
+
+    assert response.status_code == 500
+    assert response.json()["error"] == "MN_EXECUTION_FAILED"
+
+
+def test_unfinished_jobs_reports_runtime_failure(monkeypatch, api_client):
+    class FailingClient:
+        def list_jobs(self, _limit, _include_terminal):
+            raise RuntimeError("runtime unavailable")
+
+    monkeypatch.setattr(state, "client", FailingClient())
+
+    response = api_client.get("/api/v1/jobs/unfinished")
+
+    assert response.status_code == 500
+    assert response.json()["error"] == "MN_EXECUTION_FAILED"
+
+
+def test_list_jobs_reports_runtime_failure(monkeypatch, api_client):
+    class FailingClient:
+        def list_jobs(self, _limit, _include_terminal):
+            raise RuntimeError("runtime unavailable")
+
+    monkeypatch.setattr(state, "client", FailingClient())
+
+    response = api_client.get("/api/v1/jobs")
+
+    assert response.status_code == 500
+    assert response.json()["error"] == "MN_EXECUTION_FAILED"
+
+
+def test_get_job_rejects_unknown_include_value(monkeypatch, api_client):
+    monkeypatch.setattr(state, "client", SimpleNamespace())
+
+    response = api_client.get("/api/v1/jobs/job-1?include=details")
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "include must be 'compact', 'summary', or 'full'"
+
+
+def test_get_job_reports_runtime_failure(monkeypatch, api_client):
+    monkeypatch.setattr(state, "client", SimpleNamespace(get_job=lambda _job_id: (_ for _ in ()).throw(RuntimeError("runtime unavailable"))))
+
+    response = api_client.get("/api/v1/jobs/job-1?include=full")
+
+    assert response.status_code == 500
+    assert response.json()["error"] == "MN_EXECUTION_FAILED"
+
+
+def test_get_job_snapshot_rejects_unknown_kind(api_client):
+    response = api_client.get("/api/v1/jobs/job-1/snapshots/unknown")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "unknown job snapshot"
+
+
+def test_get_job_snapshot_reports_unavailable_reference(monkeypatch, api_client):
+    monkeypatch.setattr(state, "client", SimpleNamespace(get_job=lambda _job_id: json.dumps({"job": {}})))
+
+    response = api_client.get("/api/v1/jobs/job-1/snapshots/result")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "result snapshot is unavailable"
+
+
+def test_get_job_snapshot_reports_runtime_failure(monkeypatch, api_client):
+    monkeypatch.setattr(
+        state,
+        "client",
+        SimpleNamespace(get_job=lambda _job_id: (_ for _ in ()).throw(RuntimeError("runtime unavailable"))),
+    )
+
+    response = api_client.get("/api/v1/jobs/job-1/snapshots/result")
+
+    assert response.status_code == 500
+    assert response.json()["error"] == "MN_EXECUTION_FAILED"
+
+
+@pytest.mark.parametrize(
+    ("error", "status_code", "error_code"),
+    [
+        (ArtifactNotReadyError("artifact pending"), 503, "artifact_not_ready"),
+        (ArtifactIntegrityError("artifact mismatch"), 500, "artifact_integrity_error"),
+        (StagedArtifactError("artifact invalid"), 500, "artifact_resolution_error"),
+    ],
+)
+def test_get_job_snapshot_maps_staged_artifact_errors(monkeypatch, api_client, error, status_code, error_code):
+    reference = {
+        "version": "mn.staged_artifact/v1",
+        "storage": "syncthing",
+        "submission_id": "submission-1",
+        "relative_path": "outputs/runs/run-1/result.json",
+        "sha256": "a" * 64,
+        "size_bytes": 1,
+    }
+    monkeypatch.setattr(state, "client", SimpleNamespace(get_job=lambda _job_id: json.dumps({"job": {"result_ref": reference}})))
+    monkeypatch.setattr("mn_api.routes.jobs.resolve_json_reference", lambda _reference: (_ for _ in ()).throw(error))
+
+    response = api_client.get("/api/v1/jobs/job-1/snapshots/result")
+
+    assert response.status_code == status_code
+    assert response.json()["detail"]["code"] == error_code
+    if status_code == 503:
+        assert response.headers["retry-after"] == "1"
+
+
+def test_dead_letters_reports_runtime_failure(monkeypatch, api_client):
+    class FailingClient:
+        def stream_events(self, *_args, **_kwargs):
+            raise RuntimeError("stream unavailable")
+
+    monkeypatch.setattr(state, "client", FailingClient())
+
+    response = api_client.get("/api/v1/jobs/job-1/dead-letters")
+
+    assert response.status_code == 500
+    assert response.json()["error"] == "MN_EXECUTION_FAILED"
+
+
+def test_pause_job_uses_generic_problem_when_details_lookup_fails(monkeypatch, api_client):
+    class BrokenDetailsError(Exception):
+        def details(self):
+            raise RuntimeError("details unavailable")
+
+    class FailingClient:
+        def pause_job(self, _job_id):
+            raise BrokenDetailsError("pause failed")
+
+    monkeypatch.setattr(state, "client", FailingClient())
+
+    response = api_client.post("/api/v1/jobs/job-1/pause")
+
+    assert response.status_code == 500
+    assert response.json()["error"] == "MN_EXECUTION_FAILED"
 
 
 def test_restore_job_rejects_invalid_base64_before_sdk_call(monkeypatch, api_client, fake_runtime_client):

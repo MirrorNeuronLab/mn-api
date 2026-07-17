@@ -129,6 +129,7 @@ COMMAND_ENDPOINTS = {
     "event list": "/api/v1/events",
     "job backup": "/api/v1/jobs/{job_id}/backup",
     "job cancel": "/api/v1/jobs/{job_id}/cancel",
+    "job cancel-all": "/api/v1/jobs:cancel-all",
     "job clear": "/api/v1/jobs:cleanup",
     "job dead-letters": "/api/v1/jobs/{job_id}/dead-letters",
     "job list": "/api/v1/jobs",
