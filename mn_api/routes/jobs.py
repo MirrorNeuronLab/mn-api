@@ -43,7 +43,7 @@ from mn_sdk.staged_artifacts import (
 from mn_api import state
 from mn_api.agent_graph import build_agent_graph
 from mn_api.artifacts import artifact_ref, list_artifact_files
-from mn_api.blueprints import cleanup_blueprint_processes_for_job
+from mn_api.blueprints import blueprint_bundle_root, cleanup_blueprint_processes_for_job, find_blueprint
 from mn_api.blueprints import runtime_resource_report
 from mn_api.bundles import load_uploaded_bundle
 from mn_api.dependencies import require_auth, require_websocket_auth
@@ -763,6 +763,8 @@ def _read_run_resource_usage(run_id: str | None) -> dict[str, Any] | None:
 
 def _workflow_progress_snapshot_for_job(job_id: str) -> dict[str, Any]:
     details = _full_job_detail(job_id)
+    job = _job_from_details(details)
+    summary = _summary_from_details(details)
     events, stream_error = _stream_job_events(job_id, limit=_MAX_STATUS_RUNTIME_EVENTS)
     run_dir = _run_dir_for_details(details, events, job_id=job_id)
     events = _merge_events(
@@ -771,18 +773,23 @@ def _workflow_progress_snapshot_for_job(job_id: str) -> dict[str, Any]:
         limit=_MAX_STATUS_RUNTIME_EVENTS,
     )
     observability_summary = _read_json_file(run_dir / "observability_summary.json") if run_dir else {}
-    snapshot = workflow_progress_snapshot(
+    manifest = _manifest_with_public_agent_bindings(
         _manifest_from_job_details(details, run_dir=run_dir),
+        job,
+        summary,
+    )
+    snapshot = workflow_progress_snapshot(
+        manifest,
         events,
-        job=_job_from_details(details),
-        summary=_summary_from_details(details),
+        job=job,
+        summary=summary,
         job_id=job_id,
     )
     _apply_default_assigned_node(snapshot, details)
     _enrich_workflow_progress_activity(snapshot, events)
     _clear_success_failure(snapshot)
     if not snapshot.get("failure") and not _is_success_status(snapshot.get("status")):
-        failure = _failure_from_sources(events, _job_from_details(details), _summary_from_details(details))
+        failure = _failure_from_sources(events, job, summary)
         if failure:
             snapshot["failure"] = failure
     if stream_error:
@@ -811,21 +818,27 @@ def _summary_from_details(details: dict[str, Any]) -> dict[str, Any]:
 
 
 def _manifest_from_job_details(details: dict[str, Any], *, run_dir: Path | None = None) -> dict[str, Any]:
-    direct_manifest = _first_manifest(
-        details.get("manifest"),
-        _job_from_details(details).get("manifest"),
-        _summary_from_details(details).get("manifest"),
-    )
-    if _manifest_has_workflow_flow(direct_manifest):
-        return direct_manifest
-
+    job = _job_from_details(details)
+    summary = _summary_from_details(details)
+    public_manifest = _public_workflow_manifest_from_job(job, summary)
     run_manifest = _manifest_from_run_dir(run_dir)
-    if _manifest_has_workflow_flow(run_manifest):
-        return run_manifest
+    blueprint_manifest = _blueprint_manifest_from_run_mapping(run_dir)
+    for candidate in (run_manifest, blueprint_manifest):
+        if _matches_public_workflow_contract(candidate, public_manifest):
+            return candidate
 
-    manifest_ref = _job_from_details(details).get("manifest_ref")
+    direct_manifests = (
+        details.get("manifest"),
+        job.get("manifest"),
+        summary.get("manifest"),
+    )
+    for candidate in direct_manifests:
+        if _matches_public_workflow_contract(candidate, public_manifest):
+            return candidate
+
+    manifest_ref = job.get("manifest_ref")
     if not isinstance(manifest_ref, dict):
-        manifest_ref = _summary_from_details(details).get("manifest_ref")
+        manifest_ref = summary.get("manifest_ref")
     ref_manifest: dict[str, Any] = {}
     if isinstance(manifest_ref, dict):
         for raw_path in (
@@ -835,31 +848,22 @@ def _manifest_from_job_details(details: dict[str, Any], *, run_dir: Path | None 
             if not raw_path:
                 continue
             try:
-                path = Path(str(raw_path)).expanduser()
-                if path.is_file():
-                    loaded = json.loads(path.read_text(encoding="utf-8"))
-                    if isinstance(loaded, dict):
-                        ref_manifest = loaded
-                        break
-            except (OSError, json.JSONDecodeError):
+                ref_manifest = _read_workflow_manifest(Path(str(raw_path)).expanduser())
+                if ref_manifest:
+                    break
+            except OSError:
                 continue
-    if _manifest_has_workflow_flow(ref_manifest):
-        return ref_manifest
-    if run_manifest:
-        return run_manifest
-    if direct_manifest:
-        return direct_manifest
-    if ref_manifest:
+    if _matches_public_workflow_contract(ref_manifest, public_manifest):
         return ref_manifest
 
-    return _fallback_manifest_from_details(details)
+    if public_manifest:
+        return public_manifest
 
-
-def _first_manifest(*candidates: Any) -> dict[str, Any]:
-    for candidate in candidates:
+    for candidate in (run_manifest, blueprint_manifest, *direct_manifests, ref_manifest):
         if isinstance(candidate, dict) and candidate:
             return candidate
-    return {}
+
+    return _fallback_manifest_from_details(details)
 
 
 def _manifest_has_workflow_flow(manifest: dict[str, Any]) -> bool:
@@ -871,11 +875,294 @@ def _manifest_has_workflow_flow(manifest: dict[str, Any]) -> bool:
 def _manifest_from_run_dir(run_dir: Path | None) -> dict[str, Any]:
     if run_dir is None:
         return {}
-    for filename in ("config.json", "manifest.json"):
-        manifest = _read_json_file(run_dir / filename)
+    for filename in ("manifest.json", "config.json"):
+        manifest = _read_workflow_manifest(run_dir / filename)
         if manifest:
             return manifest
     return {}
+
+
+def _read_workflow_manifest(path: Path) -> dict[str, Any]:
+    manifest = _read_json_file(path)
+    if not manifest:
+        return {}
+    try:
+        if is_manifest_source(manifest):
+            manifest = expand_manifest_source(manifest, root_dir=path.parent)
+    except Exception:
+        return {}
+    return manifest if isinstance(manifest, dict) else {}
+
+
+def _blueprint_manifest_from_run_mapping(run_dir: Path | None) -> dict[str, Any]:
+    if run_dir is None:
+        return {}
+    mapping = _read_json_file(run_dir / "job.json")
+    if not mapping:
+        return {}
+
+    for key in ("blueprint_path", "blueprint_source"):
+        raw_path = _first_string(mapping.get(key))
+        if not raw_path:
+            continue
+        path = Path(raw_path).expanduser()
+        if path.is_dir():
+            path = path / "manifest.json"
+        manifest = _read_workflow_manifest(path)
+        if manifest:
+            return manifest
+
+    blueprint_id = _first_string(mapping.get("blueprint_id"))
+    if not blueprint_id:
+        return {}
+    try:
+        repo_root, blueprint = find_blueprint(state.refresh_config_from_env(), blueprint_id)
+        return _read_workflow_manifest(blueprint_bundle_root(repo_root, blueprint) / "manifest.json")
+    except Exception:
+        return {}
+
+
+def _matches_public_workflow_contract(candidate: Any, public_manifest: dict[str, Any] | None) -> bool:
+    if not isinstance(candidate, dict) or not candidate or not _manifest_has_workflow_flow(candidate):
+        return False
+    if public_manifest is None:
+        return True
+    return _workflow_step_ids(candidate) == _workflow_step_ids(public_manifest)
+
+
+def _workflow_step_ids(manifest: dict[str, Any]) -> list[str]:
+    workflow = manifest.get("workflow") if isinstance(manifest.get("workflow"), dict) else {}
+    steps = workflow.get("steps") if isinstance(workflow.get("steps"), list) else []
+    return [str(step.get("id")) for step in steps if isinstance(step, dict) and step.get("id")]
+
+
+def _public_workflow_manifest_from_job(
+    job: dict[str, Any], summary: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Rebuild the source-facing workflow contract from the runtime ledger."""
+
+    workflow_state = _workflow_state_from_job(job, summary)
+    steps_by_id = (
+        workflow_state.get("steps")
+        if isinstance(workflow_state, dict) and isinstance(workflow_state.get("steps"), dict)
+        else {}
+    )
+    step_order = (
+        workflow_state.get("step_order")
+        if isinstance(workflow_state, dict) and isinstance(workflow_state.get("step_order"), list)
+        else []
+    )
+    step_ids = [str(step_id) for step_id in step_order if str(step_id) in steps_by_id]
+    if not step_ids:
+        step_ids = [str(step_id) for step_id in steps_by_id if str(step_id).strip()]
+    if not step_ids:
+        step_ids = _public_step_ids_from_topology(job)
+    if not step_ids:
+        return None
+
+    edges = _public_workflow_edges(workflow_state, job, step_ids)
+    outgoing: dict[str, list[tuple[str, str]]] = {}
+    for edge in edges:
+        source = str(edge.get("from") or "")
+        target = str(edge.get("to") or "")
+        event_name = str(edge.get("event") or edge.get("message_type") or "")
+        if source and target and event_name:
+            outgoing.setdefault(source, []).append((event_name, target))
+
+    steps: list[dict[str, Any]] = []
+    for index, step_id in enumerate(step_ids):
+        record = steps_by_id.get(step_id)
+        record = record if isinstance(record, dict) else {}
+        transitions = {event_name: target for event_name, target in outgoing.get(step_id, [])}
+        steps.append(
+            {
+                "id": step_id,
+                "label": str(record.get("label") or _humanize_identifier(step_id)),
+                "goal": str(record.get("goal") or ""),
+                "run": str(record.get("run") or f"{step_id}__start"),
+                "emits": _step_emit_name(step_id, outgoing.get(step_id, [])),
+                "on": transitions,
+                "needs": [
+                    str(edge.get("from"))
+                    for edge in edges
+                    if str(edge.get("to") or "") == step_id
+                ],
+                "kind": "source" if index == 0 else "sink" if index == len(step_ids) - 1 else "stage",
+            }
+        )
+
+    workflow_id = str(
+        workflow_state.get("workflow_id")
+        if isinstance(workflow_state, dict) and workflow_state.get("workflow_id")
+        else job.get("workflow_id")
+        or summary.get("workflow_id")
+        or job.get("graph_id")
+        or summary.get("graph_id")
+        or job.get("job_id")
+        or "workflow"
+    )
+    job_type = str(job.get("job_type") or job.get("type") or summary.get("job_type") or summary.get("type") or "")
+    return {
+        "apiVersion": "mn.workflow/v1",
+        "kind": "Workflow",
+        "id": str(job.get("graph_id") or summary.get("graph_id") or workflow_id),
+        "name": str(job.get("job_name") or summary.get("job_name") or workflow_id),
+        "description": str(summary.get("description") or job.get("description") or ""),
+        "policies": {"stream_mode": "live"} if job_type.lower() == "service" else {},
+        "workflow": {
+            "workflow_id": workflow_id,
+            "entrypoint": step_ids[0],
+            "source": step_ids[0],
+            "sink": step_ids[-1],
+            "steps": steps,
+            "edges": edges,
+        },
+        "runtime": {"bindings": {}},
+    }
+
+
+def _workflow_state_from_job(job: dict[str, Any], summary: dict[str, Any]) -> dict[str, Any] | None:
+    for mapping in (job, summary):
+        workflow_state = mapping.get("workflow_state") if isinstance(mapping, dict) else None
+        if isinstance(workflow_state, dict):
+            return workflow_state
+    return None
+
+
+def _public_step_ids_from_topology(job: dict[str, Any]) -> list[str]:
+    topology = job.get("runtime_topology") if isinstance(job.get("runtime_topology"), dict) else {}
+    nodes = topology.get("nodes") if isinstance(topology.get("nodes"), list) else []
+    step_ids: list[str] = []
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        node_id = str(node.get("node_id") or node.get("id") or "")
+        node_types = {str(node.get(key) or "").strip().lower() for key in ("agent_type", "node_type", "type")}
+        if "step_source" not in node_types or not node_id.endswith("__start"):
+            continue
+        step_id = node_id.removesuffix("__start")
+        if step_id and step_id not in step_ids:
+            step_ids.append(step_id)
+    return step_ids
+
+
+def _public_workflow_edges(
+    workflow_state: dict[str, Any] | None,
+    job: dict[str, Any],
+    step_ids: list[str],
+) -> list[dict[str, Any]]:
+    raw_edges = workflow_state.get("edges") if isinstance(workflow_state, dict) else None
+    if not isinstance(raw_edges, list):
+        topology = job.get("runtime_topology") if isinstance(job.get("runtime_topology"), dict) else {}
+        raw_edges = topology.get("edges") if isinstance(topology.get("edges"), list) else []
+    known_steps = set(step_ids)
+    edges: list[dict[str, Any]] = []
+    for raw_edge in raw_edges:
+        if not isinstance(raw_edge, dict):
+            continue
+        source = str(raw_edge.get("from") or raw_edge.get("from_node") or "")
+        target = str(raw_edge.get("to") or raw_edge.get("to_node") or "")
+        if source.endswith("__end"):
+            source = source.removesuffix("__end")
+        if target.endswith("__start"):
+            target = target.removesuffix("__start")
+        if source not in known_steps or target not in known_steps:
+            continue
+        edges.append(
+            {
+                "id": str(raw_edge.get("id") or raw_edge.get("edge_id") or f"{source}_to_{target}"),
+                "from": source,
+                "to": target,
+                "event": str(raw_edge.get("event") or raw_edge.get("message_type") or f"{source}_completed"),
+            }
+        )
+    return edges
+
+
+def _step_emit_name(step_id: str, transitions: list[tuple[str, str]]) -> str:
+    return transitions[0][0] if transitions else f"{step_id}_completed"
+
+
+def _humanize_identifier(value: str) -> str:
+    return " ".join(part.capitalize() for part in value.replace("-", "_").split("_") if part)
+
+
+def _manifest_with_public_agent_bindings(
+    manifest: dict[str, Any],
+    job: dict[str, Any],
+    summary: dict[str, Any],
+) -> dict[str, Any]:
+    """Bind public steps to ledger agent IDs instead of lowered runtime nodes."""
+
+    workflow = manifest.get("workflow") if isinstance(manifest.get("workflow"), dict) else {}
+    raw_steps = workflow.get("steps") if isinstance(workflow.get("steps"), list) else []
+    runtime = manifest.get("runtime") if isinstance(manifest.get("runtime"), dict) else {}
+    raw_bindings = runtime.get("bindings") if isinstance(runtime.get("bindings"), dict) else {}
+    workflow_state = _workflow_state_from_job(job, summary) or {}
+    ledger_steps = workflow_state.get("steps") if isinstance(workflow_state.get("steps"), dict) else {}
+    if not raw_steps or not raw_bindings:
+        return manifest
+
+    bindings = dict(raw_bindings)
+    changed = False
+    for raw_step in raw_steps:
+        if not isinstance(raw_step, dict):
+            continue
+        step_id = str(raw_step.get("id") or "")
+        run_id = str(raw_step.get("run") or step_id)
+        binding = bindings.get(step_id) or bindings.get(run_id)
+        if not step_id or not isinstance(binding, dict):
+            continue
+
+        ledger_record = ledger_steps.get(step_id)
+        ledger_record = ledger_record if isinstance(ledger_record, dict) else {}
+        ledger_agent_ids = [
+            public_id
+            for agent_id in ledger_record.get("agent_ids", [])
+            if (public_id := _public_agent_id(step_id, agent_id))
+        ] if isinstance(ledger_record.get("agent_ids"), list) else []
+        normalized_binding = dict(binding)
+        if ledger_agent_ids:
+            workers = binding.get("workers")
+            if not isinstance(workers, list) or not workers:
+                workers = [binding.get("worker") or binding]
+            normalized_workers: list[dict[str, Any]] = []
+            for index, agent_id in enumerate(ledger_agent_ids):
+                matching = next(
+                    (
+                        worker
+                        for worker in workers
+                        if isinstance(worker, dict)
+                        and _public_agent_id(step_id, worker.get("id") or worker.get("node_id")) == agent_id
+                    ),
+                    workers[index] if index < len(workers) else {},
+                )
+                worker = dict(matching) if isinstance(matching, dict) else {}
+                worker["id"] = agent_id
+                normalized_workers.append(worker)
+            normalized_binding["workers"] = normalized_workers
+            normalized_binding.pop("worker", None)
+
+        if bindings.get(step_id) is not normalized_binding:
+            bindings[step_id] = normalized_binding
+            changed = True
+        if run_id and bindings.get(run_id) is not normalized_binding:
+            bindings[run_id] = normalized_binding
+            changed = True
+
+    if not changed:
+        return manifest
+    return {**manifest, "runtime": {**runtime, "bindings": bindings}}
+
+
+def _public_agent_id(step_id: str, value: Any) -> str:
+    agent_id = str(value or "").strip()
+    if not agent_id:
+        return ""
+    public_id = agent_id.removeprefix(f"{step_id}__")
+    if public_id in {"start", "end"} or re.fullmatch(r"(?:fork|join)(?:_\d+)?", public_id):
+        return ""
+    return public_id
 
 
 def _run_dir_for_details(

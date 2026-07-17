@@ -2637,6 +2637,116 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(body["steps"][0]["agents"][0]["assigned_node"], "mirror_neuron@192.168.4.34")
 
     @patch("mn_api.state.client")
+    def test_get_job_workflow_progress_resolves_public_blueprint_from_job_mapping(self, mock_client):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs_root = Path(tmp) / "runs"
+            run_dir = runs_root / "vc-run"
+            run_dir.mkdir(parents=True)
+            (run_dir / "job.json").write_text(
+                json.dumps({"run_id": "vc-run", "job_id": "job-vc", "blueprint_id": "vc_assistant"})
+            )
+
+            bundle_root = Path(tmp) / "catalog" / "vc_assistant"
+            bundle_root.mkdir(parents=True)
+            (bundle_root / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "id": "vc_assistant_v1",
+                        "workflow": {
+                            "workflow_id": "vc_assistant_v1",
+                            "entrypoint": "collect",
+                            "steps": [
+                                {"id": "collect", "label": "Collect", "run": "collector", "emits": "collected", "on": {"collected": "analyze"}},
+                                {"id": "analyze", "label": "Analyze", "run": "analyst", "emits": "analyzed", "on": {}},
+                            ],
+                            "edges": [
+                                {"id": "collect_to_analyze", "from": "collect", "to": "analyze", "event": "collected"}
+                            ],
+                        },
+                        "runtime": {
+                            "bindings": {
+                                "collector": {
+                                    "workers": [
+                                        {"id": "collect__start"},
+                                        {"id": "collect__public_collector", "role": "Collector"},
+                                        {"id": "collect__end"},
+                                    ]
+                                },
+                                "analyst": {
+                                    "workers": [
+                                        {"id": "analyze__start"},
+                                        {"id": "analyze__public_analyst", "role": "Analyst"},
+                                        {"id": "analyze__fork_1"},
+                                        {"id": "analyze__join_2"},
+                                        {"id": "analyze__end"},
+                                    ]
+                                },
+                            }
+                        },
+                    }
+                )
+            )
+            mock_client.get_job.return_value = json.dumps(
+                {
+                    "job": {
+                        "job_id": "job-vc",
+                        "run_id": "vc-run",
+                        "graph_id": "vc_assistant_v1",
+                        "status": "running",
+                        "workflow_state": {
+                            "workflow_id": "vc_assistant_v1",
+                            "step_order": ["collect", "analyze"],
+                            "steps": {
+                                "collect": {
+                                    "status": "done",
+                                    "agent_ids": ["collect__start", "collect__public_collector", "collect__end"],
+                                },
+                                "analyze": {
+                                    "status": "queued",
+                                    "agent_ids": [
+                                        "analyze__start",
+                                        "analyze__public_analyst",
+                                        "analyze__fork_1",
+                                        "analyze__join_2",
+                                        "analyze__end",
+                                    ],
+                                },
+                            },
+                        },
+                        "manifest": {
+                            "workflow": {
+                                "steps": [
+                                    {"id": "collect__start", "run": "collect__start"},
+                                    {"id": "collect__end", "run": "collect__end"},
+                                    {"id": "analyze__start", "run": "analyze__start"},
+                                ]
+                            }
+                        },
+                    },
+                    "summary": {"status": "running"},
+                }
+            )
+            mock_client.stream_events.return_value = [
+                json.dumps({"type": "workflow_step_completed", "step_id": "collect"}),
+                json.dumps({"type": "workflow_step_queued", "step_id": "analyze"}),
+            ]
+
+            with (
+                patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}),
+                patch("mn_api.routes.jobs.find_blueprint", return_value=(Path(tmp) / "catalog", {"id": "vc_assistant"})),
+                patch("mn_api.routes.jobs.blueprint_bundle_root", return_value=bundle_root),
+            ):
+                response = self.client.get("/api/v1/jobs/job-vc/workflow-progress")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual([step["id"] for step in body["steps"]], ["collect", "analyze"])
+        self.assertEqual([edge["id"] for edge in body["edges"]], ["collect_to_analyze"])
+        self.assertEqual(body["steps"][0]["agents"][0]["id"], "public_collector")
+        self.assertEqual(body["steps"][1]["agents"][0]["id"], "public_analyst")
+        self.assertEqual(body["agent_count"]["total"], 2)
+
+    @patch("mn_api.state.client")
     def test_get_job_workflow_progress_marks_service_workers_idle_from_runtime_topology(self, mock_client):
         mock_client.get_job.return_value = json.dumps(
             {

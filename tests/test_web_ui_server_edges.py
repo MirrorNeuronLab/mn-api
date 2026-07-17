@@ -55,16 +55,19 @@ def test_proxy_header_and_target_helpers_filter_hop_by_hop_headers():
 def test_stream_response_closes_upstream_response():
     class Upstream:
         def __init__(self):
-            self.chunks = [b"one", b"two", b""]
+            self.lines = [b": heartbeat\n", b"\n", b"data: {}\n", b"\n", b""]
             self.closed = False
 
-        def read(self, size):
-            return self.chunks.pop(0)
+        def readline(self):
+            return self.lines.pop(0)
+
+        def read(self, _size):
+            raise AssertionError("SSE proxy must not buffer fixed-size blocks")
 
         def close(self):
             self.closed = True
 
     upstream = Upstream()
 
-    assert list(_stream_response(upstream)) == [b"one", b"two"]
+    assert list(_stream_response(upstream)) == [b": heartbeat\n", b"\n", b"data: {}\n", b"\n"]
     assert upstream.closed is True

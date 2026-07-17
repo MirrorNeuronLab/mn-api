@@ -2552,6 +2552,8 @@ def write_blueprint_job_mapping(
     *,
     blueprint_id: str | None = None,
     blueprint_revision: str | None = None,
+    blueprint_source: str | None = None,
+    blueprint_path: str | None = None,
     web_ui_service: Dict[str, Any] | None = None,
 ) -> Path:
     run_dir = Path(shared_runs_root()).expanduser() / run_id
@@ -2563,6 +2565,10 @@ def write_blueprint_job_mapping(
         "blueprint_revision": blueprint_revision,
         "submitted_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
+    if blueprint_source:
+        payload["blueprint_source"] = blueprint_source
+    if blueprint_path:
+        payload["blueprint_path"] = blueprint_path
     if web_ui_service:
         payload["web_ui_service"] = dict(web_ui_service)
     tmp = run_dir / f".job.json.{os.getpid()}.tmp"

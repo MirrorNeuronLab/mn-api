@@ -985,6 +985,8 @@ def run_blueprint_record(
             job_id,
             blueprint_id=blueprint["id"],
             blueprint_revision=blueprint.get("revision") or None,
+            blueprint_source=source,
+            blueprint_path=str(validate_blueprint_bundle(repo_root, blueprint)),
             web_ui_service=web_ui_service,
         )
         current_config = _current_config()

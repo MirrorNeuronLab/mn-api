@@ -160,10 +160,10 @@ def _response_headers(headers: Iterable[tuple[str, str]]) -> dict[str, str]:
 def _stream_response(upstream_response) -> Iterable[bytes]:
     try:
         while True:
-            chunk = upstream_response.read(8192)
-            if not chunk:
+            line = upstream_response.readline()
+            if not line:
                 break
-            yield chunk
+            yield line
     finally:
         upstream_response.close()
 
