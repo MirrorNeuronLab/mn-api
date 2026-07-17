@@ -1401,9 +1401,15 @@ def stream_job_workflow_progress(
         stop = threading.Event()
         event_queue: queue.Queue[tuple[str, str | None]] = queue.Queue()
         details = _full_job_detail(job_id)
+        job = _job_from_details(details)
+        summary = _summary_from_details(details)
         events, stream_error = _stream_job_events(job_id, limit=_MAX_STATUS_RUNTIME_EVENTS)
         run_dir = _run_dir_for_details(details, events, job_id=job_id)
-        manifest = _manifest_from_job_details(details, run_dir=run_dir)
+        manifest = _manifest_with_public_agent_bindings(
+            _manifest_from_job_details(details, run_dir=run_dir),
+            job,
+            summary,
+        )
         events = _merge_events(
             events,
             _run_store_events(run_dir, limit=_MAX_STATUS_RUNTIME_EVENTS),
@@ -1414,15 +1420,16 @@ def stream_job_workflow_progress(
         tracker = BlueprintWorkflowProgress(
             manifest,
             job_id=job_id,
-            job=_job_from_details(details),
-            summary=_summary_from_details(details),
+            job=job,
+            summary=summary,
         )
         seen = set()
         for event in events:
             seen.add(_event_key(event))
             tracker.update(event)
-        tracker.apply_job_status(_job_from_details(details), _summary_from_details(details))
-        initial = tracker.snapshot(job=_job_from_details(details), summary=_summary_from_details(details))
+        tracker.apply_workflow_state(_workflow_state_from_job(job, summary))
+        tracker.apply_job_status(job, summary)
+        initial = tracker.snapshot(job=job, summary=summary)
         _apply_default_assigned_node(initial, details)
         _enrich_workflow_progress_activity(initial, activity_events)
         _clear_success_failure(initial)
@@ -1512,8 +1519,11 @@ def stream_job_workflow_progress(
                 tracker.update(event)
                 if event_type in {"job_completed", "job_failed", "job_cancelled"}:
                     details = _full_job_detail(job_id)
-                    tracker.apply_job_status(_job_from_details(details), _summary_from_details(details))
-                snapshot = tracker.snapshot(job=_job_from_details(details), summary=_summary_from_details(details))
+                    job = _job_from_details(details)
+                    summary = _summary_from_details(details)
+                    tracker.apply_workflow_state(_workflow_state_from_job(job, summary))
+                    tracker.apply_job_status(job, summary)
+                snapshot = tracker.snapshot(job=job, summary=summary)
                 _apply_default_assigned_node(snapshot, details)
                 _enrich_workflow_progress_activity(snapshot, activity_events)
                 _clear_success_failure(snapshot)

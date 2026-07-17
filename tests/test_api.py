@@ -2737,6 +2737,8 @@ class TestAPI(unittest.TestCase):
                 patch("mn_api.routes.jobs.blueprint_bundle_root", return_value=bundle_root),
             ):
                 response = self.client.get("/api/v1/jobs/job-vc/workflow-progress")
+                with self.client.stream("GET", "/api/v1/jobs/job-vc/workflow-progress/stream") as stream_response:
+                    stream_lines = [line for line in stream_response.iter_lines() if line][:2]
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
@@ -2745,6 +2747,10 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(body["steps"][0]["agents"][0]["id"], "public_collector")
         self.assertEqual(body["steps"][1]["agents"][0]["id"], "public_analyst")
         self.assertEqual(body["agent_count"]["total"], 2)
+        self.assertEqual(stream_lines[0], "event: snapshot")
+        stream_body = json.loads(stream_lines[1].removeprefix("data: "))
+        self.assertEqual(stream_body["agent_count"]["total"], 2)
+        self.assertEqual(stream_body["steps"][0]["agents"][0]["id"], "public_collector")
 
     @patch("mn_api.state.client")
     def test_get_job_workflow_progress_marks_service_workers_idle_from_runtime_topology(self, mock_client):
