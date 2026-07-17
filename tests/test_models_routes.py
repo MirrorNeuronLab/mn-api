@@ -2,7 +2,10 @@ from __future__ import annotations
 
 def test_model_runtime_routes_call_sdk_helpers(monkeypatch, api_client):
     calls = []
-    monkeypatch.setattr("mn_api.routes.models.list_runtime_models", lambda installed_only=False: {"installed_only": installed_only})
+    monkeypatch.setattr(
+        "mn_api.routes.models.list_runtime_models",
+        lambda installed_only=False: calls.append(("list", installed_only)) or {"installed_only": installed_only},
+    )
     monkeypatch.setattr(
         "mn_api.routes.models.show_runtime_model",
         lambda model_id, compatibility=False: calls.append(("show", model_id, compatibility)) or {"model_id": model_id},
@@ -28,6 +31,8 @@ def test_model_runtime_routes_call_sdk_helpers(monkeypatch, api_client):
         lambda model_id, force=False: calls.append(("remove", model_id, force)) or {"removed": model_id},
     )
 
+    assert api_client.get("/api/v1/models").json()["installed_only"] is True
+    assert api_client.get("/api/v1/models?installed_only=false").json()["installed_only"] is False
     assert api_client.get("/api/v1/models/catalog").json()["installed_only"] is False
     assert api_client.get("/api/v1/models/gemma4?compatibility=true").json()["model_id"] == "gemma4"
     assert api_client.get("/api/v1/models/gemma4/doctor").json()["ok"] is True
@@ -40,6 +45,8 @@ def test_model_runtime_routes_call_sdk_helpers(monkeypatch, api_client):
     assert api_client.post("/api/v1/models/gemma4/remove", json={"force": True}).json()["removed"] == "gemma4"
 
     assert ("show", "gemma4", True) in calls
+    assert ("list", True) in calls
+    assert ("list", False) in calls
     assert ("doctor", "gemma4") in calls
     assert ("install", "gemma4", "docker", 8192, True) in calls
     assert ("update", "gemma4", False, True) in calls

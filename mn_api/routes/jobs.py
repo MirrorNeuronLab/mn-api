@@ -65,17 +65,6 @@ router = APIRouter(prefix="/api/v1")
 _MAX_COMPACT_STRING = 2000
 _MAX_COMPACT_LIST = 25
 _MAX_STATUS_RUNTIME_EVENTS = 25
-_LIST_STATUS_REFRESH_STATUSES = {
-    "pending",
-    "planned",
-    "validated",
-    "scheduled",
-    "queued",
-    "starting",
-    "preparing",
-    "running",
-    "paused",
-}
 _TERMINAL_EVENT_TYPES = {"job_completed", "job_failed", "job_cancelled"}
 _CANCEL_ALL_ACTIVE_STATUSES = {"pending", "validated", "scheduled", "running", "paused"}
 _ALL_JOBS_LIMIT = 2_147_483_647
@@ -267,7 +256,7 @@ def _nested_get(value: dict[str, Any], path: list[str]) -> Any:
 def list_jobs(limit: int = 20, include_terminal: bool = True, _auth=Depends(require_auth)):
     try:
         jobs_json = state.client.list_jobs(limit, include_terminal)
-        return _reconcile_job_list_statuses(json.loads(jobs_json))
+        return json.loads(jobs_json)
     except Exception as exc:
         return handle_grpc_error(exc)
 
@@ -417,42 +406,6 @@ def _is_success_status(value: Any) -> bool:
 def _clear_success_failure(snapshot: dict[str, Any]) -> None:
     if _is_success_status(snapshot.get("status")):
         snapshot.pop("failure", None)
-
-
-def _should_reconcile_job_list_status(job: dict[str, Any]) -> bool:
-    job_id = _first_string(job.get("job_id"), job.get("id"))
-    status = re.sub(r"[^a-z0-9]+", "_", _normalized_status(job.get("status"))).strip("_")
-    return bool(job_id and job_id != "unknown" and status in _LIST_STATUS_REFRESH_STATUSES)
-
-
-def _status_from_workflow_progress(snapshot: dict[str, Any]) -> str:
-    status = _normalized_status(snapshot.get("status"))
-    return status if status and status != "unknown" else ""
-
-
-def _reconciled_job_list_row(job: dict[str, Any]) -> dict[str, Any]:
-    if not _should_reconcile_job_list_status(job):
-        return job
-    job_id = _first_string(job.get("job_id"), job.get("id"))
-    if not job_id:
-        return job
-    try:
-        status = _status_from_workflow_progress(_workflow_progress_snapshot_for_job(job_id))
-    except Exception:
-        return job
-    return {**job, "status": status} if status else job
-
-
-def _reconcile_job_list_statuses(payload: Any) -> Any:
-    if not isinstance(payload, dict):
-        return payload
-    jobs = payload.get("data")
-    if not isinstance(jobs, list):
-        return payload
-    return {
-        **payload,
-        "data": [_reconciled_job_list_row(job) if isinstance(job, dict) else job for job in jobs],
-    }
 
 
 def _job_record_matches(job_record: dict[str, Any], job_id: str) -> bool:

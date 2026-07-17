@@ -51,35 +51,6 @@ def test_stream_content_and_token_estimate_helpers():
     assert models._estimate_token_count("hello world") >= 1
 
 
-def test_model_payload_handles_proxy_and_compatibility_failure(monkeypatch):
-    monkeypatch.setattr(
-        "mn_api.routes.models.assess_model_compatibility",
-        lambda entry: (_ for _ in ()).throw(RuntimeError("no gpu")),
-    )
-    monkeypatch.setattr(
-        "mn_api.routes.models.model_ownership_metadata",
-        lambda target, installed=False, ledger=None: {"ownership": "manual"},
-    )
-
-    docker_payload = models._model_payload(
-        {"id": "gemma", "model": "ai/gemma4", "provider": "docker_model_runner"},
-        installed_models={"ai/gemma4"},
-        ownership={"models": {}},
-        node="local",
-    )
-    proxy_payload = models._model_payload(
-        {"id": "proxy", "model": "openai/gpt-4.1", "provider": "litellm_proxy", "proxy": {"route": "x"}},
-        installed_models=set(),
-        ownership={},
-        node="local",
-    )
-
-    assert docker_payload["compatibility"]["status"] == "unknown"
-    assert docker_payload["ownership"] == "manual"
-    assert proxy_payload["installed"] is True
-    assert proxy_payload["status"] == "proxy"
-
-
 def test_local_node_name_prefers_self_then_named_node(monkeypatch):
     monkeypatch.setattr(
         state,

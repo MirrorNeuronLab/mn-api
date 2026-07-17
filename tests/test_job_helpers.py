@@ -65,9 +65,6 @@ def test_validate_job_bundle_uses_bundle_root_for_input_validation(monkeypatch, 
 
 def test_job_status_and_failure_helpers():
     assert jobs._is_success_status("Succeeded!") is True
-    assert jobs._status_from_workflow_progress({"status": " Running "}) == "running"
-    assert jobs._should_reconcile_job_list_status({"job_id": "job-1", "status": "paused"}) is True
-    assert jobs._should_reconcile_job_list_status({"job_id": "unknown", "status": "paused"}) is False
 
     snapshot = {"status": "completed", "failure": {"message": "old"}}
     jobs._clear_success_failure(snapshot)
@@ -77,18 +74,6 @@ def test_job_status_and_failure_helpers():
     assert jobs._infer_status([{"type": "workflow_completed"}], {}, {}) == "completed"
     assert jobs._infer_status([{"type": "job_paused"}], {}, {}) == "paused"
     assert jobs._infer_status([{"type": "job_status", "payload": {"status": "waiting"}}], {}, {}) == "waiting"
-
-
-def test_reconcile_job_list_statuses_uses_workflow_snapshot(monkeypatch):
-    monkeypatch.setattr("mn_api.routes.jobs._workflow_progress_snapshot_for_job", lambda job_id: {"status": "running"})
-
-    reconciled = jobs._reconcile_job_list_statuses({"data": [{"job_id": "job-1", "status": "paused"}, "bad"]})
-
-    assert reconciled["data"][0]["status"] == "running"
-    assert reconciled["data"][1] == "bad"
-    assert jobs._reconcile_job_list_statuses([]) == []
-    assert jobs._reconcile_job_list_statuses({"data": "bad"}) == {"data": "bad"}
-
 
 def test_stream_job_events_handles_bad_json_and_stream_errors(monkeypatch):
     class FakeClient:

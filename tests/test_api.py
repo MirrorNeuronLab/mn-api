@@ -234,223 +234,6 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.json()["endpoints"]["core_grpc"], "localhost:55051")
         self.assertIn("client", mock_collect.call_args.kwargs)
 
-    @patch("mn_api.routes.models.assess_model_compatibility")
-    @patch("mn_api.routes.models.load_model_ownership")
-    @patch("mn_api.routes.models.state.client")
-    @patch("mn_api.routes.models.subprocess.run")
-    def test_models_route_lists_installed_docker_models(
-        self, mock_run, mock_client, mock_ownership, mock_compatibility
-    ):
-        mock_run.return_value = SimpleNamespace(
-            returncode=0,
-            stdout='{"Name":"docker.io/ai/gemma4:E2B"}\n',
-            stderr="",
-        )
-        mock_client.get_system_summary.return_value = json.dumps(
-            {"nodes": [{"name": "mirror_neuron@local", "self": True}]}
-        )
-        mock_ownership.return_value = {"version": 1, "models": {}}
-        mock_compatibility.return_value = SimpleNamespace(
-            to_dict=lambda: {
-                "status": "pass",
-                "ok": True,
-                "message": "ready",
-                "warnings": [],
-            }
-        )
-
-        response = self.client.get("/api/v1/models")
-
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertTrue(body["runner_available"])
-        self.assertEqual(body["node"], "mirror_neuron@local")
-        self.assertEqual(body["models"][0]["id"], "gemma4:e2b")
-        self.assertEqual(body["models"][0]["docker_model"], "docker.io/ai/gemma4:E2B")
-        self.assertEqual(body["models"][0]["node"], "mirror_neuron@local")
-        self.assertEqual(body["models"][0]["compatibility"]["status"], "pass")
-
-    @patch("mn_api.routes.models.assess_model_compatibility")
-    @patch("mn_api.routes.models.load_model_ownership")
-    @patch("mn_api.routes.models.state.client")
-    @patch("mn_api.routes.models.subprocess.run")
-    def test_models_route_includes_persisted_ownership_metadata(
-        self, mock_run, mock_client, mock_ownership, mock_compatibility
-    ):
-        mock_run.return_value = SimpleNamespace(
-            returncode=0,
-            stdout='{"Name":"docker.io/ai/gemma4:E2B"}\n',
-            stderr="",
-        )
-        mock_client.get_system_summary.return_value = json.dumps(
-            {"nodes": [{"name": "mirror_neuron@gpu-node", "self": True}]}
-        )
-        mock_ownership.return_value = {
-            "version": 1,
-            "models": {
-                "docker.io/ai/gemma4:E2B": {
-                    "model_id": "gemma4:e2b",
-                    "docker_model": "docker.io/ai/gemma4:E2B",
-                    "provider": "docker_model_runner",
-                    "manual": False,
-                    "owners": {
-                        "invoice": {"blueprint_id": "invoice"},
-                        "research": {"blueprint_id": "research"},
-                    },
-                }
-            },
-        }
-        mock_compatibility.return_value = SimpleNamespace(
-            to_dict=lambda: {
-                "status": "pass",
-                "ok": True,
-                "message": "ready",
-                "warnings": [],
-            }
-        )
-
-        response = self.client.get("/api/v1/models")
-
-        self.assertEqual(response.status_code, 200)
-        model = response.json()["models"][0]
-        self.assertEqual(model["node"], "mirror_neuron@gpu-node")
-        self.assertEqual(model["nodes"], ["mirror_neuron@gpu-node"])
-        self.assertEqual(model["owner_count"], 2)
-        self.assertEqual(model["used_by"], ["invoice", "research"])
-        self.assertFalse(model["orphaned"])
-
-    @patch("mn_api.routes.models.assess_model_compatibility")
-    @patch("mn_api.routes.models.load_model_ownership")
-    @patch("mn_api.routes.models.state.client")
-    @patch("mn_api.routes.models.subprocess.run")
-    def test_models_route_reports_manual_installs_as_not_orphaned(
-        self, mock_run, mock_client, mock_ownership, mock_compatibility
-    ):
-        mock_run.return_value = SimpleNamespace(
-            returncode=0,
-            stdout='{"Name":"docker.io/ai/gemma4:E2B"}\n',
-            stderr="",
-        )
-        mock_client.get_system_summary.return_value = json.dumps(
-            {"nodes": [{"name": "mirror_neuron@gpu-node", "self": True}]}
-        )
-        mock_ownership.return_value = {
-            "version": 1,
-            "models": {
-                "docker.io/ai/gemma4:E2B": {
-                    "model_id": "gemma4:e2b",
-                    "docker_model": "docker.io/ai/gemma4:E2B",
-                    "provider": "docker_model_runner",
-                    "manual": True,
-                    "owners": {},
-                }
-            },
-        }
-        mock_compatibility.return_value = SimpleNamespace(
-            to_dict=lambda: {
-                "status": "pass",
-                "ok": True,
-                "message": "ready",
-                "warnings": [],
-            }
-        )
-
-        response = self.client.get("/api/v1/models")
-
-        self.assertEqual(response.status_code, 200)
-        model = response.json()["models"][0]
-        self.assertTrue(model["installed"])
-        self.assertTrue(model["manual"])
-        self.assertEqual(model["owner_count"], 0)
-        self.assertEqual(model["used_by"], [])
-        self.assertFalse(model["orphaned"])
-
-    @patch("mn_api.routes.models.assess_model_compatibility")
-    @patch("mn_api.routes.models.load_model_ownership")
-    @patch("mn_api.routes.models.state.client")
-    @patch("mn_api.routes.models.subprocess.run")
-    def test_models_route_includes_external_installed_model_from_ownership(
-        self, mock_run, mock_client, mock_ownership, mock_compatibility
-    ):
-        mock_run.return_value = SimpleNamespace(
-            returncode=0,
-            stdout='{"Name":"custom/local:latest"}\n',
-            stderr="",
-        )
-        mock_client.get_system_summary.return_value = json.dumps(
-            {"nodes": [{"name": "mirror_neuron@local", "self": True}]}
-        )
-        mock_ownership.return_value = {
-            "version": 1,
-            "models": {
-                "custom/local:latest": {
-                    "model_id": "custom-local",
-                    "docker_model": "custom/local:latest",
-                    "provider": "docker_model_runner",
-                    "backend": "llama.cpp",
-                    "manual": True,
-                    "owners": {},
-                }
-            },
-        }
-        mock_compatibility.return_value = SimpleNamespace(
-            to_dict=lambda: {
-                "status": "unknown",
-                "ok": False,
-                "message": "external model",
-                "warnings": [],
-            }
-        )
-
-        response = self.client.get("/api/v1/models")
-
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertTrue(body["runner_available"])
-        model = body["models"][0]
-        self.assertEqual(model["id"], "custom-local")
-        self.assertEqual(model["docker_model"], "custom/local:latest")
-        self.assertTrue(model["installed"])
-        self.assertTrue(model["manual"])
-        self.assertEqual(model["node"], "mirror_neuron@local")
-        self.assertEqual(model["nodes"], ["mirror_neuron@local"])
-        self.assertFalse(model["orphaned"])
-
-    @patch("mn_api.routes.models.assess_model_compatibility")
-    @patch("mn_api.routes.models.load_model_ownership")
-    @patch("mn_api.routes.models.state.client")
-    @patch("mn_api.routes.models.dmr_api_list_models")
-    @patch("mn_api.routes.models.subprocess.run")
-    def test_models_route_uses_dmr_api_when_docker_model_cli_is_missing(
-        self, mock_run, mock_api_list, mock_client, mock_ownership, mock_compatibility
-    ):
-        mock_run.return_value = SimpleNamespace(
-            returncode=1,
-            stdout="",
-            stderr="unknown command: docker model",
-        )
-        mock_api_list.return_value = {"docker.io/ai/gemma4:E2B"}
-        mock_client.get_system_summary.return_value = json.dumps(
-            {"nodes": [{"name": "mirror_neuron@local", "self": True}]}
-        )
-        mock_ownership.return_value = {"version": 1, "models": {}}
-        mock_compatibility.return_value = SimpleNamespace(
-            to_dict=lambda: {
-                "status": "pass",
-                "ok": True,
-                "message": "ready",
-                "warnings": [],
-            }
-        )
-
-        response = self.client.get("/api/v1/models")
-
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertTrue(body["runner_available"])
-        self.assertEqual(body["models"][0]["docker_model"], "docker.io/ai/gemma4:E2B")
-        mock_api_list.assert_called_once()
-
     @patch("mn_api.routes.models.state.client")
     @patch("mn_api.routes.models.subprocess.run")
     @patch("mn_api.routes.models.urllib.request.urlopen")
@@ -1117,7 +900,7 @@ class TestAPI(unittest.TestCase):
         mock_client.list_jobs.assert_called_once_with(5, False)
 
     @patch("mn_api.state.client")
-    def test_list_jobs_reconciles_stale_paused_status_from_workflow_progress(self, mock_client):
+    def test_list_jobs_preserves_runtime_status(self, mock_client):
         mock_client.list_jobs.return_value = json.dumps(
             {
                 "data": [
@@ -1131,18 +914,13 @@ class TestAPI(unittest.TestCase):
             }
         )
 
-        with patch(
-            "mn_api.routes.jobs._workflow_progress_snapshot_for_job",
-            return_value={"job_id": "job-progress", "status": "running"},
-        ) as mock_progress:
-            response = self.client.get("/api/v1/jobs")
+        response = self.client.get("/api/v1/jobs")
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["data"][0]["status"], "running")
-        mock_progress.assert_called_once_with("job-progress")
+        self.assertEqual(response.json()["data"][0]["status"], "paused")
 
     @patch("mn_api.state.client")
-    def test_list_jobs_status_reconciliation_preserves_recovery_metadata(self, mock_client):
+    def test_list_jobs_preserves_recovery_metadata(self, mock_client):
         mock_client.list_jobs.return_value = json.dumps(
             {
                 "data": [
@@ -1161,22 +939,18 @@ class TestAPI(unittest.TestCase):
             }
         )
 
-        with patch(
-            "mn_api.routes.jobs._workflow_progress_snapshot_for_job",
-            return_value={"job_id": "job-review", "status": "running"},
-        ):
-            response = self.client.get("/api/v1/jobs")
+        response = self.client.get("/api/v1/jobs")
 
         self.assertEqual(response.status_code, 200)
         row = response.json()["data"][0]
-        self.assertEqual(row["status"], "running")
+        self.assertEqual(row["status"], "paused")
         self.assertEqual(row["recovery_status"], "paused_for_review")
         self.assertTrue(row["recovery_requires_review"])
         self.assertEqual(row["recovery"]["reason"], "worker restart attempts exhausted")
         self.assertTrue(row["recovery"]["can_resume"])
 
     @patch("mn_api.state.client")
-    def test_list_jobs_refreshes_active_rows_from_workflow_progress(self, mock_client):
+    def test_list_jobs_does_not_issue_per_job_detail_requests(self, mock_client):
         mock_client.list_jobs.return_value = json.dumps({"data": [{"job_id": "job-progress", "status": "running"}]})
 
         with patch(
@@ -1186,8 +960,8 @@ class TestAPI(unittest.TestCase):
             response = self.client.get("/api/v1/jobs")
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["data"][0]["status"], "completed")
-        mock_progress.assert_called_once_with("job-progress")
+        self.assertEqual(response.json()["data"][0]["status"], "running")
+        mock_progress.assert_not_called()
 
     @patch("mn_api.state.client")
     def test_cleanup_jobs_success(self, mock_client):

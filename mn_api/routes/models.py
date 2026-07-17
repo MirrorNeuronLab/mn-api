@@ -15,7 +15,6 @@ from mn_api.errors import handle_grpc_error
 from mn_api.schemas import ModelInstallRequest, ModelProxyRequest, ModelRemoteRequest, ModelRemoveRequest, ModelUpdateRequest
 from mn_sdk import (
     DOCKER_MODEL_RUNNER_HOST_API_BASE,
-    assess_model_compatibility,
     default_model_proxies_path,
     default_model_remotes_path,
     dmr_api_list_models,
@@ -24,11 +23,8 @@ from mn_sdk import (
     docker_model_match_keys,
     docker_model_name,
     load_model_catalog,
-    load_model_ownership,
     load_model_remotes,
     merge_catalog_and_installed_models,
-    model_ownership_metadata,
-    proxy_model_ids,
     remove_litellm_gateway_route,
     remove_model_remote,
     resolve_model_entry,
@@ -51,37 +47,11 @@ router = APIRouter(prefix="/api/v1")
 
 @router.get("/models")
 def list_models(installed_only: bool = True, _auth=Depends(require_auth)):
-    """List Docker Model Runner models installed on this runtime node."""
-    if not installed_only:
-        try:
-            return list_runtime_models(installed_only=False)
-        except Exception as exc:
-            return handle_grpc_error(exc)
-
-    catalog = load_model_catalog()
-    ownership = load_model_ownership()
-    docker_state = _installed_model_names()
-    installed_models = docker_state["models"] | proxy_model_ids()
-    node = _local_node_name()
-
-    entries = merge_catalog_and_installed_models(
-        catalog=catalog,
-        installed_models=installed_models,
-        ownership=ownership,
-    )
-    installed_model_keys = {key for model in installed_models for key in docker_model_match_keys(model)}
-    models = [
-        _model_payload(entry, installed_models=installed_models, ownership=ownership, node=node)
-        for entry in entries
-        if _is_proxy_entry(entry) or docker_model_match_keys(docker_model_name(entry)) & installed_model_keys
-    ]
-
-    return {
-        "models": models,
-        "node": node,
-        "runner_available": docker_state["available"],
-        "warnings": docker_state["warnings"],
-    }
+    """List runtime models using the same SDK service as the CLI."""
+    try:
+        return list_runtime_models(installed_only=installed_only)
+    except Exception as exc:
+        return handle_grpc_error(exc)
 
 
 @router.get("/models/catalog")
@@ -256,50 +226,6 @@ def benchmark_model(
         "node": node,
         **result,
     }
-
-
-def _model_payload(
-    entry: dict[str, Any],
-    *,
-    installed_models: set[str],
-    ownership: dict[str, Any],
-    node: str,
-) -> dict[str, Any]:
-    target = docker_model_name(entry)
-    installed_model_keys = {key for model in installed_models for key in docker_model_match_keys(model)}
-    installed = _is_proxy_entry(entry) or bool(docker_model_match_keys(target) & installed_model_keys)
-    compatibility = None
-    if str(entry.get("provider") or "docker_model_runner") == "docker_model_runner":
-        try:
-            compatibility = assess_model_compatibility(entry).to_dict()
-        except Exception as exc:
-            compatibility = {
-                "status": "unknown",
-                "ok": False,
-                "message": str(exc),
-            }
-
-    return {
-        "id": entry.get("id") or target,
-        "name": entry.get("name") or entry.get("id") or target,
-        "provider": entry.get("provider", "docker_model_runner"),
-        "model": target,
-        "docker_model": target,
-        "api_model": entry.get("api_model") or target,
-        "backend": entry.get("backend", "unknown"),
-        "installed": installed,
-        "node": node if installed else "",
-        "nodes": [node] if installed else [],
-        "compatibility": compatibility,
-        **({"status": "proxy", "proxy": entry.get("proxy") or {}} if _is_proxy_entry(entry) and installed else {}),
-        **model_ownership_metadata(target, installed=installed, ledger=ownership),
-    }
-
-
-def _is_proxy_entry(entry: dict[str, Any] | None) -> bool:
-    if not isinstance(entry, dict):
-        return False
-    return str(entry.get("provider") or "").strip().lower() == "litellm_proxy" or str(entry.get("backend") or "").strip().lower() == "proxy"
 
 
 def _resolve_entry_or_external(
