@@ -284,6 +284,7 @@ def test_blueprint_run_route_submits_after_real_preflight_with_runtime_environme
     class FakeRuntimeClient:
         def __init__(self):
             self.submissions = []
+            self.environment_preparations = []
 
         def list_jobs(self, _limit=0, _include_terminal=False):
             return json.dumps({"data": []})
@@ -294,6 +295,14 @@ def test_blueprint_run_route_submits_after_real_preflight_with_runtime_environme
         def submit_job(self, manifest_json, payloads, **kwargs):
             self.submissions.append((json.loads(manifest_json), payloads, kwargs))
             return "job-route-real"
+
+        def prepare_runtime_model(self, payload):
+            self.environment_preparations.append(payload)
+            return json.dumps({
+                "status": "ready",
+                "runtime_path": "/runtime/shared/blueprint-python-envs/vc-route-real",
+                "host_path": "/host/shared/blueprint-python-envs/vc-route-real",
+            })
 
     repo = tmp_path / "catalog"
     bundle = repo / "vc_assistant"
@@ -412,6 +421,9 @@ def test_blueprint_run_route_submits_after_real_preflight_with_runtime_environme
     submitted_flow = submitted_manifest.get("flow", submitted_manifest)
     assert submitted_flow["nodes"][0]["node_id"] == "worker"
     worker_config = submitted_flow["nodes"][0]["config"]
+    assert worker_config["python_environment"]["path"] == "/runtime/shared/blueprint-python-envs/vc-route-real"
+    assert fake_runtime.environment_preparations
+    assert fake_runtime.environment_preparations[0]["ensure_hostlocal_python_environment"] is True
     packages = worker_config["python_environment"]["packages"]
     if packages[:5] == [
         "--index-url",

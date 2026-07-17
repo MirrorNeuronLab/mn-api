@@ -162,6 +162,7 @@ API_COVERED_COMMANDS = {
     "event list",
     "job backup",
     "job cancel",
+    "job cancel-all",
     "job clear",
     "job dead-letters",
     "job list",

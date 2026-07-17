@@ -31,6 +31,53 @@ def test_cleanup_job_aliases_share_runtime_behavior(monkeypatch, api_client, fak
     assert [call for call in fake_runtime_client.calls if call == ("clear_jobs",)] == [("clear_jobs",), ("clear_jobs",)]
 
 
+def test_cancel_all_job_alias_cancels_cli_active_statuses(monkeypatch, api_client, fake_runtime_client):
+    fake_runtime_client.jobs_payload = {
+        "data": [
+            {"job_id": "job-pending", "status": "pending"},
+            {"job_id": "job-validated", "status": "validated"},
+            {"job_id": "job-scheduled", "status": "scheduled"},
+            {"job_id": "job-running", "status": "running"},
+            {"job_id": "job-paused", "status": "paused"},
+            {"job_id": "job-done", "status": "completed"},
+        ]
+    }
+    cleaned = []
+    monkeypatch.setattr(state, "client", fake_runtime_client)
+    monkeypatch.setattr("mn_api.routes.jobs.cleanup_blueprint_processes_for_job", cleaned.append)
+
+    response = api_client.post("/api/v1/jobs:cancel-all")
+
+    active_ids = [record["job_id"] for record in fake_runtime_client.jobs_payload["data"][:-1]]
+    assert response.status_code == 200
+    assert response.json() == {
+        "version": 1,
+        "status": "cancelled",
+        "active_count": 5,
+        "cancelled_count": 5,
+        "cancelled_job_ids": active_ids,
+    }
+    assert fake_runtime_client.calls[0] == ("list_jobs", 2_147_483_647, False)
+    assert [call[1] for call in fake_runtime_client.calls if call[0] == "cancel_job"] == active_ids
+    assert cleaned == active_ids
+
+
+def test_cancel_all_jobs_reports_no_active_jobs(monkeypatch, api_client, fake_runtime_client):
+    fake_runtime_client.jobs_payload = {"data": [{"job_id": "job-done", "status": "completed"}]}
+    monkeypatch.setattr(state, "client", fake_runtime_client)
+
+    response = api_client.post("/api/v1/jobs/cancel-all")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "version": 1,
+        "status": "no_active_jobs",
+        "active_count": 0,
+        "cancelled_count": 0,
+        "cancelled_job_ids": [],
+    }
+
+
 def test_restore_job_rejects_invalid_base64_before_sdk_call(monkeypatch, api_client, fake_runtime_client):
     monkeypatch.setattr(state, "client", fake_runtime_client)
 

@@ -110,6 +110,7 @@ from mn_sdk.skill_dependencies import skill_dependency_package_names
 from mn_sdk.submission_preparation import (
     ensure_blueprint_support_sdk_build_context_uploads,
     inject_skill_dependency_python_environments,
+    localize_agent_dependencies_for_dev,
     localize_skill_dependencies_for_dev,
     lower_manifest_topology_for_runtime_submission,
     normalize_host_local_uploads,
@@ -931,6 +932,7 @@ def load_blueprint_bundle(
     env_overrides: Dict[str, str] | None = None,
     force: bool = False,
     web_ui_reserved_ports: set[int] | None = None,
+    progress_callback: Callable[[str, str, str], None] | None = None,
 ) -> tuple[str, Dict[str, bytes]]:
     from mn_api import state
 
@@ -1003,6 +1005,7 @@ def load_blueprint_bundle(
                 reserved_ports=web_ui_reserved_ports,
             )
     localize_skill_dependencies_for_submission(manifest)
+    localize_agent_dependencies_for_submission(manifest)
     inject_skill_dependency_python_environments_for_submission(manifest)
     runtime_env = blueprint_runtime_environment(
         bundle_root,
@@ -1019,11 +1022,31 @@ def load_blueprint_bundle(
         inject_node_environment(manifest, runtime_env)
         strip_docker_model_runner_placement_requirements_for_submission(manifest)
 
+    hostlocal_nodes = hostlocal_python_environment_nodes(manifest)
+    if hostlocal_nodes:
+        if progress_callback:
+            progress_callback(
+                "Preparing HostLocal Python environments.",
+                "Building or reusing isolated Python environments required by local workflow services.",
+                "A first launch may take several minutes while Python packages are installed.",
+            )
+        prepare_hostlocal_python_environments_for_submission(bundle_root, manifest)
+
     payloads = load_bundle_payloads(bundle_root)
     stage_blueprint_payloads_for_submission(manifest, payloads, bundle_dir=bundle_root)
     payloads.update(runtime_web_ui_support_payloads_for_manifest(manifest))
     normalize_host_local_uploads_for_submission(manifest)
     lower_manifest_topology_for_submission(manifest)
+    if progress_callback and any(
+        str((node.get("config") or {}).get("runner_module") or "") == "MirrorNeuron.Runner.DockerWorker"
+        for node in manifest_agent_nodes(manifest)
+        if isinstance(node.get("config"), dict)
+    ):
+        progress_callback(
+            "Preparing DockerWorker runtime.",
+            "Building or reusing the DockerWorker image and starting its shared container.",
+            "The first launch can take several minutes while runtime dependencies are installed. Keep Docker running.",
+        )
     with temporary_process_environment(runtime_process_environment()):
         prepared = prepare_job_submission(
             manifest,
@@ -1034,6 +1057,200 @@ def load_blueprint_bundle(
         )
 
     return prepared.manifest_json, prepared.payloads
+
+
+def hostlocal_python_environment_nodes(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    nodes: list[dict[str, Any]] = []
+    for node in manifest_agent_nodes(manifest):
+        config = node.get("config") if isinstance(node.get("config"), dict) else {}
+        if config.get("runner_module") != "MirrorNeuron.Runner.HostLocal":
+            continue
+        python_environment = (
+            config.get("python_environment")
+            if isinstance(config.get("python_environment"), dict)
+            else {}
+        )
+        packages = [
+            str(package).strip()
+            for package in python_environment.get("packages") or []
+            if isinstance(package, str) and package.strip()
+        ]
+        requirements = str(python_environment.get("requirements") or "").strip()
+        if packages or requirements:
+            nodes.append(node)
+    return nodes
+
+
+def prepare_hostlocal_python_environments_for_submission(
+    bundle_root: Path,
+    manifest: dict[str, Any],
+    *,
+    runtime_client: Any | None = None,
+    timeout: float | None = None,
+) -> list[dict[str, str]]:
+    from mn_api import state
+
+    blueprint_id = hostlocal_blueprint_id(bundle_root, manifest)
+    resolved_timeout = timeout or config_float(
+        "MN_BLUEPRINT_PYTHON_ENV_TIMEOUT_SECONDS",
+        default=30.0,
+    )
+    prepared: list[dict[str, str]] = []
+    for node in hostlocal_python_environment_nodes(manifest):
+        config = node["config"]
+        python_environment = config["python_environment"]
+        node_id = str(node.get("node_id") or node.get("id") or "host_local")
+        packages = [
+            str(package).strip()
+            for package in python_environment.get("packages") or []
+            if isinstance(package, str) and package.strip()
+        ]
+        requirements = str(python_environment.get("requirements") or "").strip()
+        requirements_content = hostlocal_requirements_content(
+            bundle_root,
+            node_id=node_id,
+            requirements=requirements,
+        )
+        selected_node = hostlocal_selected_runtime_node(manifest, node)
+        response = call_prepare_runtime_model(
+            runtime_client or hostlocal_runtime_client(selected_node),
+            {
+                "node": selected_node,
+                "ensure_hostlocal_python_environment": True,
+                "blueprint_id": blueprint_id,
+                "node_id": node_id,
+                "packages": packages,
+                "requirements_content": requirements_content,
+                "timeout": resolved_timeout,
+                "source": "mn-api",
+            },
+            logger=state.logger,
+        )
+        runtime_path = str(response.get("runtime_path") or "").strip()
+        if not runtime_path:
+            raise RuntimeError(
+                f"{node_id}: HostLocal Python environment preparation did not return a runtime path"
+            )
+        python_environment["path"] = runtime_path
+        prepared.append(
+            {
+                "node_id": node_id,
+                "path": runtime_path,
+                "host_path": str(response.get("host_path") or ""),
+            }
+        )
+    return prepared
+
+
+def hostlocal_requirements_content(
+    bundle_root: Path,
+    *,
+    node_id: str,
+    requirements: str,
+) -> str:
+    if not requirements:
+        return ""
+    payload_root = (bundle_root / "payloads").resolve()
+    requirement_file = (payload_root / requirements).resolve()
+    try:
+        requirement_file.relative_to(payload_root)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"{node_id}: python_environment.requirements must be relative inside payloads/"
+        ) from exc
+    if not requirement_file.is_file():
+        raise RuntimeError(
+            f"{node_id}: python_environment requirements file not found: payloads/{requirements}"
+        )
+    return requirement_file.read_text(encoding="utf-8")
+
+
+def hostlocal_blueprint_id(bundle_root: Path, manifest: dict[str, Any]) -> str:
+    metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
+    mn_cli = metadata.get("mn_cli") if isinstance(metadata.get("mn_cli"), dict) else {}
+    return str(
+        metadata.get("blueprint_id")
+        or mn_cli.get("blueprint_id")
+        or bundle_root.name
+        or "blueprint"
+    )
+
+
+def hostlocal_selected_runtime_node(
+    manifest: dict[str, Any],
+    node: dict[str, Any],
+) -> str:
+    policies = node.get("policies") if isinstance(node.get("policies"), dict) else {}
+    scheduler = policies.get("scheduler") if isinstance(policies.get("scheduler"), dict) else {}
+    explicit = str(
+        scheduler.get("preferred_node")
+        or scheduler.get("preferredNode")
+        or ""
+    ).strip()
+    if explicit:
+        return explicit
+    metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
+    placement = (
+        metadata.get("mn_workflow_placement")
+        if isinstance(metadata.get("mn_workflow_placement"), dict)
+        else {}
+    )
+    return str(placement.get("selected_node") or "").strip()
+
+
+def hostlocal_runtime_client(selected_node: str):
+    from mn_api import state
+
+    if not selected_node:
+        return state.client
+    try:
+        summary = json.loads(state.client.get_system_summary())
+    except Exception as exc:
+        raise RuntimeError(
+            f"could not inspect runtime nodes for HostLocal environment preparation: {exc}"
+        ) from exc
+    nodes = summary.get("nodes") if isinstance(summary, dict) else []
+    selected = next(
+        (
+            node
+            for node in nodes or []
+            if isinstance(node, dict)
+            and str(node.get("name") or node.get("node") or "").strip() == selected_node
+        ),
+        None,
+    )
+    if not selected:
+        raise RuntimeError(
+            f"runtime node {selected_node} was not found for HostLocal environment preparation"
+        )
+    if selected.get("self?") is True or selected.get("self") is True:
+        return state.client
+
+    candidates = [selected.get("native_sdk_grpc")]
+    for key in ("hardware", "node_info"):
+        nested = selected.get(key) if isinstance(selected.get(key), dict) else {}
+        candidates.append(nested.get("native_sdk_grpc"))
+    native = next((candidate for candidate in candidates if isinstance(candidate, dict) and candidate), None)
+    if not native or native.get("enabled") is False:
+        raise RuntimeError(
+            f"runtime node {selected_node} does not advertise an enabled native SDK gRPC endpoint"
+        )
+    target = str(native.get("target") or "").strip()
+    host = str(native.get("host") or "").strip()
+    port = str(native.get("port") or "").strip()
+    if not target and host and port:
+        target = f"{host}:{port}"
+    if not target:
+        raise RuntimeError(
+            f"runtime node {selected_node} advertises incomplete native SDK gRPC metadata"
+        )
+    current_config = state.refresh_config_from_env()
+    return Client(
+        target=target,
+        timeout=runtime_model_prepare_timeout_seconds(),
+        auth_token=getattr(current_config, "grpc_auth_token", None),
+        admin_token=getattr(current_config, "grpc_admin_token", None),
+    )
 
 
 def prepare_skill_runtime_for_submission(
@@ -1065,6 +1282,10 @@ def refresh_embedded_blueprint_config_for_submission(
 
 def localize_skill_dependencies_for_submission(manifest: dict[str, Any]) -> dict[str, Any]:
     return localize_skill_dependencies_for_dev(manifest)
+
+
+def localize_agent_dependencies_for_submission(manifest: dict[str, Any]) -> dict[str, Any]:
+    return localize_agent_dependencies_for_dev(manifest)
 
 
 def inject_skill_dependency_python_environments_for_submission(

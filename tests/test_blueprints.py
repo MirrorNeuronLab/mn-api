@@ -805,7 +805,18 @@ class TestBlueprintServices(unittest.TestCase):
             bundle = repo / "worker_one"
             bundle.mkdir()
             (bundle / "manifest.json").write_text(
-                json.dumps({"graph_id": "worker_graph", "nodes": [{"node_id": "worker"}], "edges": []}),
+                json.dumps(
+                    {
+                        "graph_id": "worker_graph",
+                        "nodes": [
+                            {
+                                "node_id": "worker",
+                                "config": {"runner_module": "MirrorNeuron.Runner.DockerWorker"},
+                            }
+                        ],
+                        "edges": [],
+                    }
+                ),
                 encoding="utf-8",
             )
 
@@ -822,6 +833,9 @@ class TestBlueprintServices(unittest.TestCase):
                     repo.resolve(),
                     {"id": "worker_one", "path": "worker_one"},
                     "run-env",
+                    progress_callback=lambda message, detail, expectation: observed.update(
+                        {"message": message, "detail": detail, "expectation": expectation}
+                    ),
                 )
                 self.assertEqual(os.environ.get("PATH"), "/api/bin")
                 self.assertNotIn("MN_DOCKER_BIN", os.environ)
@@ -829,6 +843,173 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertEqual(observed["path"], "/docker/bin:/api/bin")
         self.assertEqual(observed["docker_bin"], "/docker/bin/docker")
         self.assertIs(observed["cluster_client"], state.client)
+        self.assertEqual(observed["message"], "Preparing DockerWorker runtime.")
+        self.assertIn("DockerWorker image", observed["detail"])
+        self.assertIn("several minutes", observed["expectation"])
+
+    def test_load_blueprint_bundle_prepares_hostlocal_python_environment(self):
+        observed = {}
+
+        def fake_prepare_runtime_model(_client, payload, **_kwargs):
+            observed.update(payload)
+            return {
+                "status": "ready",
+                "runtime_path": "/runtime/shared/blueprint-python-envs/env-1",
+                "host_path": "/host/shared/blueprint-python-envs/env-1",
+            }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            bundle = repo / "host_worker"
+            requirements = bundle / "payloads" / "worker" / "requirements.txt"
+            requirements.parent.mkdir(parents=True)
+            requirements.write_text("requests==2.32.0\n", encoding="utf-8")
+            (bundle / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "graph_id": "host_worker",
+                        "nodes": [
+                            {
+                                "node_id": "worker",
+                                "policies": {"scheduler": {"preferred_node": "worker-a"}},
+                                "config": {
+                                    "runner_module": "MirrorNeuron.Runner.HostLocal",
+                                    "python_environment": {
+                                        "packages": ["gradio>=5"],
+                                        "requirements": "worker/requirements.txt",
+                                    },
+                                },
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.object(
+                blueprints_module,
+                "call_prepare_runtime_model",
+                side_effect=fake_prepare_runtime_model,
+            ), patch.object(
+                blueprints_module,
+                "hostlocal_runtime_client",
+                return_value=object(),
+            ):
+                manifest_json, _payloads = load_blueprint_bundle(
+                    repo.resolve(),
+                    {"id": "host_worker", "path": "host_worker"},
+                    "host-run",
+                )
+
+        manifest = json.loads(manifest_json)
+        python_environment = manifest["nodes"][0]["config"]["python_environment"]
+        self.assertEqual(
+            python_environment["path"],
+            "/runtime/shared/blueprint-python-envs/env-1",
+        )
+        self.assertEqual(observed["node"], "worker-a")
+        self.assertEqual(observed["blueprint_id"], "host_worker")
+        self.assertEqual(observed["node_id"], "worker")
+        self.assertEqual(observed["packages"], ["gradio>=5"])
+        self.assertEqual(observed["requirements_content"], "requests==2.32.0\n")
+        self.assertTrue(observed["ensure_hostlocal_python_environment"])
+
+    def test_load_blueprint_bundle_localizes_declared_agent_dependencies_like_cli(self):
+        observed = {}
+
+        def fake_prepare_job_submission(manifest, payloads, **_kwargs):
+            observed["manifest"] = manifest
+            observed["payloads"] = payloads
+            return SimpleNamespace(manifest_json=json.dumps(manifest), payloads=payloads)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            agents_root = repo / "mn-agents"
+            agent_source = agents_root / "prototype_stateful_step_agent"
+            package_dir = agent_source / "mn_prototype_stateful_step_agent"
+            package_dir.mkdir(parents=True)
+            (agent_source / "pyproject.toml").write_text(
+                "[project]\nname = 'mn-prototype-stateful-step-agent'\nversion = '9.9.9'\n",
+                encoding="utf-8",
+            )
+            (package_dir / "__init__.py").write_text(
+                "class AgentHandlerOutput:\n    pass\n",
+                encoding="utf-8",
+            )
+
+            bundle = repo / "vc_assistant"
+            context = bundle / "payloads" / "docker_worker"
+            context.mkdir(parents=True)
+            (context / "Dockerfile").write_text(
+                "FROM python:3.11-slim\n"
+                "COPY requirements.txt /tmp/mn-skill-runtime/requirements.txt\n"
+                "COPY local-requirements.txt /tmp/mn-skill-runtime/local-requirements.txt\n"
+                "# mirrorneuron: skill-dependencies\n"
+                "# mirrorneuron: skill-dependencies-end\n"
+                "RUN python3 -m pip install -r /tmp/mn-skill-runtime/requirements.txt\n"
+                "RUN python3 -m pip install -r /tmp/mn-skill-runtime/local-requirements.txt\n",
+                encoding="utf-8",
+            )
+            (context / "requirements.txt").write_text("", encoding="utf-8")
+            (context / "local-requirements.txt").write_text("", encoding="utf-8")
+            (bundle / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "graph_id": "vc_assistant",
+                        "nodes": [
+                            {
+                                "node_id": "worker",
+                                "config": {
+                                    "runner_module": "MirrorNeuron.Runner.DockerWorker",
+                                    "docker_worker_image": "docker_worker",
+                                    "image": "mirror-neuron/vc-assistant:test",
+                                },
+                            }
+                        ],
+                        "agent_dependencies": [
+                            {
+                                "type": "pip",
+                                "source": "gar",
+                                "name": "mn-prototype-stateful-step-agent",
+                                "version": "1.2.24",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.dict(
+                os.environ,
+                {
+                    "MN_USE_LOCAL_SKILLS": "1",
+                    "MN_AGENTS_ROOT": str(agents_root),
+                },
+            ), patch.object(
+                blueprints_module,
+                "prepare_job_submission",
+                side_effect=fake_prepare_job_submission,
+            ):
+                load_blueprint_bundle(
+                    repo.resolve(),
+                    {"id": "vc_assistant", "path": "vc_assistant"},
+                    "agent-dependency-run",
+                )
+
+        manifest = observed["manifest"]
+        self.assertEqual(manifest["agent_dependencies"], [])
+        local = manifest["metadata"]["mn_local_skill_dependencies"]
+        self.assertIn("mn-prototype-stateful-step-agent", local["packages"])
+        payloads = observed["payloads"]
+        staged_prefix = (
+            "docker_worker/__mn_skill_dependencies/local/"
+            "prototype_stateful_step_agent"
+        )
+        self.assertIn(f"{staged_prefix}/pyproject.toml", payloads)
+        self.assertIn(
+            "/tmp/mn-skill-runtime/local/prototype_stateful_step_agent",
+            payloads["docker_worker/local-requirements.txt"].decode("utf-8"),
+        )
 
     def test_load_blueprint_bundle_injects_docker_model_runner_env(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1006,7 +1187,18 @@ class TestBlueprintServices(unittest.TestCase):
                     "MN_BLUEPRINT_WEB_UI_PORT_END": "61001",
                     "MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE": "prepublished",
                 },
-            ), patch("mn_sdk.blueprint_support.runtime_web_ui.web_ui_port_available", return_value=False):
+            ), patch(
+                "mn_sdk.blueprint_support.runtime_web_ui.web_ui_port_available",
+                return_value=False,
+            ), patch.object(
+                blueprints_module,
+                "call_prepare_runtime_model",
+                return_value={
+                    "status": "ready",
+                    "runtime_path": "/runtime/shared/blueprint-python-envs/web-ui",
+                    "host_path": "/host/shared/blueprint-python-envs/web-ui",
+                },
+            ):
                 manifest_json, payload_bytes = load_blueprint_bundle(
                     repo.resolve(),
                     {"id": "video_watch_assistant", "path": "video_watch_assistant"},
@@ -1027,6 +1219,10 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertEqual(
             manifest["metadata"]["blueprint_web_ui_service"]["url"],
             "http://localhost:61001",
+        )
+        self.assertEqual(
+            web_ui_node["config"]["python_environment"]["path"],
+            "/runtime/shared/blueprint-python-envs/web-ui",
         )
         self.assertIn(
             "mn_runtime_web_ui/src/mn_sdk/blueprint_support/gradio_dashboard.py",
@@ -1427,5 +1623,5 @@ def test_custom_model_api_prepares_selected_remote_node():
     payload = runtime_client.prepare_runtime_model.call_args.args[0]
     assert payload["customize_mode"] is True
     assert payload["source_model"] == "hf.co/acme/custom:Q4_K_M"
-    assert result["endpoint"]["api_base"] == "http://192.168.4.128:4000/v1"
+    assert result["endpoint"]["api_base"] == "http://192.168.4.128:12434/engines/v1"
     assert result["endpoint"]["source"] == "remote-dmr"

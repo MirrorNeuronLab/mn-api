@@ -131,6 +131,10 @@ class FakeRuntimeClient:
         self.calls.append(("list_jobs", limit, include_terminal))
         return json.dumps(self.jobs_payload)
 
+    def cancel_job(self, job_id):
+        self.calls.append(("cancel_job", job_id))
+        return "cancelled"
+
     def export_job_backup(self, job_id):
         self.calls.append(("export_job_backup", job_id))
         return json.dumps({"job_id": job_id}), {"manifest.json": b'{"graph_id":"g"}'}

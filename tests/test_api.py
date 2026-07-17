@@ -781,6 +781,13 @@ class TestAPI(unittest.TestCase):
         mock_client.list_jobs.return_value = json.dumps({"data": []})
         mock_client.resolve_service.return_value = json.dumps({"services": []})
         mock_client.submit_job.return_value = "job-web-ui-contract"
+        mock_client.prepare_runtime_model.return_value = json.dumps(
+            {
+                "status": "ready",
+                "runtime_path": "/runtime/shared/blueprint-python-envs/web-ui-contract",
+                "host_path": "/host/shared/blueprint-python-envs/web-ui-contract",
+            }
+        )
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
             runs_root = repo / "runs"

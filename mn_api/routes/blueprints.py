@@ -915,6 +915,16 @@ def run_blueprint_record(
             env_overrides=env_overrides,
             force=force,
             web_ui_reserved_ports=runtime_blueprint_web_ui_reserved_ports(),
+            progress_callback=lambda message, detail, expectation: record_launch_progress(
+                progress_id,
+                "prepare_bundle",
+                "running",
+                message,
+                {"run_id": run_id},
+                label="Package workflow",
+                detail=detail,
+                expectation=expectation,
+            ),
         )
     except HTTPException:
         cleanup_blueprint_run_processes(run_id, reason="manifest_prepare_failed")
@@ -923,6 +933,20 @@ def run_blueprint_record(
             "prepare_bundle",
             "failed",
             "Job bundle preparation failed.",
+            {"run_id": run_id},
+            label="Package workflow",
+            detail="The job bundle could not be prepared for submission.",
+            severity="error",
+        )
+        record_launch_progress(progress_id, "launch", "failed", "Blueprint launch failed while preparing the bundle.", {"run_id": run_id})
+        raise
+    except Exception as exc:
+        cleanup_blueprint_run_processes(run_id, reason="manifest_prepare_failed")
+        record_launch_progress(
+            progress_id,
+            "prepare_bundle",
+            "failed",
+            str(exc) or "Job bundle preparation failed.",
             {"run_id": run_id},
             label="Package workflow",
             detail="The job bundle could not be prepared for submission.",

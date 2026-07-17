@@ -77,6 +77,8 @@ _LIST_STATUS_REFRESH_STATUSES = {
     "paused",
 }
 _TERMINAL_EVENT_TYPES = {"job_completed", "job_failed", "job_cancelled"}
+_CANCEL_ALL_ACTIVE_STATUSES = {"pending", "validated", "scheduled", "running", "paused"}
+_ALL_JOBS_LIMIT = 2_147_483_647
 _IMMEDIATE_PROGRESS_EVENTS = {
     "job_pending",
     "job_validated",
@@ -283,6 +285,44 @@ def cleanup_jobs(_auth=Depends(require_auth)):
             except Exception as retry_exc:
                 return handle_grpc_error(retry_exc)
         return handle_grpc_error(exc)
+
+
+@router.post("/jobs:cancel-all", operation_id="cancel_all_jobs_colon_alias")
+@router.post("/jobs/cancel-all", operation_id="cancel_all_jobs_path_alias")
+def cancel_all_jobs(_auth=Depends(require_auth)):
+    try:
+        jobs_json = state.client.list_jobs(_ALL_JOBS_LIMIT, False)
+        payload = json.loads(jobs_json)
+        records = payload.get("data") if isinstance(payload, dict) else []
+        jobs = [
+            job
+            for job in records or []
+            if isinstance(job, dict)
+            and _normalized_status(job.get("status")) in _CANCEL_ALL_ACTIVE_STATUSES
+            and isinstance(job.get("job_id"), str)
+            and job["job_id"]
+        ]
+    except Exception as exc:
+        return handle_grpc_error(exc)
+
+    cancelled: list[str] = []
+    for job in jobs:
+        job_id = job["job_id"]
+        try:
+            state.client.cancel_job(job_id)
+            cleanup_blueprint_processes_for_job(job_id)
+            cancelled.append(job_id)
+        except Exception as exc:
+            cleanup_blueprint_processes_for_job(job_id)
+            return handle_grpc_error(exc)
+
+    return {
+        "version": 1,
+        "status": "cancelled" if cancelled else "no_active_jobs",
+        "active_count": len(jobs),
+        "cancelled_count": len(cancelled),
+        "cancelled_job_ids": cancelled,
+    }
 
 
 def _is_clear_jobs_admin_token_error(exc: Exception) -> bool:
