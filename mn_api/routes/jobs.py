@@ -43,7 +43,7 @@ from mn_sdk.staged_artifacts import (
 from mn_api import state
 from mn_api.agent_graph import build_agent_graph
 from mn_api.artifacts import artifact_ref, list_artifact_files
-from mn_api.blueprints import blueprint_bundle_root, cleanup_blueprint_processes_for_job, find_blueprint
+from mn_api.blueprints import blueprint_bundle_root, find_blueprint
 from mn_api.blueprints import runtime_resource_report
 from mn_api.bundles import load_uploaded_bundle
 from mn_api.dependencies import require_auth, require_websocket_auth
@@ -66,8 +66,6 @@ _MAX_COMPACT_STRING = 2000
 _MAX_COMPACT_LIST = 25
 _MAX_STATUS_RUNTIME_EVENTS = 25
 _TERMINAL_EVENT_TYPES = {"job_completed", "job_failed", "job_cancelled"}
-_CANCEL_ALL_ACTIVE_STATUSES = {"pending", "validated", "scheduled", "running", "paused"}
-_ALL_JOBS_LIMIT = 2_147_483_647
 _IMMEDIATE_PROGRESS_EVENTS = {
     "job_pending",
     "job_validated",
@@ -265,12 +263,12 @@ def list_jobs(limit: int = 20, include_terminal: bool = True, _auth=Depends(requ
 @router.post("/jobs/cleanup", operation_id="cleanup_jobs_path_alias")
 def cleanup_jobs(_auth=Depends(require_auth)):
     try:
-        return RuntimeService(state.client).clear_jobs()
+        return _start_operation("clear_jobs")
     except Exception as exc:
         if _is_clear_jobs_admin_token_error(exc):
             state.close_client()
             try:
-                return RuntimeService(state.client).clear_jobs()
+                return _start_operation("clear_jobs")
             except Exception as retry_exc:
                 return handle_grpc_error(retry_exc)
         return handle_grpc_error(exc)
@@ -280,38 +278,57 @@ def cleanup_jobs(_auth=Depends(require_auth)):
 @router.post("/jobs/cancel-all", operation_id="cancel_all_jobs_path_alias")
 def cancel_all_jobs(_auth=Depends(require_auth)):
     try:
-        jobs_json = state.client.list_jobs(_ALL_JOBS_LIMIT, False)
-        payload = json.loads(jobs_json)
-        records = payload.get("data") if isinstance(payload, dict) else []
-        jobs = [
-            job
-            for job in records or []
-            if isinstance(job, dict)
-            and _normalized_status(job.get("status")) in _CANCEL_ALL_ACTIVE_STATUSES
-            and isinstance(job.get("job_id"), str)
-            and job["job_id"]
-        ]
+        return _start_operation("cancel_all_jobs")
     except Exception as exc:
         return handle_grpc_error(exc)
 
-    cancelled: list[str] = []
-    for job in jobs:
-        job_id = job["job_id"]
-        try:
-            state.client.cancel_job(job_id)
-            cleanup_blueprint_processes_for_job(job_id)
-            cancelled.append(job_id)
-        except Exception as exc:
-            cleanup_blueprint_processes_for_job(job_id)
-            return handle_grpc_error(exc)
 
-    return {
-        "version": 1,
-        "status": "cancelled" if cancelled else "no_active_jobs",
-        "active_count": len(jobs),
-        "cancelled_count": len(cancelled),
-        "cancelled_job_ids": cancelled,
-    }
+@router.post("/operations/{kind}")
+def start_operation(kind: str, options: dict[str, Any] | None = None, _auth=Depends(require_auth)):
+    try:
+        return _start_operation(kind, options or {})
+    except Exception as exc:
+        return handle_grpc_error(exc)
+
+
+@router.get("/operations/{operation_id}")
+def get_operation(operation_id: str, _auth=Depends(require_auth)):
+    try:
+        return json.loads(state.client.get_operation(operation_id))
+    except Exception as exc:
+        return handle_grpc_error(exc)
+
+
+@router.get("/operations/{operation_id}/events")
+def stream_operation_events(
+    operation_id: str,
+    after_sequence: int = 0,
+    _auth=Depends(require_auth),
+):
+    def event_source():
+        try:
+            for event_json in state.client.stream_operation_events(
+                operation_id,
+                after_sequence=max(after_sequence, 0),
+                follow=True,
+                timeout=None,
+                heartbeat_interval_ms=1_000,
+            ):
+                event = json.loads(event_json)
+                event_name = str(event.get("type") or "progress")
+                event_id = event.get("sequence")
+                prefix = f"id: {event_id}\n" if isinstance(event_id, int) else ""
+                yield f"{prefix}event: {event_name}\ndata: {json.dumps(event)}\n\n"
+        except Exception as exc:
+            yield f"event: error\ndata: {json.dumps({'detail': str(exc)})}\n\n"
+
+    return StreamingResponse(event_source(), media_type="text/event-stream")
+
+
+def _start_operation(kind: str, options: dict[str, Any] | None = None) -> dict[str, Any]:
+    payload = json.loads(state.client.start_operation(kind, options or {}))
+    payload.setdefault("version", 1)
+    return payload
 
 
 def _is_clear_jobs_admin_token_error(exc: Exception) -> bool:

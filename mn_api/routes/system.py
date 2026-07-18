@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import socket
 from typing import Any, Callable
@@ -15,6 +16,7 @@ from mn_sdk import (
     ensure_combined_resource_totals,
     health_report_from_status,
     litellm_gateway_health,
+    parse_duration_ms,
 )
 
 from mn_api import state
@@ -199,10 +201,10 @@ def remove_cluster_node(req: ClusterNodeRemoveRequest, _auth=Depends(require_aut
 def reconcile_node(node_name: str, req: NodeReconcileRequest | None = None, _auth=Depends(require_auth)):
     request = req or NodeReconcileRequest()
     try:
-        return RuntimeService(state.client).reconcile_node(
+        return _start_node_operation(
+            "reconcile_node",
             normalize_node_name(node_name),
-            reason=request.reason,
-            dry_run=request.dry_run,
+            {"reason": request.reason, "dry_run": request.dry_run},
         )
     except HTTPException:
         raise
@@ -214,14 +216,15 @@ def reconcile_node(node_name: str, req: NodeReconcileRequest | None = None, _aut
 def drain_node(node_name: str, req: NodeDrainRequest | None = None, _auth=Depends(require_auth)):
     request = req or NodeDrainRequest()
     try:
-        return RuntimeService(state.client).drain_node(
+        return _start_node_operation(
+            "drain_node",
             normalize_node_name(node_name),
-            reason=request.reason,
-            deadline=request.deadline,
-            deadline_ms=request.deadline_ms,
-            dry_run=request.dry_run,
-            wait=request.wait,
-            ignore_system_jobs=request.ignore_system_jobs,
+            {
+                "reason": request.reason,
+                "deadline_ms": request.deadline_ms or parse_duration_ms(request.deadline, field_name="deadline"),
+                "dry_run": request.dry_run,
+                "ignore_system_jobs": request.ignore_system_jobs,
+            },
         )
     except HTTPException:
         raise
@@ -257,6 +260,12 @@ def set_node_maintenance(node_name: str, req: NodeMaintenanceRequest | None = No
         raise
     except Exception as exc:
         return handle_grpc_error(exc)
+
+
+def _start_node_operation(kind: str, node_name: str, options: dict[str, Any]) -> dict[str, Any]:
+    options = {key: value for key, value in options.items() if value is not None}
+    options["node_name"] = node_name
+    return json.loads(state.client.start_operation(kind, options))
 
 
 def normalize_node_host(value: str) -> str:
