@@ -36,6 +36,7 @@ from mn_api.blueprints import (
     load_blueprint_catalog,
     cleanup_blueprint_run_processes,
     cleanup_stale_blueprint_run_processes,
+    deep_merge,
     runtime_blueprint_environment_overrides,
     runtime_web_ui_service_from_manifest,
     scheduler_allocated_ports_from_jobs_payload,
@@ -71,6 +72,7 @@ CONTEXT_ENGINE_EXPECTATION = (
 class LaunchPreflight:
     model_install: dict[str, Any]
     env_overrides: dict[str, str]
+    config_overrides: dict[str, Any]
 
 
 def _current_config():
@@ -783,6 +785,7 @@ def run_blueprint_record(
         return preflight
     model_install = preflight.model_install
     env_overrides.update(preflight.env_overrides)
+    config_overrides = deep_merge(config_overrides, preflight.config_overrides)
     record_launch_progress(
         progress_id,
         "cleanup",
@@ -1497,7 +1500,16 @@ def run_launch_preflight(
         )
     env_patch = model_install.get("env") if isinstance(model_install.get("env"), dict) else {}
     env_overrides = {str(key): str(value) for key, value in env_patch.items() if value is not None}
-    return LaunchPreflight(model_install=model_install, env_overrides=env_overrides)
+    config_patch = (
+        model_install.get("config_overrides")
+        if isinstance(model_install.get("config_overrides"), dict)
+        else {}
+    )
+    return LaunchPreflight(
+        model_install=model_install,
+        env_overrides=env_overrides,
+        config_overrides=config_patch,
+    )
 
 
 def validate_launch_hardware_requirements(launch: dict, *, force: bool = False) -> dict[str, Any]:

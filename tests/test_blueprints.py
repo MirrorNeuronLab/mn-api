@@ -219,7 +219,10 @@ class TestBlueprintServices(unittest.TestCase):
     @patch("mn_api.blueprints.load_model_ownership")
     @patch("mn_api.blueprints.docker_model_installed")
     @patch("mn_api.blueprints.install_model_entry")
-    def test_install_blueprint_runtime_models_passes_backend_and_context(self, mock_install, mock_installed, mock_ledger, mock_record):
+    @patch("mn_api.blueprints.sync_runtime_model_gateways_for_api", return_value={})
+    def test_install_blueprint_runtime_models_passes_backend_and_context(
+        self, mock_sync, mock_install, mock_installed, mock_ledger, mock_record
+    ):
         mock_install.return_value = {"compatibility": {"backend": "llama.cpp"}}
         mock_installed.return_value = False
         mock_ledger.return_value = {"version": 1, "models": {}}
@@ -258,8 +261,10 @@ class TestBlueprintServices(unittest.TestCase):
     @patch("mn_api.blueprints.load_model_ownership")
     @patch("mn_api.blueprints.docker_model_installed")
     @patch("mn_api.blueprints.install_model_entry")
+    @patch("mn_api.blueprints.sync_runtime_model_gateways_for_api", return_value={})
     def test_install_blueprint_runtime_models_deduplicates_same_docker_model(
         self,
+        mock_sync,
         mock_install,
         mock_installed,
         mock_ledger,
@@ -510,8 +515,10 @@ class TestBlueprintServices(unittest.TestCase):
     @patch("mn_api.blueprints.load_model_ownership")
     @patch("mn_api.blueprints.docker_model_installed")
     @patch("mn_api.blueprints.install_model_entry")
+    @patch("mn_api.blueprints.sync_runtime_model_gateways_for_api", return_value={})
     def test_install_blueprint_runtime_models_uses_registered_nemotron_remote(
         self,
+        mock_sync,
         mock_install,
         mock_installed,
         mock_ledger,
@@ -529,6 +536,13 @@ class TestBlueprintServices(unittest.TestCase):
             }
         }
         mock_ledger.return_value = {"version": 1, "models": {}}
+        observed: dict[str, dict] = {}
+
+        def gateway_sync(summary):
+            observed["upstream"] = json.loads(json.dumps(summary["endpoints"]))
+            return blueprints_module.gateway_endpoint_map(summary["endpoints"])
+
+        mock_sync.side_effect = gateway_sync
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
             remotes_path = repo / "model-remotes.json"
@@ -570,91 +584,246 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertTrue(summary["ok"])
         self.assertEqual(summary["models"][0]["status"], "model_remote")
         self.assertEqual(summary["models"][0]["endpoint"]["api_base"], "http://192.168.4.173:12434/v1")
-        endpoints = json.loads(summary["env"]["MN_MODEL_ENDPOINTS_JSON"])
-        self.assertEqual(endpoints["nemotron3:latest"]["api_base"], "http://192.168.4.173:12434/v1")
-        self.assertEqual(endpoints["docker.io/docker.io/ai/nemotron3:latest"]["runtime_model"], "docker.io/docker.io/ai/nemotron3:latest")
+        mock_sync.assert_called_once()
+        self.assertEqual(
+            observed["upstream"]["nemotron3:latest"]["api_base"],
+            "http://192.168.4.173:12434/v1",
+        )
+        self.assertEqual(
+            json.loads(summary["env"]["MN_MODEL_ENDPOINTS_JSON"])["nemotron3:latest"]["api_base"],
+            "http://mn-litellm-proxy:4000/v1",
+        )
         mock_installed.assert_not_called()
         mock_install.assert_not_called()
         mock_record.assert_not_called()
 
-    @patch("mn_api.blueprints.record_model_owner")
+    @patch("mn_api.blueprints.sync_litellm_gateway", return_value={"status": "running"})
     @patch("mn_api.blueprints.load_model_catalog")
     @patch("mn_api.blueprints.load_model_ownership")
-    @patch("mn_api.blueprints.docker_model_installed")
-    @patch("mn_api.blueprints.install_model_entry")
-    def test_install_blueprint_runtime_models_does_not_prepare_via_core_cluster_node(
-        self,
-        mock_install,
-        mock_installed,
-        mock_ledger,
-        mock_catalog,
-        mock_record,
+    def test_install_blueprint_runtime_models_prepares_gemma_fallback_on_single_node(
+        self, mock_ledger, mock_catalog, mock_sync
     ):
         mock_catalog.return_value = {
-            "nemotron3:latest": {
-                "id": "nemotron3:latest",
-                "model": "docker.io/docker.io/ai/nemotron3:latest",
-                "api_model": "docker.io/docker.io/ai/nemotron3:latest",
+            "gemma4:e2b": {
+                "id": "gemma4:e2b",
+                "model": "docker.io/ai/gemma4:E2B",
+                "api_model": "docker.io/ai/gemma4:E2B",
                 "provider": "docker_model_runner",
+                "aliases": ["default", "small", "gemma4"],
+                "backend": "llama.cpp",
+                "requirements": {"min_vram_gb": 8, "min_unified_memory_gb": 16},
+            },
+            "nemotron3": {
+                "id": "nemotron3",
+                "model": "nemotron3",
+                "dmr_model": "docker.io/ai/nemotron3:latest",
+                "api_model": "docker.io/ai/nemotron3:latest",
+                "provider": "docker_model_runner",
+                "aliases": ["medium", "nemotron3:latest"],
+                "backend": "llama.cpp",
+                "fallback_model": "gemma4:e2b",
+                "requirements": {"min_vram_gb": 48, "min_unified_memory_gb": 48},
+            },
+        }
+        mock_ledger.return_value = {"version": 1, "models": {}}
+        resources = {
+            "nodes": [
+                {
+                    "name": "local",
+                    "self": True,
+                    "status": "healthy",
+                    "scheduling_eligible": True,
+                    "devices": [{"kind": "gpu", "memory_total_mb": 16384}],
+                }
+            ]
+        }
+        systems = {
+            "nodes": [
+                {
+                    "name": "local",
+                    "self": True,
+                    "status": "healthy",
+                    "scheduling_eligible": True,
+                    "grpc_host": "10.0.0.10",
+                }
+            ]
+        }
+        prepared = {
+            "status": "installed",
+            "docker_model": "docker.io/ai/gemma4:E2B",
+            "endpoint": {
+                "model": "docker.io/ai/gemma4:E2B",
+                "runtime_model": "docker.io/ai/gemma4:E2B",
+            },
+        }
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch("mn_api.state.client") as mock_client,
+            patch("mn_api.blueprints.resolve_runtime_model_endpoint_for_api", return_value=None),
+        ):
+            repo = Path(tmpdir)
+            bundle = repo / "vc_assistant"
+            config_dir = bundle / "config"
+            config_dir.mkdir(parents=True)
+            (config_dir / "default.json").write_text(json.dumps({
+                "llm": {
+                    "enabled": True,
+                    "model": "default",
+                    "provider": "docker_model_runner",
+                }
+            }))
+            (bundle / "manifest.json").write_text(json.dumps({
+                "metadata": {"blueprint_id": "vc_assistant"},
+                "nodes": [],
+                "edges": [],
+                "runtime": {"models": {"primary": {"provider": "docker_model_runner", "model": "default"}}},
+            }))
+            mock_client.resolve_service.return_value = json.dumps({"services": []})
+            mock_client.get_resource.return_value = json.dumps(resources)
+            mock_client.get_system_summary.return_value = json.dumps(systems)
+            mock_client.prepare_runtime_model.return_value = json.dumps(prepared)
+            summary = install_blueprint_runtime_models(
+                repo.resolve(), {"id": "vc_assistant", "path": "vc_assistant"}
+            )
+
+        self.assertTrue(summary["ok"])
+        self.assertEqual(summary["models"][0]["status"], "fallback_model")
+        self.assertEqual(summary["models"][0]["fallback"]["id"], "gemma4:e2b")
+        self.assertEqual(
+            json.loads(summary["env"]["MN_BLUEPRINT_CONFIG_JSON"])["llm"]["model"],
+            "docker.io/ai/gemma4:E2B",
+        )
+        self.assertEqual(
+            json.loads(summary["env"]["MN_BLUEPRINT_CONFIG_JSON"])["llm"]["api_base"],
+            "http://mn-litellm-proxy:4000/v1",
+        )
+        self.assertEqual(summary["env"]["MN_LLM_MODEL"], "default")
+        self.assertEqual(
+            json.loads(summary["env"]["MN_MODEL_ENDPOINTS_JSON"])["small"]["api_base"],
+            "http://mn-litellm-proxy:4000/v1",
+        )
+        mock_client.prepare_runtime_model.assert_called_once()
+        mock_sync.assert_called_once()
+
+    @patch("mn_api.blueprints.sync_litellm_gateway", return_value={"status": "running"})
+    @patch("mn_api.blueprints.load_model_catalog")
+    @patch("mn_api.blueprints.load_model_ownership")
+    def test_install_blueprint_runtime_models_prepares_normal_model_on_remote_node_and_fans_out_gateway(
+        self, mock_ledger, mock_catalog, mock_sync
+    ):
+        mock_catalog.return_value = {
+            "nemotron3": {
+                "id": "nemotron3",
+                "model": "nemotron3",
+                "dmr_model": "docker.io/ai/nemotron3:latest",
+                "api_model": "docker.io/ai/nemotron3:latest",
+                "provider": "docker_model_runner",
+                "aliases": ["medium", "nemotron3:latest"],
+                "route_aliases": ["nemotron3"],
                 "backend": "llama.cpp",
                 "requirements": {"min_vram_gb": 48, "min_unified_memory_gb": 48},
             }
         }
         mock_ledger.return_value = {"version": 1, "models": {}}
-        mock_installed.return_value = False
-        mock_install.return_value = {"compatibility": {"backend": "llama.cpp"}}
-        resource_report = {
+        resources = {
             "nodes": [
                 {
-                    "name": "spark",
+                    "name": "local", "self": True, "status": "healthy",
+                    "scheduling_eligible": True,
+                    "devices": [{"kind": "gpu", "memory_total_mb": 16384}],
+                },
+                {
+                    "name": "remote", "status": "healthy",
+                    "scheduling_eligible": True,
+                    "devices": [{"kind": "gpu", "memory_total_mb": 65536}],
+                },
+            ]
+        }
+        systems = {
+            "nodes": [
+                {"name": "local", "self": True, "status": "healthy", "scheduling_eligible": True, "grpc_host": "10.0.0.10"},
+                {
+                    "name": "remote",
                     "status": "healthy",
                     "scheduling_eligible": True,
-                    "devices": [
-                        {
-                            "kind": "gpu",
-                            "type": "integrated_gpu",
-                            "vendor": "nvidia",
-                            "memory_total_mb": 131072,
-                            "capabilities": ["nvidia-gb10", "nvidia-dgx-spark"],
-                        }
-                    ],
-                }
+                    "grpc_host": "10.0.0.20",
+                    "native_sdk_grpc": {"host": "10.0.0.20", "port": 55052, "target": "10.0.0.20:55052"},
+                },
             ]
+        }
+        remote_runtime = unittest.mock.Mock()
+        remote_runtime.prepare_runtime_model.return_value = json.dumps({
+            "status": "installed",
+            "docker_model": "docker.io/ai/nemotron3:latest",
+            "endpoint": {"model": "docker.io/ai/nemotron3:latest", "runtime_model": "docker.io/ai/nemotron3:latest"},
+        })
+        remote_runtime.sync_litellm_gateway.return_value = json.dumps({"status": "running"})
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch("mn_api.state.client") as mock_client,
+            patch("mn_api.blueprints.Client", return_value=remote_runtime) as client_class,
+            patch("mn_api.state.refresh_config_from_env", return_value=SimpleNamespace(grpc_auth_token="auth", grpc_admin_token="admin")),
+            patch("mn_api.blueprints.resolve_runtime_model_endpoint_for_api", return_value=None),
+        ):
+            repo = Path(tmpdir)
+            bundle = repo / "vc_assistant"
+            config_dir = bundle / "config"
+            config_dir.mkdir(parents=True)
+            (config_dir / "default.json").write_text(json.dumps({"llm": {"enabled": True, "model": "medium", "provider": "docker_model_runner"}}))
+            (bundle / "manifest.json").write_text(json.dumps({
+                "metadata": {"blueprint_id": "vc_assistant"}, "nodes": [], "edges": [],
+                "runtime": {"models": {"primary": {"provider": "docker_model_runner", "model": "medium"}}},
+            }))
+            mock_client.resolve_service.return_value = json.dumps({"services": []})
+            mock_client.get_resource.return_value = json.dumps(resources)
+            mock_client.get_system_summary.return_value = json.dumps(systems)
+            summary = install_blueprint_runtime_models(repo.resolve(), {"id": "vc_assistant", "path": "vc_assistant"})
+
+        self.assertTrue(summary["ok"])
+        self.assertEqual(summary["models"][0]["cluster"]["node"], "remote")
+        self.assertEqual(summary["models"][0]["endpoint"]["api_base"], "http://10.0.0.20:12434/engines/v1")
+        mock_client.prepare_runtime_model.assert_not_called()
+        remote_runtime.prepare_runtime_model.assert_called_once()
+        self.assertEqual(client_class.call_count, 2)
+        remote_runtime.sync_litellm_gateway.assert_called_once()
+        fanout_payload = remote_runtime.sync_litellm_gateway.call_args.args[0]
+        self.assertEqual(fanout_payload["runtime_endpoints"]["medium"]["api_base"], "http://10.0.0.20:12434/engines/v1")
+        self.assertEqual(
+            json.loads(summary["env"]["MN_MODEL_ENDPOINTS_JSON"])["medium"]["api_base"],
+            "http://mn-litellm-proxy:4000/v1",
+        )
+        mock_sync.assert_called_once()
+
+    @patch("mn_api.blueprints.sync_runtime_model_gateways_for_api", side_effect=RuntimeError("proxy unavailable"))
+    @patch("mn_api.blueprints.blueprint_model_dependency_summary")
+    @patch("mn_api.blueprints.load_model_catalog", return_value={})
+    def test_install_blueprint_runtime_models_blocks_launch_when_gateway_sync_fails(
+        self, mock_catalog, mock_summary, mock_sync
+    ):
+        mock_summary.return_value = {
+            "models": [
+                {
+                    "id": "gemma4:e2b",
+                    "model": "docker.io/ai/gemma4:E2B",
+                    "provider": "docker_model_runner",
+                    "status": "installed",
+                }
+            ],
+            "endpoints": {"small": {"model": "docker.io/ai/gemma4:E2B"}},
+            "errors": [],
         }
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
-            bundle = repo / "vc_assistant"
+            bundle = repo / "worker_one"
             bundle.mkdir()
-            (bundle / "manifest.json").write_text(json.dumps({
-                "metadata": {"blueprint_id": "vc_assistant"},
-                "nodes": [],
-                "edges": [],
-                "runtime": {
-                    "models": {
-                        "primary": {
-                            "provider": "docker_model_runner",
-                            "model": "nemotron3:latest",
-                            "api_base": "auto",
-                            "backend": "llama.cpp",
-                        }
-                    }
-                },
-            }))
+            (bundle / "manifest.json").write_text(json.dumps({"nodes": [], "edges": []}))
+            summary = install_blueprint_runtime_models(
+                repo.resolve(), {"id": "worker_one", "path": "worker_one"}
+            )
 
-            with patch("mn_api.state.client") as mock_client:
-                mock_client.resolve_service.return_value = json.dumps({"services": []})
-                mock_client.get_resource.return_value = json.dumps(resource_report)
-                summary = install_blueprint_runtime_models(repo.resolve(), {"id": "vc_assistant", "path": "vc_assistant"})
-
-        self.assertTrue(summary["ok"])
-        self.assertEqual(summary["models"][0]["status"], "installed")
-        self.assertNotIn("MN_MODEL_ENDPOINTS_JSON", summary["env"])
-        prepared = json.loads(summary["env"]["MN_PREPARED_RUNTIME_MODELS_JSON"])
-        self.assertIn("docker.io/docker.io/ai/nemotron3:latest", prepared)
-        mock_installed.assert_called_once()
-        mock_install.assert_called_once()
-        self.assertFalse(mock_client.prepare_runtime_model.called)
-        mock_record.assert_called_once()
+        self.assertFalse(summary["ok"])
+        self.assertIn("LiteLLM gateway synchronization failed: proxy unavailable", summary["errors"])
+        mock_sync.assert_called_once()
 
     def test_catalog_loads_category_facets_and_filters_by_slug_or_name(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1063,7 +1232,7 @@ class TestBlueprintServices(unittest.TestCase):
         env = manifest["nodes"][0]["config"]["environment"]
         self.assertEqual(env["MN_LLM_PROVIDER"], "litellm")
         self.assertEqual(env["MN_LLM_MODEL"], "docker.io/ai/gemma4:E2B")
-        self.assertEqual(env["MN_LLM_API_BASE"], "http://localhost:12434/engines/v1")
+        self.assertEqual(env["MN_LLM_API_BASE"], "http://127.0.0.1:4000/v1")
 
     def test_load_blueprint_bundle_stages_configured_local_input_folder(self):
         with tempfile.TemporaryDirectory() as tmpdir:

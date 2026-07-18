@@ -3919,11 +3919,31 @@ class TestAPI(unittest.TestCase):
             return {
                 "ok": True,
                 "models": [{"id": "gemma4:e2b", "model": "docker.io/ai/gemma4:E2B", "status": "installed"}],
+                "config_overrides": {
+                    "llm": {
+                        "model": "gemma4:e2b",
+                        "runtime_model": "gemma4:e2b",
+                        "api_base": "http://mn-litellm-proxy:4000/v1",
+                    }
+                },
+                "env": {
+                    "MN_BLUEPRINT_CONFIG_JSON": json.dumps(
+                        {"llm": {"model": "gemma4:e2b"}}
+                    ),
+                    "MN_MODEL_ENDPOINTS_JSON": json.dumps(
+                        {"small": {"api_base": "http://mn-litellm-proxy:4000/v1"}}
+                    ),
+                },
                 "errors": [],
             }
 
         def validate_side_effect(*args, **kwargs):
             events.append("validate")
+            self.assertEqual(kwargs["config_overrides"]["llm"]["model"], "gemma4:e2b")
+            self.assertEqual(
+                kwargs["env_overrides"]["MN_MODEL_ENDPOINTS_JSON"],
+                json.dumps({"small": {"api_base": "http://mn-litellm-proxy:4000/v1"}}),
+            )
             return {"ok": True, "status": "passed", "issues": [], "errors": []}
 
         mock_install.side_effect = install_side_effect
@@ -4064,6 +4084,43 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.headers["content-type"], "application/problem+json")
         self.assertEqual(response.json()["error"], "blueprint_model_install_failed")
         self.assertEqual(response.json()["errors"][0]["location"]["path"], "llm.runtime_model")
+        mock_client.submit_job.assert_not_called()
+
+    @patch("mn_api.state.client")
+    @patch("mn_api.routes.blueprints.install_blueprint_runtime_models")
+    def test_blueprint_launch_run_blocks_submission_when_gateway_sync_fails(
+        self, mock_install, mock_client
+    ):
+        mock_install.return_value = {
+            "ok": False,
+            "models": [
+                {
+                    "id": "gemma4:e2b",
+                    "model": "docker.io/ai/gemma4:E2B",
+                    "path": "llm.runtime_model",
+                    "status": "installed",
+                }
+            ],
+            "errors": ["LiteLLM gateway synchronization failed: proxy unavailable"],
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            self._write_blueprint_repo(repo)
+            original = self._set_blueprint_config(repo)
+            try:
+                with patch(
+                    "mn_api.routes.blueprints.validate_blueprint_hardware_requirements",
+                    return_value={"ok": True, "status": "passed", "issues": [], "errors": []},
+                ):
+                    response = self._sync_blueprint_launch(
+                        {"source": "catalog", "blueprint_id": "worker_one"}
+                    )
+            finally:
+                self._restore_config(original)
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["error"], "blueprint_model_install_failed")
+        self.assertIn("LiteLLM gateway synchronization failed", response.json()["errors"][0]["message"])
         mock_client.submit_job.assert_not_called()
 
     @patch("mn_api.state.client")

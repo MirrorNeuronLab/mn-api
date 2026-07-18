@@ -26,6 +26,7 @@ from mn_sdk import (
     build_prepare_runtime_model_request,
     call_prepare_runtime_model,
     cluster_provided_model,
+    docker_model_runner_endpoint,
     docker_cli_path_environment,
     docker_model_installed,
     docker_model_name,
@@ -41,11 +42,13 @@ from mn_sdk import (
     blueprint_model_dependency_summary,
     install_model_entry,
     is_custom_model_requirement,
+    gateway_endpoint_map,
     prepare_job_submission,
     record_model_owner,
     required_blueprint_models,
     resolve_llm_environment,
     resolve_custom_model_placement,
+    resolve_cluster_model_placement,
     remote_runtime_model_endpoint,
     resolve_model_endpoint,
     resolve_model_entry,
@@ -54,10 +57,21 @@ from mn_sdk import (
     run_model_validation,
     run_service_validation,
     runtime_model_prepare_timeout_seconds,
+    sync_litellm_gateway,
     validate_input_validation_spec_issues,
     validate_requirements_spec_issues,
     validate_resource_spec_issues,
     validate_service_spec_issues,
+)
+from mn_sdk.model_preparation import (
+    config_with_auto_runtime_model_profile,
+    config_with_runtime_model_endpoints,
+    config_with_runtime_model_fallbacks,
+    config_with_runtime_model_profile,
+    model_validation_inputs_with_prepared_models as sdk_model_validation_inputs_with_prepared_models,
+    prepared_runtime_model_keys as sdk_prepared_runtime_model_keys,
+    prepared_runtime_models_json as sdk_prepared_runtime_models_json,
+    runtime_model_llm_environment,
 )
 from mn_sdk.blueprint_runtime import (
     add_mn_llm_aliases as sdk_add_mn_llm_aliases,
@@ -411,11 +425,18 @@ def install_blueprint_runtime_models(
     if not isinstance(manifest, dict):
         raise HTTPException(status_code=500, detail="blueprint manifest.json must be an object")
     manifest = expand_blueprint_manifest_if_source(bundle_root, manifest)
-    config = load_blueprint_config(bundle_root, config_overrides=config_overrides)
+    base_config = load_blueprint_config(
+        bundle_root, config_overrides=config_overrides
+    ) or {}
     service_results: list[dict[str, Any]] = []
     blueprint_id = str(blueprint.get("id") or "")
     blueprint_revision = str(blueprint.get("revision") or "")
     catalog = load_model_catalog()
+    config = config_with_auto_runtime_model_profile(
+        base_config,
+        catalog=catalog,
+        resolve_cluster_model=resolve_runtime_cluster_model_for_api,
+    )
     summary = blueprint_model_dependency_summary(
         blueprint_id=blueprint_id,
         blueprint_revision=blueprint_revision,
@@ -451,15 +472,242 @@ def install_blueprint_runtime_models(
             errors.append(str(context_result.get("error") or "context engine setup failed"))
         elif service_progress is not None:
             service_progress("context_engine_ready", context_result)
-    env = {}
-    endpoints = summary.get("endpoints") if isinstance(summary.get("endpoints"), dict) else {}
+    if not errors:
+        try:
+            endpoints = sync_runtime_model_gateways_for_api(summary)
+        except Exception as exc:
+            errors.append(f"LiteLLM gateway synchronization failed: {exc}")
+            endpoints = {}
+    else:
+        endpoints = {}
+    env: dict[str, str] = {}
     if endpoints:
+        summary["endpoints"] = endpoints
         env["MN_MODEL_ENDPOINTS_JSON"] = model_endpoints_json(endpoints)
     models = summary.get("models") if isinstance(summary.get("models"), list) else []
-    prepared_json = prepared_runtime_models_json(models)
+    prepared_json = sdk_prepared_runtime_models_json({"models": models})
     if prepared_json:
         env["MN_PREPARED_RUNTIME_MODELS_JSON"] = prepared_json
-    return {"ok": not errors, "models": models, "services": service_results, "endpoints": endpoints, "env": env, "errors": errors}
+    materialized_config = config_with_runtime_model_endpoints(config, summary)
+    materialized_config = config_with_runtime_model_fallbacks(
+        materialized_config, summary
+    )
+    materialized_config = config_with_runtime_model_profile(materialized_config)
+    materialized_config = config_with_runtime_model_endpoints(
+        materialized_config, summary
+    )
+    if materialized_config != base_config:
+        env["MN_BLUEPRINT_CONFIG_JSON"] = json.dumps(
+            materialized_config, sort_keys=True
+        )
+        env.update(runtime_model_llm_environment(materialized_config))
+    if blueprint_requests_default_llm(base_config):
+        env["MN_LLM_MODEL"] = "default"
+        env["LITELLM_MODEL"] = "default"
+    return {
+        "ok": not errors,
+        "models": models,
+        "services": service_results,
+        "endpoints": endpoints,
+        "env": env,
+        "config_overrides": (
+            materialized_config if materialized_config != base_config else None
+        ),
+        "errors": errors,
+    }
+
+
+def blueprint_requests_default_llm(config: dict[str, Any]) -> bool:
+    llm = config.get("llm") if isinstance(config.get("llm"), dict) else {}
+    return str(llm.get("model") or "").strip().lower() == "default"
+
+
+def sync_runtime_model_gateways_for_api(
+    summary: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """Publish prepared DMR routes to every healthy runtime gateway.
+
+    Worker manifests always use their node-local LiteLLM proxy.  Gateways are
+    reconciled with direct DMR routes here so a HostLocal worker can follow a
+    model installed on another node without embedding a static remote URL in
+    the submitted blueprint.
+    """
+
+    upstream_endpoints = summary.get("endpoints")
+    upstream = (
+        dict(upstream_endpoints)
+        if isinstance(upstream_endpoints, dict)
+        else {}
+    )
+    upstream.update(local_runtime_model_endpoints_for_api(summary))
+    if not upstream:
+        return {}
+
+    restart = str(os.getenv("MN_LITELLM_GATEWAY_RESTART", "true")).strip().lower()
+    restart_enabled = restart not in {"0", "false", "no", "off"}
+    gateway = sync_litellm_gateway(
+        runtime_endpoints=upstream,
+        restart=restart_enabled,
+    )
+    fanout_runtime_model_gateways_for_api(upstream, restart=restart_enabled)
+    summary["gateway"] = gateway
+    return gateway_endpoint_map(upstream)
+
+
+def local_runtime_model_endpoints_for_api(
+    summary: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """Build direct DMR routes for models prepared on this API's node."""
+
+    endpoints: dict[str, dict[str, Any]] = {}
+    prepared_statuses = {"installed", "already_installed", "fallback_model"}
+    for item in summary.get("models") or []:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("status") or "") not in prepared_statuses:
+            continue
+        if str(item.get("provider") or "docker_model_runner") != "docker_model_runner":
+            continue
+        endpoint = item.get("endpoint") if isinstance(item.get("endpoint"), dict) else {}
+        if endpoint and str(endpoint.get("source") or "") not in {"", "local-dmr"}:
+            continue
+        effective = item.get("effective") if isinstance(item.get("effective"), dict) else {}
+        model_ref = str(
+            effective.get("id")
+            or effective.get("model")
+            or item.get("id")
+            or item.get("model")
+            or ""
+        ).strip()
+        if not model_ref:
+            continue
+        try:
+            entry = resolve_model_entry(model_ref)
+        except Exception:
+            entry = {
+                "id": model_ref,
+                "provider": "docker_model_runner",
+                "model": str(effective.get("model") or item.get("model") or model_ref),
+                "api_model": str(effective.get("model") or item.get("model") or model_ref),
+            }
+        direct = docker_model_runner_endpoint(entry, source="local-dmr")
+        for key in runtime_model_route_keys_for_api(item, entry, effective):
+            endpoints[key] = direct
+    return endpoints
+
+
+def runtime_model_route_keys_for_api(
+    item: dict[str, Any],
+    entry: dict[str, Any],
+    effective: dict[str, Any],
+) -> set[str]:
+    keys = {
+        str(item.get("id") or "").strip(),
+        str(item.get("model") or "").strip(),
+        str(effective.get("id") or "").strip(),
+        str(effective.get("model") or "").strip(),
+        str(entry.get("id") or "").strip(),
+        str(entry.get("model") or "").strip(),
+        str(entry.get("api_model") or "").strip(),
+    }
+    for aliases in (entry.get("aliases"), entry.get("route_aliases")):
+        if isinstance(aliases, list):
+            keys.update(str(alias).strip() for alias in aliases if str(alias).strip())
+    return {key for key in keys if key}
+
+
+def fanout_runtime_model_gateways_for_api(
+    runtime_endpoints: dict[str, dict[str, Any]],
+    *,
+    restart: bool,
+) -> None:
+    """Require every healthy remote proxy to accept the dynamic route map."""
+
+    from mn_api import state
+
+    try:
+        system_summary = json.loads(state.client.get_system_summary())
+    except Exception as exc:
+        raise RuntimeError(f"could not inspect runtime nodes for LiteLLM sync: {exc}") from exc
+    nodes = system_summary.get("nodes") if isinstance(system_summary, dict) else None
+    if not isinstance(nodes, list):
+        raise RuntimeError("runtime node metadata is invalid for LiteLLM sync")
+    current_config = state.refresh_config_from_env()
+    for node in nodes:
+        if not api_gateway_sync_eligible_node(node):
+            continue
+        node_name = str(node.get("name") or node.get("node") or "").strip()
+        if bool(node.get("self") is True or node.get("self?") is True):
+            continue
+        native = native_sdk_grpc_for_api_node(node)
+        target, _host = native_sdk_target_for_api_node(native)
+        if not target:
+            raise RuntimeError(
+                f"runtime node {node_name} does not advertise native SDK gRPC for LiteLLM sync"
+            )
+        runtime_client = Client(
+            target=target,
+            timeout=runtime_model_prepare_timeout_seconds(),
+            auth_token=getattr(current_config, "grpc_auth_token", None),
+            admin_token=getattr(current_config, "grpc_admin_token", None),
+        )
+        try:
+            response = runtime_client.sync_litellm_gateway(
+                {
+                    "node": node_name,
+                    "runtime_endpoints": runtime_endpoints,
+                    "restart": restart,
+                    "source": "mn-api-runtime-endpoint-fanout",
+                }
+            )
+            decoded = json.loads(response) if isinstance(response, str) else response
+        except Exception as exc:
+            raise RuntimeError(f"could not sync LiteLLM gateway on {node_name}: {exc}") from exc
+        if not isinstance(decoded, dict) or str(decoded.get("status") or "").lower() in {
+            "failed",
+            "error",
+        }:
+            raise RuntimeError(f"LiteLLM gateway synchronization failed on {node_name}")
+
+
+def api_gateway_sync_eligible_node(node: Any) -> bool:
+    if not isinstance(node, dict):
+        return False
+    name = str(node.get("name") or node.get("node") or "").strip()
+    status = str(node.get("status") or "").strip().lower()
+    return bool(
+        name
+        and status in {"", "healthy", "joining"}
+        and node.get("scheduling_eligible") is not False
+        and not node.get("drain")
+        and not node.get("maintenance")
+    )
+
+
+def native_sdk_grpc_for_api_node(node: dict[str, Any]) -> dict[str, Any]:
+    for candidate in (
+        node.get("native_sdk_grpc"),
+        (node.get("hardware") or {}).get("native_sdk_grpc")
+        if isinstance(node.get("hardware"), dict)
+        else None,
+        (node.get("node_info") or {}).get("native_sdk_grpc")
+        if isinstance(node.get("node_info"), dict)
+        else None,
+    ):
+        if isinstance(candidate, dict) and candidate:
+            return candidate
+    return {}
+
+
+def native_sdk_target_for_api_node(native: dict[str, Any]) -> tuple[str, str]:
+    target = str(native.get("target") or "").strip()
+    host = str(native.get("host") or "").strip()
+    port = str(native.get("port") or "").strip()
+    if target and (not host or not port) and ":" in target:
+        host, port = target.rsplit(":", 1)
+    if not target and host and port:
+        target = f"{host}:{port}"
+    return target, host
 
 
 def resolve_runtime_cluster_model_for_api(
@@ -467,37 +715,109 @@ def resolve_runtime_cluster_model_for_api(
     requirement: dict[str, Any],
     entry: dict[str, Any],
 ) -> dict[str, Any] | None:
-    if not is_custom_model_requirement(requirement):
-        return None
     from mn_api import state
 
     try:
         system_summary = json.loads(state.client.get_system_summary())
     except Exception as exc:
-        raise ModelPrepareError(
-            "model.custom_cluster_inspection_failed",
-            f"could not inspect cluster nodes for custom model placement: {exc}",
-            stage="placement",
-            safe_message="Could not inspect runtime nodes for custom model placement.",
-        ) from exc
+        if is_custom_model_requirement(requirement):
+            raise ModelPrepareError(
+                "model.custom_cluster_inspection_failed",
+                f"could not inspect cluster nodes for custom model placement: {exc}",
+                stage="placement",
+                safe_message="Could not inspect runtime nodes for custom model placement.",
+            ) from exc
+        return None
     if not isinstance(system_summary, dict):
-        raise ModelPrepareError(
-            "model.custom_cluster_inspection_failed",
-            "runtime system summary is not a JSON object",
-            stage="placement",
-            safe_message="Runtime node metadata is invalid for custom model placement.",
+        if is_custom_model_requirement(requirement):
+            raise ModelPrepareError(
+                "model.custom_cluster_inspection_failed",
+                "runtime system summary is not a JSON object",
+                stage="placement",
+                safe_message="Runtime node metadata is invalid for custom model placement.",
+            )
+        return None
+
+    resource_report = runtime_resource_report()
+    if is_custom_model_requirement(requirement):
+        placement = resolve_custom_model_placement(
+            resource_report=resource_report,
+            system_summary=system_summary,
         )
-    placement = resolve_custom_model_placement(
-        resource_report=runtime_resource_report(),
-        system_summary=system_summary,
+        state.logger.info(
+            "custom_model_node_selected model=%s node=%s selection=%s",
+            entry.get("model"),
+            placement.get("node"),
+            json.dumps(placement.get("selection") or {}, separators=(",", ":"), sort_keys=True),
+        )
+        return enrich_api_cluster_model_placement(placement, system_summary)
+
+    placement = resolve_cluster_model_placement(
+        entry, resource_report=resource_report
     )
-    state.logger.info(
-        "custom_model_node_selected model=%s node=%s selection=%s",
-        entry.get("model"),
-        placement.get("node"),
-        json.dumps(placement.get("selection") or {}, sort_keys=True, separators=(",", ":")),
+    if placement:
+        return enrich_api_cluster_model_placement(placement, system_summary)
+
+    fallback_ref = str(entry.get("fallback_model") or "").strip()
+    if not fallback_ref:
+        return None
+    try:
+        fallback_entry = resolve_model_entry(fallback_ref)
+    except Exception:
+        return None
+    fallback_placement = resolve_cluster_model_placement(
+        fallback_entry, resource_report=resource_report
     )
-    return placement
+    if not fallback_placement:
+        return None
+    resolved = enrich_api_cluster_model_placement(fallback_placement, system_summary)
+    resolved.update(
+        {
+            "source": "cluster_fallback",
+            "status": "fallback_model",
+            "fallback_entry": fallback_entry,
+            "fallback_reason": "no_capable_node_for_preferred_model",
+        }
+    )
+    return resolved
+
+
+def enrich_api_cluster_model_placement(
+    placement: dict[str, Any], system_summary: dict[str, Any]
+) -> dict[str, Any]:
+    """Attach the target node's native gRPC and DMR-reachable host metadata."""
+
+    node_name = str(placement.get("node") or "").strip()
+    nodes = system_summary.get("nodes") if isinstance(system_summary, dict) else []
+    system_node = next(
+        (
+            node
+            for node in nodes or []
+            if isinstance(node, dict)
+            and str(node.get("name") or node.get("node") or "").strip() == node_name
+        ),
+        {},
+    )
+    if not isinstance(system_node, dict):
+        system_node = {}
+    native = native_sdk_grpc_for_api_node(system_node)
+    target, native_host = native_sdk_target_for_api_node(native)
+    advertised_host = str(
+        system_node.get("grpc_host") or system_node.get("address") or native_host or ""
+    ).strip()
+    enriched = dict(placement)
+    enriched["local"] = bool(
+        system_node.get("self") is True or system_node.get("self?") is True
+    )
+    if native:
+        enriched["native_sdk_grpc"] = {
+            **native,
+            **({"target": target} if target else {}),
+            **({"host": native_host} if native_host else {}),
+        }
+    if advertised_host:
+        enriched["dmr_host"] = advertised_host
+    return enriched
 
 
 def install_runtime_cluster_model_for_api(
@@ -515,20 +835,27 @@ def install_runtime_cluster_model_for_api(
     node = str(cluster.get("node") or "").strip()
     native = cluster.get("native_sdk_grpc") if isinstance(cluster.get("native_sdk_grpc"), dict) else {}
     target = str(native.get("target") or "").strip()
-    host = str(native.get("host") or "").strip()
+    host = str(cluster.get("dmr_host") or native.get("host") or "").strip()
     port = str(native.get("port") or "").strip()
     if not target and host and port:
         target = f"{host}:{port}"
-    if not node or not target or not host:
-        raise RuntimeError("custom model placement returned incomplete native SDK gRPC metadata")
-
-    current_config = state.refresh_config_from_env()
-    runtime_client = Client(
-        target=target,
-        timeout=runtime_model_prepare_timeout_seconds(),
-        auth_token=getattr(current_config, "grpc_auth_token", None),
-        admin_token=getattr(current_config, "grpc_admin_token", None),
-    )
+    local = bool(cluster.get("local") is True)
+    if not node:
+        raise RuntimeError("runtime model placement did not return a target node")
+    if local:
+        runtime_client = state.client
+    else:
+        if not target or not host:
+            raise RuntimeError(
+                "runtime model placement returned incomplete native SDK gRPC metadata"
+            )
+        current_config = state.refresh_config_from_env()
+        runtime_client = Client(
+            target=target,
+            timeout=runtime_model_prepare_timeout_seconds(),
+            auth_token=getattr(current_config, "grpc_auth_token", None),
+            admin_token=getattr(current_config, "grpc_admin_token", None),
+        )
     prepare_payload = build_prepare_runtime_model_request(
         requirement=requirement,
         entry=entry,
@@ -540,14 +867,22 @@ def install_runtime_cluster_model_for_api(
         source="mn-api",
     )
     payload = call_prepare_runtime_model(runtime_client, prepare_payload, logger=state.logger)
-    return {
-        "install": payload,
-        "endpoint": remote_runtime_model_endpoint(
+    if host:
+        endpoint = remote_runtime_model_endpoint(
             entry=entry,
             node=node,
             node_host=host,
             payload=payload,
-        ),
+        )
+    else:
+        endpoint = docker_model_runner_endpoint(
+            entry,
+            node=node,
+            source="local-dmr",
+        )
+    return {
+        "install": payload,
+        "endpoint": endpoint,
     }
 
 
@@ -570,38 +905,13 @@ def resolve_runtime_model_endpoint_for_api(*, requirement: dict[str, Any], entry
         return None
 
 
-def prepared_runtime_models_json(results: list[dict[str, Any]]) -> str:
-    keys = prepared_runtime_model_keys({"models": results})
-    return json.dumps(sorted(keys), separators=(",", ":")) if keys else ""
+def prepared_runtime_models_json(results: list[dict[str, Any]] | dict[str, Any]) -> str:
+    summary = results if isinstance(results, dict) else {"models": results}
+    return sdk_prepared_runtime_models_json(summary)
 
 
 def prepared_runtime_model_keys(model_install_summary: dict[str, Any] | None) -> set[str]:
-    prepared_statuses = {
-        "installed",
-        "already_installed",
-        "runtime_node_install",
-        "runtime_node_already_installed",
-        "runtime_node_installed",
-        "cluster_provided",
-        "service_registry",
-        "model_remote",
-        "explicit_config",
-    }
-    keys: set[str] = set()
-    models = model_install_summary.get("models") if isinstance(model_install_summary, dict) else []
-    for item in models or []:
-        if not isinstance(item, dict) or str(item.get("status") or "") not in prepared_statuses:
-            continue
-        for key in ("id", "model", "runtime_model", "name"):
-            value = str(item.get(key) or "").strip()
-            if value:
-                keys.add(value)
-        endpoint = item.get("endpoint") if isinstance(item.get("endpoint"), dict) else {}
-        for key in ("model", "runtime_model"):
-            value = str(endpoint.get(key) or "").strip()
-            if value:
-                keys.add(value)
-    return keys
+    return sdk_prepared_runtime_model_keys(model_install_summary)
 
 
 def prepared_runtime_model_keys_from_env(env: dict[str, str] | None) -> set[str]:
@@ -641,23 +951,11 @@ def model_validation_inputs_with_prepared_models(
     config: dict[str, Any],
     prepared: set[str],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    if not prepared:
-        return manifest, config
-    manifest_copy = json.loads(json.dumps(manifest))
-    config_copy = json.loads(json.dumps(config))
-    runtime = manifest_copy.get("runtime") if isinstance(manifest_copy.get("runtime"), dict) else {}
-    models = runtime.get("models") if isinstance(runtime.get("models"), dict) else {}
-    for entry in models.values():
-        if isinstance(entry, dict) and model_config_matches_prepared(entry, prepared):
-            entry["install_mode"] = "cluster_provided"
-    llm = config_copy.get("llm") if isinstance(config_copy.get("llm"), dict) else {}
-    configs = llm.get("configs") if isinstance(llm.get("configs"), dict) else {}
-    for entry in configs.values():
-        if isinstance(entry, dict) and model_config_matches_prepared(entry, prepared):
-            entry["install_mode"] = "cluster_provided"
-    if isinstance(llm, dict) and model_config_matches_prepared(llm, prepared):
-        llm["install_mode"] = "cluster_provided"
-    return manifest_copy, config_copy
+    return sdk_model_validation_inputs_with_prepared_models(
+        manifest,
+        config,
+        prepared=prepared,
+    )
 
 
 def model_config_matches_prepared(config: dict[str, Any], prepared: set[str]) -> bool:
@@ -2652,7 +2950,7 @@ def inject_node_environment(manifest: Dict[str, Any], env: Dict[str, str]) -> No
         manifest,
         env,
         nodes=manifest_agent_nodes(manifest),
-        skip_host_local_dmr_rewrite=True,
+        skip_host_local_dmr_rewrite=False,
     )
 
 
@@ -2665,7 +2963,7 @@ def add_mn_llm_aliases(environment: Dict[str, Any]) -> None:
 
 
 def adjust_llm_environment_for_node(environment: Dict[str, Any], node: Dict[str, Any]) -> None:
-    sdk_adjust_llm_environment_for_node(environment, node, skip_host_local=True)
+    sdk_adjust_llm_environment_for_node(environment, node, skip_host_local=False)
 
 
 def read_json_object(path: Path) -> Dict[str, Any]:
