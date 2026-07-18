@@ -89,7 +89,8 @@ safe to commit.
 All paths below are under `/api/v1`.
 
 - Health/runtime: `GET /health`, `GET /runtime/status`, `GET /system/summary`, `GET /metrics`
-- Jobs: `POST /jobs`, `GET /jobs`, `GET /jobs/{job_id}`, `POST /jobs/{job_id}/cancel`, `POST /jobs/{job_id}/pause`, `POST /jobs/{job_id}/resume`, `POST /jobs/cleanup`
+- Jobs: `POST /jobs`, `GET /jobs`, `GET /jobs/{job_id}`, `POST /jobs/{job_id}/cancel`, `POST /jobs/{job_id}/pause`, `POST /jobs/{job_id}/resume`, `POST /jobs/cleanup`, `POST /jobs/cancel-all`
+- Durable operations: `POST /operations/{kind}`, `GET /operations/{operation_id}`, `GET /operations/{operation_id}/events` (SSE, resumable with `after_sequence`)
 - Job recovery: `GET /jobs/{job_id}/dead-letters`, `POST /jobs/{job_id}/backup`, `POST /jobs/restore`
 - Schedules/events: `POST /schedules`, `POST /schedules/periodic`, `POST /schedules/delayed`, `GET /schedules`, `PATCH /schedules/{schedule_id}`, `POST /schedules/{schedule_id}/dispatch`, `POST /events`, `GET /events`
 - Triggers: `POST /triggers`, `GET /triggers`, `DELETE /triggers/{schedule_id}`
@@ -114,6 +115,17 @@ schedule = periodic_schedule(crons=["*/5 * * * *"], name="every-five")
 Reusable SDK modules added for client parity include resource normalization,
 duration parsing, schedule payload builders, deployment policy creation,
 runtime service operations, model runtime management, and shared exceptions.
+
+## Durable group operations
+
+Bulk cancellation, job cleanup, node reconciliation, and node drain return a
+durable Core operation rather than waiting for every item synchronously. Follow
+`GET /operations/{operation_id}/events` to receive replayable SSE updates in
+completion order and reconnect with the last event ID as `after_sequence`.
+
+For an unreachable job owner, `cancellation_pending` means cancellation was
+accepted, fenced, and queued for cleanup when that node rejoins; it is not an
+item failure.
 
 ## Details
 

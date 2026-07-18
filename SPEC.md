@@ -20,6 +20,8 @@ The API owns:
 - HTTP request parsing, schema validation, authentication, and request limits;
 - JSON/problem response shapes and transport-level status mapping;
 - run/job progress over polling, SSE, and WebSockets;
+- versioned durable group-operation start, status, and resumable SSE event
+  adaptation;
 - API-side launch coordination, artifact access, and process cleanup helpers;
 - API and Web UI server configuration; and
 - injection points that make route behavior deterministic in tests.
@@ -39,6 +41,10 @@ model placement algorithms, blueprint domain behavior, or the browser UI.
   registered, such as `services:check` and `services/check`.
 - Streaming endpoints must terminate on completion, error, timeout, or client
   disconnect and must not leak background tasks.
+- Group operations use fixed Core-owned kinds (`cancel_all_jobs`, `clear_jobs`,
+  `reconcile_node`, and `drain_node`). Their item events are replayable by
+  sequence cursor. `cancellation_pending` is accepted durable work, while
+  explicit item failures remain operation failures.
 
 The route definitions and generated OpenAPI document are authoritative for
 exact fields and paths. `tests/test_api_contract.py` and route-specific tests

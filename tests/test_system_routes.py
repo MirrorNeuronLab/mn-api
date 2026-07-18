@@ -46,8 +46,14 @@ def test_node_action_routes_proxy_runtime_service(monkeypatch, api_client, fake_
     for action, body, expected_call in cases:
         response = api_client.post(f"/api/v1/nodes/mirror_neuron@worker/{action}", json=body)
         assert response.status_code == 200, action
-        assert fake_runtime_client.calls[-1][0] == expected_call
-        assert fake_runtime_client.calls[-1][1] == "mirror_neuron@worker"
+        if action in {"reconcile", "drain"}:
+            call = fake_runtime_client.calls[-1]
+            assert call[0] == "start_operation"
+            assert call[1] == expected_call
+            assert call[2]["node_name"] == "mirror_neuron@worker"
+        else:
+            assert fake_runtime_client.calls[-1][0] == expected_call
+            assert fake_runtime_client.calls[-1][1] == "mirror_neuron@worker"
 
 
 def test_resource_routes_enrich_and_strip_version(monkeypatch, api_client, fake_runtime_client):

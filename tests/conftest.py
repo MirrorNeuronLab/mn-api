@@ -46,6 +46,27 @@ class FakeRuntimeClient:
     def __init__(self):
         self.calls = []
         self.jobs_payload = {"data": []}
+        self.operations = {}
+
+    def start_operation(self, kind, options=None):
+        self.calls.append(("start_operation", kind, options or {}))
+        operation_id = f"op-{len(self.operations) + 1}"
+        operation = {
+            "operation_id": operation_id,
+            "kind": kind,
+            "status": "running",
+            "counters": {"total": 0, "started": 0, "finished": 0, "succeeded": 0, "failed": 0, "deferred": 0},
+        }
+        self.operations[operation_id] = operation
+        return json.dumps(operation)
+
+    def get_operation(self, operation_id):
+        self.calls.append(("get_operation", operation_id))
+        return json.dumps(self.operations[operation_id])
+
+    def stream_operation_events(self, operation_id, **kwargs):
+        self.calls.append(("stream_operation_events", operation_id, kwargs))
+        return iter(())
 
     def deploy_job(self, manifest_json, payloads, deployment_key="", policy=None, update_policy=None, wait=False):
         self.calls.append(("deploy_job", manifest_json, payloads, deployment_key, policy or update_policy, wait))

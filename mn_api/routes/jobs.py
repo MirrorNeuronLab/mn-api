@@ -320,7 +320,7 @@ def stream_operation_events(
                 prefix = f"id: {event_id}\n" if isinstance(event_id, int) else ""
                 yield f"{prefix}event: {event_name}\ndata: {json.dumps(event)}\n\n"
         except Exception as exc:
-            yield f"event: error\ndata: {json.dumps({'detail': str(exc)})}\n\n"
+            yield "event: error\ndata: {\"error\": \"MN_OPERATION_STREAM_FAILED\"}\n\n"
 
     return StreamingResponse(event_source(), media_type="text/event-stream")
 

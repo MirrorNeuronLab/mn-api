@@ -31,59 +31,34 @@ def test_cleanup_job_aliases_share_runtime_behavior(monkeypatch, api_client, fak
 
     assert colon.status_code == 200
     assert path.status_code == 200
-    assert [call for call in fake_runtime_client.calls if call == ("clear_jobs",)] == [("clear_jobs",), ("clear_jobs",)]
+    assert [call[:2] for call in fake_runtime_client.calls if call[0] == "start_operation"] == [
+        ("start_operation", "clear_jobs"),
+        ("start_operation", "clear_jobs"),
+    ]
 
 
-def test_cancel_all_job_alias_cancels_cli_active_statuses(monkeypatch, api_client, fake_runtime_client):
-    fake_runtime_client.jobs_payload = {
-        "data": [
-            {"job_id": "job-pending", "status": "pending"},
-            {"job_id": "job-validated", "status": "validated"},
-            {"job_id": "job-scheduled", "status": "scheduled"},
-            {"job_id": "job-running", "status": "running"},
-            {"job_id": "job-paused", "status": "paused"},
-            {"job_id": "job-done", "status": "completed"},
-        ]
-    }
-    cleaned = []
+def test_cancel_all_job_alias_starts_durable_operation(monkeypatch, api_client, fake_runtime_client):
     monkeypatch.setattr(state, "client", fake_runtime_client)
-    monkeypatch.setattr("mn_api.routes.jobs.cleanup_blueprint_processes_for_job", cleaned.append)
 
     response = api_client.post("/api/v1/jobs:cancel-all")
 
-    active_ids = [record["job_id"] for record in fake_runtime_client.jobs_payload["data"][:-1]]
     assert response.status_code == 200
-    assert response.json() == {
-        "version": 1,
-        "status": "cancelled",
-        "active_count": 5,
-        "cancelled_count": 5,
-        "cancelled_job_ids": active_ids,
-    }
-    assert fake_runtime_client.calls[0] == ("list_jobs", 2_147_483_647, False)
-    assert [call[1] for call in fake_runtime_client.calls if call[0] == "cancel_job"] == active_ids
-    assert cleaned == active_ids
+    assert response.json()["kind"] == "cancel_all_jobs"
+    assert fake_runtime_client.calls == [("start_operation", "cancel_all_jobs", {})]
 
 
-def test_cancel_all_jobs_reports_no_active_jobs(monkeypatch, api_client, fake_runtime_client):
-    fake_runtime_client.jobs_payload = {"data": [{"job_id": "job-done", "status": "completed"}]}
+def test_cancel_all_jobs_starts_even_when_snapshot_is_empty(monkeypatch, api_client, fake_runtime_client):
     monkeypatch.setattr(state, "client", fake_runtime_client)
 
     response = api_client.post("/api/v1/jobs/cancel-all")
 
     assert response.status_code == 200
-    assert response.json() == {
-        "version": 1,
-        "status": "no_active_jobs",
-        "active_count": 0,
-        "cancelled_count": 0,
-        "cancelled_job_ids": [],
-    }
+    assert response.json()["operation_id"] == "op-1"
 
 
 def test_cancel_all_jobs_reports_runtime_failure(monkeypatch, api_client):
     class FailingClient:
-        def list_jobs(self, _limit, _include_terminal):
+        def start_operation(self, _kind, _options=None):
             raise RuntimeError("runtime unavailable")
 
     monkeypatch.setattr(state, "client", FailingClient())
@@ -94,30 +69,23 @@ def test_cancel_all_jobs_reports_runtime_failure(monkeypatch, api_client):
     assert response.json()["error"] == "MN_EXECUTION_FAILED"
 
 
-def test_cancel_all_jobs_cleans_up_when_one_cancellation_fails(monkeypatch, api_client):
-    class FailingCancelClient:
-        def __init__(self):
-            self.calls = []
+def test_operation_status_and_sse_routes_attach_to_existing_operation(monkeypatch, api_client, fake_runtime_client):
+    fake_runtime_client.operations["op-1"] = {"operation_id": "op-1", "status": "completed", "counters": {}}
+    fake_runtime_client.stream_operation_events = lambda operation_id, **kwargs: iter(
+        [json.dumps({"sequence": 4, "type": "item_completed", "item_id": "job-1", "status": "cancelled"})]
+    )
+    monkeypatch.setattr(state, "client", fake_runtime_client)
 
-        def list_jobs(self, _limit, _include_terminal):
-            self.calls.append("list_jobs")
-            return json.dumps({"data": [{"job_id": "job-ok", "status": "running"}, {"job_id": "job-fail", "status": "running"}]})
+    status = api_client.get("/api/v1/operations/op-1")
 
-        def cancel_job(self, job_id):
-            self.calls.append(("cancel_job", job_id))
-            if job_id == "job-fail":
-                raise RuntimeError("cancel failed")
+    assert status.status_code == 200
+    assert status.json()["operation_id"] == "op-1"
 
-    cleaned = []
-    client = FailingCancelClient()
-    monkeypatch.setattr(state, "client", client)
-    monkeypatch.setattr("mn_api.routes.jobs.cleanup_blueprint_processes_for_job", cleaned.append)
-
-    response = api_client.post("/api/v1/jobs/cancel-all")
-
-    assert response.status_code == 500
-    assert response.json()["error"] == "MN_EXECUTION_FAILED"
-    assert cleaned == ["job-ok", "job-fail"]
+    events = api_client.get("/api/v1/operations/op-1/events?after_sequence=3")
+    assert events.status_code == 200
+    assert "id: 4" in events.text
+    assert "event: item_completed" in events.text
+    assert "job-1" in events.text
 
 
 def test_cleanup_jobs_reports_retry_failure_after_admin_token_error(monkeypatch, api_client):
@@ -129,11 +97,11 @@ def test_cleanup_jobs_reports_retry_failure_after_admin_token_error(monkeypatch,
             return "ClearJobs requires MN_GRPC_ADMIN_TOKEN"
 
     class FirstClient:
-        def clear_jobs(self):
+        def start_operation(self, _kind, _options=None):
             raise PermissionDeniedRpcError()
 
     class RetryClient:
-        def clear_jobs(self):
+        def start_operation(self, _kind, _options=None):
             raise RuntimeError("retry failed")
 
     first_client = FirstClient()
@@ -149,7 +117,7 @@ def test_cleanup_jobs_reports_retry_failure_after_admin_token_error(monkeypatch,
 
 def test_cleanup_jobs_reports_non_admin_runtime_failure(monkeypatch, api_client):
     class FailingClient:
-        def clear_jobs(self):
+        def start_operation(self, _kind, _options=None):
             raise RuntimeError("cleanup unavailable")
 
     monkeypatch.setattr(state, "client", FailingClient())
@@ -169,7 +137,7 @@ def test_cleanup_jobs_does_not_retry_unrelated_rpc_error(monkeypatch, api_client
             return "permission denied"
 
     class FailingClient:
-        def clear_jobs(self):
+        def start_operation(self, _kind, _options=None):
             raise UnrelatedRpcError()
 
     monkeypatch.setattr(state, "client", FailingClient())
