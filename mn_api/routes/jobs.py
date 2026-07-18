@@ -84,6 +84,11 @@ _IMMEDIATE_PROGRESS_EVENTS = {
     "workflow_step_attempt_retry_scheduled",
     "workflow_step_attempt_timed_out",
     "workflow_step_blocked",
+    "runtime_model_selection_started",
+    "runtime_model_selected",
+    "runtime_model_install_started",
+    "runtime_model_ready",
+    "runtime_model_install_failed",
 }
 
 

@@ -12,6 +12,14 @@ This specification covers only this repository. Core runtime semantics and
 shared Python behavior are external contracts consumed through
 `mirrorneuron-python-sdk`.
 
+Launch keeps the compatibility phase identifier `model_install`, but the phase
+validates declarations and reports deferred policies only. It must not install
+a DMR model or inject a fixed model endpoint. Actual selection, install/reuse,
+and gateway routing occur inside the job on first use and surface through Core
+runtime model events. RAG and OCR models are specified by their skills at call
+time and are therefore absent from launch declarations and progress details.
+Explicit model install routes remain eager.
+
 ## Owned Surface
 
 The API owns:

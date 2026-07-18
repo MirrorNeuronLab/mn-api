@@ -37,6 +37,7 @@ from mn_api.blueprints import (
     cleanup_blueprint_run_processes,
     cleanup_stale_blueprint_run_processes,
     deep_merge,
+    defer_blueprint_runtime_models,
     runtime_blueprint_environment_overrides,
     runtime_web_ui_service_from_manifest,
     scheduler_allocated_ports_from_jobs_payload,
@@ -1246,6 +1247,11 @@ def model_install_progress_message(model_install: dict[str, Any]) -> str:
     services = model_install.get("services") or []
     if not models and not services:
         return "No runtime model dependencies declared."
+    if model_install.get("deferred") is True:
+        return (
+            f"Validated {len(models)} lazy runtime model polic"
+            f"{'y' if len(models) == 1 else 'ies'}; selection and installation are deferred to first use."
+        )
     counts: dict[str, int] = {}
     for item in models:
         status = str(item.get("status") or "unknown")
@@ -1405,13 +1411,13 @@ def run_launch_preflight(
         progress_id,
         "model_install",
         "running",
-        "Checking required runtime models.",
+        "Validating lazy runtime model policies.",
         label="Prepare runtime models",
-        detail="Some first launches may download Docker Model Runner models before the job can start.",
-        expectation="Model downloads can take several minutes on a first launch. Keep Docker running.",
+        detail="Model selection and installation are deferred until the job first calls each model.",
+        expectation="The first LLM, RAG, or OCR call may wait while its model is installed on the best compatible node.",
     )
     try:
-        model_install = install_blueprint_runtime_models(
+        model_install = defer_blueprint_runtime_models(
             repo_root,
             blueprint,
             force=force,
@@ -1423,16 +1429,16 @@ def run_launch_preflight(
             progress_id,
             "model_install",
             "failed",
-            "Runtime model install failed.",
+            "Runtime model policy validation failed.",
             label="Prepare runtime models",
-            detail="A required runtime model could not be prepared.",
+            detail="A runtime model declaration is invalid or the cluster cannot run it or its fallback.",
             severity="error",
         )
         record_launch_progress(
             progress_id,
             "launch",
             "failed",
-            "Blueprint launch failed before validation.",
+            "Blueprint launch failed during model policy validation.",
             run_details,
         )
         raise
@@ -1443,14 +1449,14 @@ def run_launch_preflight(
             "failed",
             str(exc),
             label="Prepare runtime models",
-            detail="A required runtime model could not be prepared.",
+            detail="A runtime model declaration is invalid or cluster feasibility could not be confirmed.",
             severity="error",
         )
         record_launch_progress(
             progress_id,
             "launch",
             "failed",
-            "Blueprint launch failed before validation.",
+            "Blueprint launch failed during model policy validation.",
             run_details,
         )
         raise
@@ -1459,17 +1465,17 @@ def run_launch_preflight(
             progress_id,
             "model_install",
             "failed",
-            "Runtime model install failed.",
+            "Runtime model policy validation failed.",
             {"model_install": model_install},
             label="Prepare runtime models",
-            detail="A required runtime model could not be prepared.",
+            detail="A runtime model declaration is invalid or the cluster cannot run it or its fallback.",
             severity="error",
         )
         record_launch_progress(
             progress_id,
             "launch",
             "failed",
-            "Blueprint launch failed before validation.",
+            "Blueprint launch failed during model policy validation.",
             run_details,
         )
         return model_install_problem_response(
@@ -1486,7 +1492,7 @@ def run_launch_preflight(
         model_install_progress_message(model_install),
         {"model_install": model_install},
         label="Prepare runtime models",
-        detail="Required runtime models are ready.",
+        detail="Runtime model declarations are valid; installation is deferred to first use.",
     )
     if not context_phase_seen:
         record_launch_progress(

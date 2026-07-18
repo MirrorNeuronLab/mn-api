@@ -50,6 +50,7 @@ from mn_sdk import (
     resolve_custom_model_placement,
     resolve_cluster_model_placement,
     remote_runtime_model_endpoint,
+    resolve_requirement_entry,
     resolve_model_endpoint,
     resolve_model_entry,
     run_hardware_requirements_validation,
@@ -515,6 +516,149 @@ def install_blueprint_runtime_models(
         ),
         "errors": errors,
     }
+
+
+def defer_blueprint_runtime_models(
+    repo_root: Path,
+    blueprint: Dict[str, Any],
+    *,
+    config_overrides: Dict[str, Any] | None = None,
+    force: bool = False,
+    service_progress: Callable[[str, dict[str, Any] | None], None] | None = None,
+) -> Dict[str, Any]:
+    """Validate model declarations and defer DMR preparation until first use."""
+
+    bundle_root = validate_blueprint_bundle(repo_root, blueprint)
+    try:
+        manifest = json.loads((bundle_root / "manifest.json").read_text())
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=500, detail="blueprint manifest.json is malformed") from exc
+    if not isinstance(manifest, dict):
+        raise HTTPException(status_code=500, detail="blueprint manifest.json must be an object")
+    manifest = expand_blueprint_manifest_if_source(bundle_root, manifest)
+    config = load_blueprint_config(bundle_root, config_overrides=config_overrides) or {}
+    catalog = load_model_catalog()
+    resource_report = runtime_resource_report()
+    models: list[dict[str, Any]] = []
+    errors: list[str] = []
+    seen: set[str] = set()
+    for requirement in required_blueprint_models(manifest, config, catalog=catalog):
+        requested = str(requirement.get("model") or requirement.get("name") or "").strip()
+        if not requested:
+            continue
+        try:
+            entry = resolve_requirement_entry(
+                requirement,
+                catalog=catalog,
+                catalog_resolver=resolve_model_entry,
+            )
+        except Exception as exc:
+            errors.append(f"Unknown runtime model {requested}: {exc}")
+            continue
+        key = str(entry.get("id") or requested).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        if (
+            str(entry.get("provider") or "docker_model_runner")
+            == "docker_model_runner"
+            and isinstance(entry.get("requirements"), dict)
+            and entry.get("requirements")
+            and not deferred_runtime_model_is_feasible(
+                entry,
+                resource_report=resource_report,
+                catalog=catalog,
+            )
+        ):
+            errors.append(
+                "No healthy cluster node can run runtime model "
+                f"{entry.get('id') or requested} or its catalog fallback."
+            )
+        logical = (
+            "default"
+            if requirement.get("default") is True or requested.lower() == "default"
+            else requested
+        )
+        policy = (
+            ["nemotron3", "gemma4:e2b"]
+            if logical == "default"
+            else [str(entry.get("id") or requested)]
+        )
+        models.append(
+            {
+                "id": logical,
+                "name": str(requirement.get("name") or logical),
+                "model": logical,
+                "runtime_model": str(entry.get("model") or requested),
+                "provider": str(entry.get("provider") or "docker_model_runner"),
+                "status": "deferred_runtime_install",
+                "install_policy": "on_first_model_call",
+                "selection_policy": policy,
+                "source": str(
+                    requirement.get("path")
+                    or requirement.get("manifest_path")
+                    or "config"
+                ),
+            }
+        )
+    env: dict[str, str] = {}
+    llm = config.get("llm") if isinstance(config.get("llm"), dict) else {}
+    llm_provider = str(llm.get("provider") or "docker_model_runner").strip().lower()
+    if models and llm_provider in {"", "docker_model_runner", "docker-model-runner", "dmr"}:
+        env.update(
+            {
+                "MN_RUNTIME_MODEL_MANAGED": "1",
+                "MN_LLM_PROVIDER": "docker_model_runner",
+                "LITELLM_PROVIDER": "docker_model_runner",
+                "MN_LLM_API_BASE": "auto",
+                "LITELLM_API_BASE": "auto",
+            }
+        )
+    if blueprint_requests_default_llm(config):
+        env["MN_LLM_MODEL"] = "default"
+        env["LITELLM_MODEL"] = "default"
+    service_results: list[dict[str, Any]] = []
+    if not errors and blueprint_requires_context_engine(manifest, config):
+        if service_progress is not None:
+            service_progress("context_engine_needed", None)
+        context_result = ensure_context_engine_for_blueprint(bundle_root, force=force)
+        service_results.append(context_result)
+        if context_result.get("status") == "failed":
+            errors.append(str(context_result.get("error") or "context engine setup failed"))
+            if service_progress is not None:
+                service_progress("context_engine_failed", context_result)
+        elif service_progress is not None:
+            service_progress("context_engine_ready", context_result)
+    return {
+        "ok": not errors,
+        "deferred": True,
+        "models": models,
+        "services": service_results,
+        "endpoints": {},
+        "env": env,
+        "config_overrides": None,
+        "errors": errors,
+    }
+
+
+def deferred_runtime_model_is_feasible(
+    entry: dict[str, Any],
+    *,
+    resource_report: dict[str, Any],
+    catalog: dict[str, dict[str, Any]],
+) -> bool:
+    if resolve_cluster_model_placement(entry, resource_report=resource_report):
+        return True
+    fallback_ref = str(entry.get("fallback_model") or "").strip()
+    if not fallback_ref:
+        return False
+    try:
+        fallback = resolve_model_entry(fallback_ref, catalog=catalog)
+    except Exception:
+        return False
+    return bool(
+        resolve_cluster_model_placement(fallback, resource_report=resource_report)
+    )
 
 
 def blueprint_requests_default_llm(config: dict[str, Any]) -> bool:

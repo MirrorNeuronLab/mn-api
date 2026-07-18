@@ -21,6 +21,7 @@ from mn_api.blueprints import (
     cached_git_repo_path,
     cleanup_blueprint_run_processes,
     cleanup_run_process,
+    defer_blueprint_runtime_models,
     ensure_git_blueprint_repo,
     filter_blueprints_by_category,
     install_blueprint_runtime_models,
@@ -1794,3 +1795,59 @@ def test_custom_model_api_prepares_selected_remote_node():
     assert payload["source_model"] == "hf.co/acme/custom:Q4_K_M"
     assert result["endpoint"]["api_base"] == "http://192.168.4.128:12434/engines/v1"
     assert result["endpoint"]["source"] == "remote-dmr"
+
+def test_launch_model_policy_is_deferred_without_installing():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        repo = Path(tmpdir)
+        bundle = repo / "vc_assistant"
+        bundle.mkdir()
+        (bundle / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "runtime": {
+                        "models": {
+                            "primary": {
+                                "provider": "docker_model_runner",
+                                "model": "default",
+                                "required": True,
+                            }
+                        }
+                    },
+                    "nodes": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        resource_report = {
+            "nodes": [
+                {
+                    "name": "local",
+                    "status": "healthy",
+                    "scheduling_eligible": True,
+                    "devices": [
+                        {
+                            "kind": "gpu",
+                            "type": "integrated_gpu",
+                            "vendor": "apple",
+                            "memory_total_mb": 16384,
+                        }
+                    ],
+                }
+            ]
+        }
+        with patch("mn_api.blueprints.install_model_entry") as install, patch(
+            "mn_api.blueprints.runtime_resource_report",
+            return_value=resource_report,
+        ):
+            summary = defer_blueprint_runtime_models(
+                repo,
+                {"id": "vc_assistant", "path": "vc_assistant"},
+            )
+
+    install.assert_not_called()
+    assert summary["deferred"] is True
+    assert summary["models"][0]["selection_policy"] == [
+        "nemotron3",
+        "gemma4:e2b",
+    ]
+    assert summary["env"]["MN_RUNTIME_MODEL_MANAGED"] == "1"

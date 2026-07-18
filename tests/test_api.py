@@ -3909,7 +3909,7 @@ class TestAPI(unittest.TestCase):
 
     @patch("mn_api.state.client")
     @patch("mn_api.routes.blueprints.validate_blueprint_inputs")
-    @patch("mn_api.routes.blueprints.install_blueprint_runtime_models")
+    @patch("mn_api.routes.blueprints.defer_blueprint_runtime_models")
     def test_blueprint_launch_run_installs_models_before_validation(self, mock_install, mock_validate, mock_client):
         events = []
 
@@ -4052,7 +4052,7 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
 
     @patch("mn_api.state.client")
-    @patch("mn_api.routes.blueprints.install_blueprint_runtime_models")
+    @patch("mn_api.routes.blueprints.defer_blueprint_runtime_models")
     def test_blueprint_launch_run_blocks_when_auto_model_install_fails(self, mock_install, mock_client):
         mock_install.return_value = {
             "ok": False,
@@ -4087,7 +4087,7 @@ class TestAPI(unittest.TestCase):
         mock_client.submit_job.assert_not_called()
 
     @patch("mn_api.state.client")
-    @patch("mn_api.routes.blueprints.install_blueprint_runtime_models")
+    @patch("mn_api.routes.blueprints.defer_blueprint_runtime_models")
     def test_blueprint_launch_run_blocks_submission_when_gateway_sync_fails(
         self, mock_install, mock_client
     ):
@@ -4124,7 +4124,7 @@ class TestAPI(unittest.TestCase):
         mock_client.submit_job.assert_not_called()
 
     @patch("mn_api.state.client")
-    @patch("mn_api.routes.blueprints.install_blueprint_runtime_models")
+    @patch("mn_api.routes.blueprints.defer_blueprint_runtime_models")
     def test_blueprint_launch_run_hard_gpu_blocks_before_model_install(self, mock_install, mock_client):
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
@@ -4198,7 +4198,7 @@ class TestAPI(unittest.TestCase):
 
     @patch("mn_api.state.client")
     @patch("mn_api.routes.blueprints.validate_blueprint_inputs")
-    @patch("mn_api.routes.blueprints.install_blueprint_runtime_models")
+    @patch("mn_api.routes.blueprints.defer_blueprint_runtime_models")
     def test_blueprint_run_installs_models_before_input_validation(self, mock_install, mock_validate, mock_client):
         events = []
 
@@ -4238,7 +4238,7 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.json()["job_id"], "job-with-model")
 
     @patch("mn_api.routes.blueprints.start_blueprint_pre_launch_hook")
-    @patch("mn_api.routes.blueprints.install_blueprint_runtime_models")
+    @patch("mn_api.routes.blueprints.defer_blueprint_runtime_models")
     @patch("mn_api.state.client")
     def test_blueprint_run_hard_gpu_blocks_before_model_install_prelaunch_and_submit(
         self, mock_client, mock_install, mock_prelaunch
@@ -4264,7 +4264,7 @@ class TestAPI(unittest.TestCase):
 
     @patch("mn_api.routes.blueprints.start_blueprint_pre_launch_hook")
     @patch("mn_api.routes.blueprints.validate_blueprint_inputs")
-    @patch("mn_api.routes.blueprints.install_blueprint_runtime_models")
+    @patch("mn_api.routes.blueprints.defer_blueprint_runtime_models")
     @patch("mn_api.state.client")
     def test_blueprint_run_hard_gpu_passes_with_dgx_spark_cluster_node(
         self,

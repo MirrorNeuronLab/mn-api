@@ -2,10 +2,32 @@ from __future__ import annotations
 
 import unittest
 
-from mn_api.job_activity import compact_event, compact_value, enrich_workflow_progress_activity
+from mn_api.job_activity import (
+    _activity_message,
+    compact_event,
+    compact_value,
+    enrich_workflow_progress_activity,
+)
+from mn_api.routes.jobs import _progress_event_should_flush
 
 
 class TestJobActivity(unittest.TestCase):
+    def test_runtime_model_events_project_install_details_immediately(self):
+        event = {
+            "type": "runtime_model_install_started",
+            "payload": {
+                "model": "gemma4:e2b",
+                "node": "mirror_neuron@local",
+                "message": "Installing gemma4:e2b on mirror_neuron@local.",
+            },
+        }
+
+        self.assertEqual(
+            _activity_message(event),
+            "Installing gemma4:e2b on mirror_neuron@local.",
+        )
+        self.assertTrue(_progress_event_should_flush(event["type"]))
+
     def test_compact_value_truncates_strings_lists_and_blob_keys(self):
         compact = compact_value(
             {

@@ -9,6 +9,13 @@ The shared business logic lives in `../mn-python-sdk/mn_sdk`. The CLI and API
 are adapters over that SDK: CLI commands render terminal output, while API
 routes validate HTTP payloads and return JSON/problem responses.
 
+Blueprint launch preserves the `model_install` progress phase for compatibility
+but only validates and reports lazy policies. Automatic DMR preparation occurs
+inside the submitted job on the first LLM call, or when RAG/OCR skills pass
+their own model specifications to the shared SDK wrapper. Skill-owned models
+are not blueprint launch declarations. Explicit model-install endpoints remain
+eager and unchanged.
+
 ## Quick Start
 
 Install locally and run tests:
