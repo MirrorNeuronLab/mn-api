@@ -107,6 +107,28 @@ All paths below are under `/api/v1`.
 - Models: `GET /models`, `GET /models/catalog`, `GET /models/{model_id}`, `POST /models/{model_id}/install`, `POST /models/{model_id}/update`, `DELETE /models/{model_id}`, `GET /models/{model_id}/doctor`, `POST /models/{model_id}/benchmark`
 - Blueprints/runs/bundles: `GET /blueprints`, async `POST /blueprints/{blueprint_id}/runs`, async `POST /blueprints/launch/runs`, `GET /blueprints/launch/progress/{progress_id}`, `WS /realtime` topic `launch_progress:{progress_id}`, `POST /bundles/upload`, plus `/runs/{run_id}/...` artifact, UI, event, log, human-response, and observability routes.
 
+Stable jobs use `/api/v2`:
+
+- Definitions: `POST /jobs`, `GET /jobs`, `GET/PATCH /jobs/{job_id}`
+- Lifecycle: `POST /jobs/{job_id}/archive`, `POST /jobs/{job_id}/data:reset`, confirmed `DELETE /jobs/{job_id}`
+- Runs: `POST/GET /jobs/{job_id}/runs`, `GET /runs/{run_id}`, `POST /runs/{run_id}/{pause|resume|cancel}`, confirmed `DELETE /runs/{run_id}`
+- Scheduling: `POST /jobs/{job_id}/schedules`
+
+`POST /api/v2/jobs` accepts either `manifest_json`/`payloads`, a previously
+uploaded `_bundle_path`, or a catalog `blueprint_id`. Catalog creation is the
+preferred application integration: the API resolves and packages its trusted
+blueprint source, so clients never submit arbitrary host filesystem paths.
+
+In v2, `job_id` is a persistent configuration/data owner and `run_id` is one
+execution. Every manual or scheduled start creates a new run; retries do not.
+The v1 `/jobs/{old_job_id}` routes remain an execution-oriented compatibility
+facade and therefore receive a run identity.
+
+`POST /api/v1/blueprints/{blueprint_id}/runs` creates an ephemeral stable job
+before starting the first run unless the body supplies an existing `job_id`.
+Responses return both identities. Run cleanup never deletes the stable job's
+shared data.
+
 ## SDK Usage
 
 Use SDK services directly when building another client:
@@ -115,7 +137,7 @@ Use SDK services directly when building another client:
 from mn_sdk import Client, RuntimeService, periodic_schedule
 
 service = RuntimeService(Client())
-jobs = service.list_jobs(limit=20)
+jobs = service.list_stable_jobs(include_archived=False)
 schedule = periodic_schedule(crons=["*/5 * * * *"], name="every-five")
 ```
 

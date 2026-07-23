@@ -25,6 +25,8 @@ Explicit model install routes remain eager.
 The API owns:
 
 - the FastAPI application and `/api/v1` route surface;
+- the `/api/v2` HTTP adaptation for stable-job definitions and one-to-many
+  execution runs;
 - HTTP request parsing, schema validation, authentication, and request limits;
 - JSON/problem response shapes and transport-level status mapping;
 - run/job progress over polling, SSE, and WebSockets;
@@ -39,7 +41,8 @@ model placement algorithms, blueprint domain behavior, or the browser UI.
 
 ## Interface Contract
 
-- Public application routes are rooted at `/api/v1`.
+- Existing application routes are rooted at `/api/v1`; stable job/run lifecycle
+  routes are rooted at `/api/v2`.
 - Ordinary mapping responses receive top-level `version: 1` when a route did
   not already provide a version.
 - The surface includes runtime/system health, blueprints, bundles, jobs, runs,
@@ -53,6 +56,20 @@ model placement algorithms, blueprint domain behavior, or the browser UI.
   `reconcile_node`, and `drain_node`). Their item events are replayable by
   sequence cursor. `cancellation_pending` is accepted durable work, while
   explicit item failures remain operation failures.
+- In v2, `job_id` is stable and owns configuration, schedules, and shared data;
+  `run_id` is the execution/control identity. Starting or dispatching a job
+  creates a fresh run, while retry/recovery attempts retain their run ID.
+- Archive retains shared data. Data reset and permanent job deletion are
+  explicit operations; confirmed deletion is rejected while runs are active.
+  Individual run deletion never deletes job data.
+- The v1 `/jobs/{id}` contract remains execution-oriented and maps its old
+  identifier to a run. Historical terminal records remain readable without
+  forcing a rewrite.
+- Blueprint launch creates a stable job plus its first run unless an existing
+  `job_id` is supplied, and returns both identities.
+- Stable-job creation may resolve a catalog `blueprint_id`; only API-trusted
+  catalog sources or uploaded bundle roots are read from the host filesystem.
+  Caller-provided arbitrary host paths are rejected.
 
 The route definitions and generated OpenAPI document are authoritative for
 exact fields and paths. `tests/test_api_contract.py` and route-specific tests

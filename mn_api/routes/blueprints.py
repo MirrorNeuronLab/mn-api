@@ -217,6 +217,7 @@ def run_blueprint_launch_record(req: BlueprintLaunchRequest):
     )
     run_req = BlueprintRunRequest(
         version=req.version,
+        job_id=req.job_id,
         run_id=req.run_id,
         config_overwrite=req.config_overwrite,
         config_overrides=req.config_overrides,
@@ -302,6 +303,7 @@ def resolve_async_blueprint_run_request(blueprint_id: str, req: BlueprintRunRequ
     progress_id = validate_progress_id(req.progress_id) or create_blueprint_progress_id(run_id)
     return BlueprintRunRequest(
         version=req.version,
+        job_id=req.job_id,
         run_id=run_id,
         config_overwrite=req.config_overwrite,
         config_overrides=req.config_overrides,
@@ -318,6 +320,7 @@ def resolve_async_blueprint_launch_request(req: BlueprintLaunchRequest) -> Bluep
     progress_id = validate_progress_id(req.progress_id) or create_blueprint_progress_id(run_id)
     return BlueprintLaunchRequest(
         version=req.version,
+        job_id=req.job_id,
         run_id=run_id,
         config_overwrite=req.config_overwrite,
         config_overrides=req.config_overrides,
@@ -978,15 +981,34 @@ def run_blueprint_record(
             label="Submit runtime job",
             detail="Handing the prepared job bundle to MirrorNeuron core.",
         )
-        if force:
-            job_id = state.client.submit_job(manifest_json, payloads, force=True)
-        else:
-            job_id = state.client.submit_job(manifest_json, payloads)
+        stable_job_id = req.job_id
+        if not stable_job_id:
+            created = json.loads(
+                state.client.create_stable_job(
+                    manifest_json,
+                    payloads,
+                    resolved_configuration=config_overrides,
+                )
+            )
+            stable_job_id = str(created["job_id"])
+        elif config_overrides:
+            state.client.update_stable_job(
+                stable_job_id,
+                {"resolved_configuration": config_overrides},
+            )
+        started = json.loads(
+            state.client.start_run(
+                stable_job_id,
+                run_id=run_id,
+                inputs=config_overrides,
+            )
+        )
+        execution_id = str(started["run_id"])
         submitted_manifest = json.loads(manifest_json)
         web_ui_service = runtime_web_ui_service_from_manifest(submitted_manifest)
         write_blueprint_job_mapping(
             run_id,
-            job_id,
+            execution_id,
             blueprint_id=blueprint["id"],
             blueprint_revision=blueprint.get("revision") or None,
             blueprint_source=source,
@@ -998,7 +1020,7 @@ def run_blueprint_record(
             repo_root,
             blueprint,
             run_id,
-            job_id,
+            execution_id,
             manifest_json,
             config_overrides=config_overrides,
             env_overrides=env_overrides,
@@ -1011,15 +1033,15 @@ def run_blueprint_record(
             "submit",
             "completed",
             "Job submitted to the runtime.",
-            {"run_id": run_id, "job_id": job_id},
+            {"run_id": execution_id, "job_id": stable_job_id},
             label="Submit runtime job",
             detail="The runtime accepted the job and live monitoring can begin.",
         )
-        record_launch_progress(progress_id, "launch", "completed", "Launch complete.", {"run_id": run_id, "job_id": job_id})
+        record_launch_progress(progress_id, "launch", "completed", "Launch complete.", {"run_id": execution_id, "job_id": stable_job_id})
         return {
-            "job_id": job_id,
-            "id": job_id,
-            "run_id": run_id,
+            "job_id": stable_job_id,
+            "id": execution_id,
+            "run_id": execution_id,
             "status": "pending",
             "source": source,
             "blueprint": blueprint,

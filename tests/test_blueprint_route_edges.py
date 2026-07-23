@@ -292,9 +292,14 @@ def test_blueprint_run_route_submits_after_real_preflight_with_runtime_environme
         def resolve_service(self, *_args, **_kwargs):
             return json.dumps({"services": []})
 
-        def submit_job(self, manifest_json, payloads, **kwargs):
+        def create_stable_job(self, manifest_json, payloads, **kwargs):
             self.submissions.append((json.loads(manifest_json), payloads, kwargs))
-            return "job-route-real"
+            return json.dumps({"job_id": "job-route-real"})
+
+        def start_run(self, job_id, *, run_id, inputs):
+            assert job_id == "job-route-real"
+            assert inputs == {}
+            return json.dumps({"job_id": job_id, "run_id": run_id})
 
         def prepare_runtime_model(self, payload):
             self.environment_preparations.append(payload)
@@ -447,7 +452,7 @@ def test_blueprint_run_route_submits_after_real_preflight_with_runtime_environme
     assert submitted_manifest["metadata"]["mn_cli"]["blueprint_id"] == "vc_assistant"
     assert submitted_manifest["metadata"]["mn_cli"]["blueprint_run_id"] == "vc-route-real"
     assert payloads == {"payload.txt": b"hello"}
-    assert submit_kwargs == {"force": True}
+    assert submit_kwargs == {"resolved_configuration": {}}
     assert observed == {"force": True, "path": "/runtime/docker/bin:/api/process/bin"}
     assert os.environ["PATH"] == "/api/process/bin"
     assert progress.status_code == 200
@@ -498,9 +503,14 @@ def test_blueprint_launch_route_background_uses_shared_sdk_submission(monkeypatc
         def resolve_service(self, *_args, **_kwargs):
             return json.dumps({"services": []})
 
-        def submit_job(self, manifest_json, payloads, **kwargs):
+        def create_stable_job(self, manifest_json, payloads, **kwargs):
             self.submissions.append((json.loads(manifest_json), payloads, kwargs))
-            return "job-launch-route"
+            return json.dumps({"job_id": "job-launch-route"})
+
+        def start_run(self, job_id, *, run_id, inputs):
+            assert job_id == "job-launch-route"
+            assert inputs == {}
+            return json.dumps({"job_id": job_id, "run_id": run_id})
 
     repo = tmp_path / "catalog"
     bundle = repo / "worker_one"
@@ -568,7 +578,7 @@ def test_blueprint_launch_route_background_uses_shared_sdk_submission(monkeypatc
     assert submitted_manifest["run_id"] == "launch-route-run"
     assert submitted_manifest["metadata"]["mn_cli"]["blueprint_id"] == "worker_one"
     assert payloads == {"worker.py": b"print('ok')\n"}
-    assert submit_kwargs == {"force": True}
+    assert submit_kwargs == {"resolved_configuration": {}}
     assert progress.status_code == 200
     assert progress.json()["status"] == "completed"
     assert progress.json()["job_id"] == "job-launch-route"

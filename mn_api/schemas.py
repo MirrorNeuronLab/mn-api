@@ -13,6 +13,39 @@ class SubmitJobRequest(BaseModel):
     force: bool = False
 
 
+class StableJobCreateRequest(BaseModel):
+    version: int = 2
+    blueprint_id: Optional[str] = None
+    manifest_json: Optional[str] = None
+    payloads: Optional[Dict[str, str]] = Field(default_factory=dict)
+    bundle_path: Optional[str] = Field(default=None, alias="_bundle_path")
+    job_id: Optional[str] = None
+    resolved_configuration: Dict[str, Any] = Field(default_factory=dict)
+    storage: Dict[str, Any] = Field(default_factory=dict)
+
+
+class StableJobUpdateRequest(BaseModel):
+    version: int = 2
+    attrs: Dict[str, Any] = Field(default_factory=dict)
+
+
+class StartRunRequest(BaseModel):
+    version: int = 2
+    run_id: Optional[str] = None
+    inputs: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ConfirmDeleteRequest(BaseModel):
+    version: int = 2
+    confirmed: bool = False
+
+
+class JobScheduleCreateRequest(BaseModel):
+    version: int = 2
+    schedule: Dict[str, Any] = Field(default_factory=dict)
+    source: Dict[str, Any] = Field(default_factory=dict)
+
+
 class RestoreJobBackupRequest(BaseModel):
     version: int = 1
     backup_json: str
@@ -23,6 +56,7 @@ class RestoreJobBackupRequest(BaseModel):
 
 class BlueprintRunRequest(BaseModel):
     version: int = 1
+    job_id: Optional[str] = None
     run_id: Optional[str] = None
     config_overwrite: Optional[Dict[str, Any]] = None
     config_overrides: Optional[Dict[str, Any]] = None
