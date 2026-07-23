@@ -13,12 +13,7 @@ from mn_api.config import ApiConfig
 from mn_api import state
 from mn_api.main import app
 from mn_api.blueprints import scheduler_allocated_ports_from_jobs_payload
-from mn_api.routes.blueprints import (
-    run_blueprint_launch_record,
-    run_blueprint_record,
-    runtime_blueprint_web_ui_reserved_ports,
-    service_ports_from_payload,
-)
+from mn_api.routes.blueprints import run_blueprint_launch_record, run_blueprint_record
 from mn_api.schemas import BlueprintLaunchRequest, BlueprintRunRequest
 from unittest.mock import Mock, patch
 import grpc
@@ -71,6 +66,12 @@ class TestAPI(unittest.TestCase):
         if hasattr(result, "body"):
             return _ResponseShim(result)
         return _ResponseShim(result, status_code=200)
+
+    def _mock_blueprint_submission(self, mock_client, job_id: str) -> None:
+        mock_client.create_stable_job.return_value = json.dumps({"job_id": job_id})
+        mock_client.start_run.side_effect = lambda stable_job_id, *, run_id, inputs: json.dumps(
+            {"job_id": stable_job_id, "run_id": run_id}
+        )
 
     def _write_blueprint_repo(self, repo: Path):
         blueprint_dir = repo / "worker_one"
@@ -274,12 +275,12 @@ class TestAPI(unittest.TestCase):
 
     @patch("mn_api.state.client")
     def test_service_routes_proxy_runtime_registry(self, mock_client):
-        mock_client.list_services.return_value = json.dumps({"services": [{"name": "blueprint-web-ui"}]})
-        mock_client.resolve_service.return_value = json.dumps({"services": [{"name": "blueprint-web-ui"}]})
+        mock_client.list_services.return_value = json.dumps({"services": [{"name": "example-service"}]})
+        mock_client.resolve_service.return_value = json.dumps({"services": [{"name": "example-service"}]})
 
         list_response = self.client.get("/api/v1/services", params={"tag": "web_ui", "job_id": "job-1"})
         resolve_response = self.client.get(
-            "/api/v1/services/blueprint-web-ui/resolve",
+            "/api/v1/services/example-service/resolve",
             params={"tag": "video_watch_assistant", "passing_only": "false"},
         )
 
@@ -295,7 +296,7 @@ class TestAPI(unittest.TestCase):
             passing_only=True,
         )
         mock_client.resolve_service.assert_called_once_with(
-            "blueprint-web-ui",
+            "example-service",
             node=None,
             job_id=None,
             agent_id=None,
@@ -303,198 +304,13 @@ class TestAPI(unittest.TestCase):
             passing_only=False,
         )
 
-    @patch("mn_api.state.client")
-    def test_run_ui_falls_back_to_registered_web_ui_service(self, mock_client):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            runs_root = Path(tmpdir)
-            run_dir = runs_root / "run-with-service-ui"
-            run_dir.mkdir()
-            (run_dir / "job.json").write_text(json.dumps({"job_id": "job-service-ui"}))
-            mock_client.resolve_service.return_value = json.dumps(
-                {
-                    "services": [
-                        {
-                            "id": "job-service-ui:web_ui_dashboard:blueprint-web-ui",
-                            "name": "blueprint-web-ui",
-                            "job_id": "job-service-ui",
-                            "status": "warning",
-                            "address": "127.0.0.1",
-                            "port": 58101,
-                            "meta": {
-                                "run_id": "run-with-service-ui",
-                                "blueprint_id": "video_watch_assistant",
-                                "title": "Video Dashboard",
-                                "adapter": "gradio",
-                                "url": "http://localhost:58101",
-                                "browser_video_source": "http://127.0.0.1:8889/video-watch/",
-                                "run_ui_path": str(run_dir / "ui.json"),
-                            },
-                        }
-                    ]
-                }
-            )
-
-            with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
-                response = self.client.get("/api/v1/runs/run-with-service-ui/ui")
-
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertEqual(body["web_ui"]["url"], "http://localhost:58101")
-        self.assertEqual(body["web_ui"]["status"], "warning")
-        self.assertEqual(body["ui"]["metadata"]["service_name"], "blueprint-web-ui")
-        mock_client.resolve_service.assert_called_once_with(
-            "blueprint-web-ui",
-            job_id="job-service-ui",
-            tags=["web_ui"],
-            passing_only=False,
-        )
-
-    @patch("mn_api.state.client")
-    def test_run_ui_falls_back_to_persisted_web_ui_service_contract(self, mock_client):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            runs_root = Path(tmpdir)
-            run_dir = runs_root / "run-with-persisted-ui"
-            run_dir.mkdir()
-            (run_dir / "job.json").write_text(
-                json.dumps(
-                    {
-                        "job_id": "job-persisted-ui",
-                        "run_id": "run-with-persisted-ui",
-                        "web_ui_service": {
-                            "node_id": "web_ui_dashboard",
-                            "service_name": "blueprint-web-ui",
-                            "run_id": "run-with-persisted-ui",
-                            "blueprint_id": "video_watch_assistant",
-                            "title": "Video Dashboard",
-                            "adapter": "gradio",
-                            "url": "http://localhost:61000",
-                            "host": "127.0.0.1",
-                            "address": "127.0.0.1",
-                            "port": 61000,
-                            "browser_video_source": "http://127.0.0.1:8889/video-watch/",
-                        },
-                    }
-                )
-            )
-            mock_client.resolve_service.side_effect = RuntimeError("gRPC auth token is required for this RPC")
-
-            with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
-                with patch("mn_api.routes.runs._web_ui_url_status", return_value="running"):
-                    response = self.client.get("/api/v1/runs/run-with-persisted-ui/ui")
-
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertEqual(body["web_ui"]["url"], "http://localhost:61000")
-        self.assertEqual(body["web_ui"]["status"], "running")
-        self.assertEqual(body["web_ui"]["metadata"]["registered_by"], "blueprint_job_mapping")
-        self.assertEqual(body["ui"]["metadata"]["registered_by"], "blueprint_job_mapping")
-        self.assertEqual(body["ui"]["components"][0]["browser_source"], "http://127.0.0.1:8889/video-watch/")
-
-    @patch("mn_api.state.client")
-    def test_run_ui_falls_back_to_event_relay_web_ui_service_contract(self, mock_client):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            runs_root = Path(tmpdir)
-            run_dir = runs_root / "run-with-relay-ui"
-            run_dir.mkdir()
-            (run_dir / "job.json").write_text(
-                json.dumps(
-                    {
-                        "job_id": "job-relay-ui",
-                        "run_id": "run-with-relay-ui",
-                    }
-                )
-            )
-            (run_dir / "event_relay.json").write_text(
-                json.dumps(
-                    {
-                        "job_id": "job-relay-ui",
-                        "run_id": "run-with-relay-ui",
-                        "service": {
-                            "node_id": "web_ui_dashboard",
-                            "service_name": "blueprint-web-ui",
-                            "run_id": "run-with-relay-ui",
-                            "blueprint_id": "video_watch_assistant",
-                            "title": "Video Dashboard",
-                            "adapter": "gradio",
-                            "url": "http://localhost:61000",
-                            "host": "0.0.0.0",
-                            "address": "127.0.0.1",
-                            "port": 61000,
-                            "browser_video_source": "http://127.0.0.1:8889/video-watch/",
-                        },
-                    }
-                )
-            )
-            mock_client.resolve_service.side_effect = RuntimeError("gRPC auth token is required for this RPC")
-
-            with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
-                with patch("mn_api.routes.runs._web_ui_url_status", return_value="running"):
-                    response = self.client.get("/api/v1/runs/run-with-relay-ui/ui")
-
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertEqual(body["web_ui"]["url"], "http://localhost:61000")
-        self.assertEqual(body["web_ui"]["metadata"]["registered_by"], "blueprint_job_mapping")
-        self.assertEqual(body["ui"]["components"][0]["browser_source"], "http://127.0.0.1:8889/video-watch/")
-
     def test_config_uses_grpc_auth_token(self):
         with patch.dict(os.environ, {"MN_GRPC_AUTH_TOKEN": "auth-secret"}, clear=False):
             config = ApiConfig.from_env()
 
         self.assertEqual(config.grpc_auth_token, "auth-secret")
 
-    def test_service_ports_from_payload_extracts_valid_ports(self):
-        self.assertEqual(
-            service_ports_from_payload(
-                {
-                    "services": [
-                        {"name": "blueprint-web-ui", "port": 61000},
-                        {"name": "blueprint-web-ui", "port": "61001"},
-                        {"name": "blueprint-web-ui", "port": "not-a-port"},
-                        {"name": "other"},
-                    ]
-                }
-            ),
-            {61000, 61001},
-        )
-
-    def test_service_ports_from_payload_can_filter_to_active_jobs(self):
-        self.assertEqual(
-            service_ports_from_payload(
-                {
-                    "services": [
-                        {"job_id": "active-job", "port": 61000},
-                        {"job_id": "terminal-job", "port": 61001},
-                        {"port": 61002},
-                    ]
-                },
-                active_job_ids={"active-job"},
-            ),
-            {61000},
-        )
-
-    def test_service_ports_from_payload_can_filter_to_live_services(self):
-        self.assertEqual(
-            service_ports_from_payload(
-                {
-                    "services": [
-                        {"job_id": "missing-job", "status": "passing", "port": 61000},
-                        {"job_id": "critical-job", "status": "critical", "port": 61001},
-                        {
-                            "job_id": "failed-health-job",
-                            "status": "warning",
-                            "health": {"status": "critical"},
-                            "port": 61002,
-                        },
-                        {"job_id": "unknown-status-job", "port": 61003},
-                    ]
-                },
-                live_only=True,
-            ),
-            {61000, 61003},
-        )
-
-    def test_scheduler_allocated_ports_from_jobs_payload_extracts_web_ui_ports(self):
+    def test_scheduler_allocated_ports_from_jobs_payload_extracts_ports(self):
         self.assertEqual(
             scheduler_allocated_ports_from_jobs_payload(
                 {
@@ -503,10 +319,10 @@ class TestAPI(unittest.TestCase):
                         "scheduler": {
                             "placements": [
                                 {
-                                    "agent_id": "web_ui_dashboard",
+                                    "agent_id": "dashboard",
                                     "allocations": {
                                         "ports": [
-                                            {"label": "web_ui", "port": 61000, "protocol": "http"},
+                                            {"label": "dashboard", "port": 61000, "protocol": "http"},
                                             {"label": "debug", "port": "61001"},
                                             {"label": "bad", "port": "not-a-port"},
                                         ]
@@ -519,116 +335,6 @@ class TestAPI(unittest.TestCase):
             ),
             {61000, 61001},
         )
-
-    @patch("mn_api.state.client")
-    def test_runtime_blueprint_web_ui_reserved_ports_falls_back_to_job_placements(self, mock_client):
-        mock_client.list_jobs.return_value = json.dumps({"data": [{"job_id": "active-job", "status": "running"}]})
-        mock_client.get_job.return_value = json.dumps(
-            {
-                "job": {
-                    "job_id": "active-job",
-                    "status": "running",
-                    "scheduler": {
-                        "placements": [
-                            {
-                                "agent_id": "web_ui_dashboard",
-                                "allocations": {"ports": [{"label": "web_ui", "port": 61000, "protocol": "http"}]},
-                            }
-                        ]
-                    },
-                }
-            }
-        )
-        mock_client.resolve_service.side_effect = RuntimeError("gRPC auth token is required for this RPC")
-
-        self.assertEqual(runtime_blueprint_web_ui_reserved_ports(), {61000})
-        mock_client.get_job.assert_called_once_with("active-job")
-
-    @patch("mn_api.state.client")
-    def test_runtime_blueprint_web_ui_reserved_ports_uses_live_registry_when_jobs_are_missing(self, mock_client):
-        mock_client.list_jobs.return_value = json.dumps({"data": []})
-        mock_client.resolve_service.return_value = json.dumps(
-            {
-                "services": [
-                    {"job_id": "registry-live-job", "status": "passing", "port": 61000},
-                    {"job_id": "registry-stale-job", "status": "critical", "port": 61001},
-                ]
-            }
-        )
-
-        self.assertEqual(runtime_blueprint_web_ui_reserved_ports(), {61000})
-        mock_client.get_job.assert_not_called()
-
-    @patch("mn_api.state.client")
-    def test_blueprint_run_persists_runtime_web_ui_service_contract(self, mock_client):
-        mock_client.list_jobs.return_value = json.dumps({"data": []})
-        mock_client.resolve_service.return_value = json.dumps({"services": []})
-        mock_client.submit_job.return_value = "job-web-ui-contract"
-        mock_client.prepare_runtime_model.return_value = json.dumps(
-            {
-                "status": "ready",
-                "runtime_path": "/runtime/shared/blueprint-python-envs/web-ui-contract",
-                "host_path": "/host/shared/blueprint-python-envs/web-ui-contract",
-            }
-        )
-        with tempfile.TemporaryDirectory() as tmpdir:
-            repo = Path(tmpdir)
-            runs_root = repo / "runs"
-            self._write_blueprint_repo(repo)
-            (repo / "worker_one" / "manifest.json").write_text(
-                json.dumps(
-                    {
-                        "graph_id": "worker_one_graph",
-                        "type": "service",
-                        "nodes": [],
-                        "edges": [],
-                        "metadata": {},
-                    }
-                )
-            )
-            config_dir = repo / "worker_one" / "config"
-            config_dir.mkdir()
-            (config_dir / "default.json").write_text(
-                json.dumps(
-                    {
-                        "identity": {"blueprint_id": "worker_one", "name": "Worker One"},
-                        "web_ui": {
-                            "enabled": True,
-                            "dashboard": {
-                                "browser_video_source": "http://127.0.0.1:8889/video-watch/",
-                            },
-                            "output": {
-                                "adapter": "gradio",
-                                "auto_generate": True,
-                                "title": "Worker One Dashboard",
-                            },
-                        },
-                    }
-                )
-            )
-            original = self._set_blueprint_config(repo)
-            try:
-                with patch.dict(
-                    os.environ,
-                    {
-                        "MN_RUNS_ROOT": str(runs_root),
-                        "MN_BLUEPRINT_WEB_UI_PORT_START": "61000",
-                        "MN_BLUEPRINT_WEB_UI_PORT_END": "61000",
-                        "MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE": "prepublished",
-                    },
-                ):
-                    response = self._sync_blueprint_run(repo, {"run_id": "run-web-ui-contract", "force": True})
-                    job_record = json.loads((runs_root / "run-web-ui-contract" / "job.json").read_text())
-            finally:
-                self._restore_config(original)
-
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertEqual(body["web_ui_service"]["service_name"], "blueprint-web-ui")
-        self.assertEqual(body["web_ui_service"]["url"], "http://localhost:61000")
-        self.assertEqual(job_record["web_ui_service"]["run_id"], "run-web-ui-contract")
-        self.assertEqual(job_record["web_ui_service"]["port"], 61000)
-        self.assertEqual(job_record["web_ui_service"]["browser_video_source"], "http://127.0.0.1:8889/video-watch/")
 
     def test_config_uses_grpc_admin_token(self):
         with patch.dict(os.environ, {"MN_GRPC_ADMIN_TOKEN": "admin-secret"}, clear=False):
@@ -854,9 +560,11 @@ class TestAPI(unittest.TestCase):
             state.config = original_config
             state.refresh_config_from_env = original_refresh
 
-    def test_auth_required_when_token_configured(self):
+    @patch("mn_api.state.client")
+    def test_auth_required_when_token_configured(self, mock_client):
         original = state.config
         state.config = SimpleNamespace(api_token="secret", request_size_limit_bytes=1024 * 1024)
+        mock_client.get_system_summary.return_value = '{"nodes": [], "jobs": []}'
         try:
             response = self.client.get("/api/v1/system/summary")
             self.assertEqual(response.status_code, 401)
@@ -864,7 +572,8 @@ class TestAPI(unittest.TestCase):
                 "/api/v1/system/summary",
                 headers={"Authorization": "Bearer secret"},
             )
-            self.assertIn(response.status_code, (200, 500, 503))
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json(), {"version": 1, "nodes": [], "jobs": []})
         finally:
             state.config = original
 
@@ -965,11 +674,21 @@ class TestAPI(unittest.TestCase):
 
     @patch("mn_api.state.client")
     def test_cleanup_jobs_success(self, mock_client):
-        mock_client.clear_jobs.return_value = 3
+        mock_client.start_operation.return_value = json.dumps(
+            {"operation_id": "op-clear", "kind": "clear_jobs", "status": "running"}
+        )
         response = self.client.post("/api/v1/jobs:cleanup")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"version": 1, "cleared_count": 3})
-        mock_client.clear_jobs.assert_called_once()
+        self.assertEqual(
+            response.json(),
+            {
+                "version": 1,
+                "operation_id": "op-clear",
+                "kind": "clear_jobs",
+                "status": "running",
+            },
+        )
+        mock_client.start_operation.assert_called_once_with("clear_jobs", {})
 
     def test_cleanup_jobs_retries_after_admin_token_mismatch(self):
         class PermissionDeniedRpcError(grpc.RpcError):
@@ -979,8 +698,16 @@ class TestAPI(unittest.TestCase):
             def details(self):
                 return "ClearJobs requires MN_GRPC_ADMIN_TOKEN"
 
-        first_client = SimpleNamespace(clear_jobs=Mock(side_effect=PermissionDeniedRpcError()))
-        second_client = SimpleNamespace(clear_jobs=Mock(return_value=2))
+        first_client = SimpleNamespace(
+            start_operation=Mock(side_effect=PermissionDeniedRpcError())
+        )
+        second_client = SimpleNamespace(
+            start_operation=Mock(
+                return_value=json.dumps(
+                    {"operation_id": "op-clear-retry", "status": "running"}
+                )
+            )
+        )
         close_client = Mock()
         clients = [first_client, second_client]
 
@@ -998,9 +725,12 @@ class TestAPI(unittest.TestCase):
             response = self.client.post("/api/v1/jobs:cleanup")
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"version": 1, "cleared_count": 2})
-        first_client.clear_jobs.assert_called_once()
-        second_client.clear_jobs.assert_called_once()
+        self.assertEqual(
+            response.json(),
+            {"version": 1, "operation_id": "op-clear-retry", "status": "running"},
+        )
+        first_client.start_operation.assert_called_once_with("clear_jobs", {})
+        second_client.start_operation.assert_called_once_with("clear_jobs", {})
         close_client.assert_called_once()
 
     @patch("mn_api.state.client")
@@ -1357,7 +1087,7 @@ class TestAPI(unittest.TestCase):
             (run_dir / "ui.json").write_text(
                 json.dumps(
                     {
-                        "adapter": "gradio",
+                        "adapter": "json-render",
                         "title": "Blueprint Run",
                         "refresh_seconds": 1.5,
                         "components": [{"type": "events"}],
@@ -1367,8 +1097,8 @@ class TestAPI(unittest.TestCase):
             (run_dir / "web_ui.json").write_text(
                 json.dumps(
                     {
-                        "adapter": "gradio",
-                        "url": "http://localhost:7860/runs/blueprint-run-1/ui",
+                        "adapter": "json-render",
+                        "url": "http://localhost:61000/",
                     }
                 )
             )
@@ -1388,8 +1118,8 @@ class TestAPI(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
-        self.assertEqual(body["ui"]["adapter"], "gradio")
-        self.assertEqual(body["web_ui"]["url"], "http://localhost:7860/runs/blueprint-run-1/ui")
+        self.assertEqual(body["ui"]["adapter"], "json-render")
+        self.assertEqual(body["web_ui"]["url"], "http://localhost:61000/")
         self.assertEqual(body["job"]["job_id"], "job-1")
         self.assertEqual([event["type"] for event in body["events"]], ["unparseable_event", "last"])
 
@@ -1764,7 +1494,7 @@ class TestAPI(unittest.TestCase):
                 ]
             }
         )
-        mock_client.submit_job.return_value = "job-new"
+        self._mock_blueprint_submission(mock_client, "job-new")
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
             runs_root = (repo / "runs").resolve()
@@ -3393,7 +3123,7 @@ class TestAPI(unittest.TestCase):
 
     @patch("mn_api.state.client")
     def test_blueprint_run_returns_job_and_run_ids(self, mock_client):
-        mock_client.submit_job.return_value = "job-blueprint-1"
+        self._mock_blueprint_submission(mock_client, "job-blueprint-1")
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
             runs_root = (repo / "runs").resolve()
@@ -3447,7 +3177,7 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.json()["job_id"], "job-blueprint-1")
         self.assertEqual(response.json()["run_id"], "run-123")
         self.assertEqual(response.json()["status"], "pending")
-        manifest_json, payloads = mock_client.submit_job.call_args.args
+        manifest_json, payloads = mock_client.create_stable_job.call_args.args
         manifest = json.loads(manifest_json)
         self.assertEqual(manifest["run_id"], "run-123")
         self.assertEqual(manifest["metadata"]["blueprint_id"], "worker_one")
@@ -3469,7 +3199,7 @@ class TestAPI(unittest.TestCase):
 
     @patch("mn_api.state.client")
     def test_blueprint_run_generates_run_id_when_missing(self, mock_client):
-        mock_client.submit_job.return_value = "job-blueprint-generated"
+        self._mock_blueprint_submission(mock_client, "job-blueprint-generated")
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
             runs_root = (repo / "runs").resolve()
@@ -3490,7 +3220,7 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(body["job_id"], "job-blueprint-generated")
         self.assertTrue(body["run_id"].startswith("worker_one-"))
-        manifest_json, _payloads = mock_client.submit_job.call_args.args
+        manifest_json, _payloads = mock_client.create_stable_job.call_args.args
         manifest = json.loads(manifest_json)
         self.assertEqual(manifest["metadata"]["run_id"], body["run_id"])
         self.assertEqual(manifest["metadata"]["blueprint_run_id"], body["run_id"])
@@ -3507,7 +3237,7 @@ class TestAPI(unittest.TestCase):
         for label, folder_path in cases:
             with self.subTest(label=label), tempfile.TemporaryDirectory() as tmpdir:
                 mock_client.reset_mock()
-                mock_client.submit_job.return_value = f"job-{label}"
+                self._mock_blueprint_submission(mock_client, f"job-{label}")
                 repo = Path(tmpdir)
                 runs_root = (repo / "runs").resolve()
                 self._write_blueprint_repo(repo)
@@ -3591,7 +3321,7 @@ class TestAPI(unittest.TestCase):
                     self._restore_config(original)
 
                 self.assertEqual(response.status_code, 200)
-                manifest_json, payloads = mock_client.submit_job.call_args.args
+                manifest_json, payloads = mock_client.create_stable_job.call_args.args
                 manifest = json.loads(manifest_json)
                 env = manifest["nodes"][0]["config"]["environment"]
                 injected_config = json.loads(env["MN_BLUEPRINT_CONFIG_JSON"])
@@ -3614,7 +3344,7 @@ class TestAPI(unittest.TestCase):
 
     @patch("mn_api.state.client")
     def test_blueprint_run_starts_event_relay_for_post_launch_batch_worker(self, mock_client):
-        mock_client.submit_job.return_value = "job-post-launch"
+        self._mock_blueprint_submission(mock_client, "job-post-launch")
         mock_client.list_jobs.return_value = json.dumps({"data": []})
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
@@ -3653,20 +3383,19 @@ class TestAPI(unittest.TestCase):
                 "-m",
                 "mn_sdk.blueprint_support.event_relay",
                 "--job-id",
-                "job-post-launch",
+                "run-post-launch",
                 "--run-dir",
                 str(runs_root / "run-post-launch"),
                 "--poll-seconds",
                 "1",
             ],
         )
-        self.assertEqual(relay_info["job_id"], "job-post-launch")
+        self.assertEqual(relay_info["job_id"], "run-post-launch")
         self.assertEqual(relay_info["run_id"], "run-post-launch")
-        self.assertEqual(relay_info["service"], {})
 
     @patch("mn_api.state.client")
     def test_blueprint_run_reads_latest_local_repo_config(self, mock_client):
-        mock_client.submit_job.return_value = "job-local-config"
+        self._mock_blueprint_submission(mock_client, "job-local-config")
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
             runs_root = (repo / "runs").resolve()
@@ -3697,14 +3426,14 @@ class TestAPI(unittest.TestCase):
                 self._restore_config(original)
 
         self.assertEqual(response.status_code, 200)
-        manifest_json, _payloads = mock_client.submit_job.call_args.args
+        manifest_json, _payloads = mock_client.create_stable_job.call_args.args
         submitted_env = json.loads(manifest_json)["nodes"][0]["config"]["environment"]
         submitted_config = json.loads(submitted_env["MN_BLUEPRINT_CONFIG_JSON"])
         self.assertEqual(submitted_config["vl_model"]["model"], "edited-local-model")
 
     @patch("mn_api.state.client")
     def test_blueprint_run_starts_pre_launch_before_submit(self, mock_client):
-        mock_client.submit_job.return_value = "job-pre-launch"
+        self._mock_blueprint_submission(mock_client, "job-pre-launch")
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
             runs_root = (repo / "runs").resolve()
@@ -3799,7 +3528,7 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(captured_env["MN_RUN_ID"], "run-pre-launch")
         self.assertEqual(captured_env["MN_BLUEPRINT_BUNDLE_DIR"], str((repo / "worker_one").resolve()))
         self.assertEqual(json.loads(captured_env["MN_BLUEPRINT_CONFIG_JSON"])["identity"]["run_id"], "run-pre-launch")
-        submitted_manifest = json.loads(mock_client.submit_job.call_args.args[0])
+        submitted_manifest = json.loads(mock_client.create_stable_job.call_args.args[0])
         submitted_env = submitted_manifest["nodes"][0]["config"]["environment"]
         self.assertEqual(submitted_env["VIDEO_SOURCE_URI"], "rtsp://host.openshell.internal:8562/video-watch")
         self.assertEqual(validation_env, "rtsp://host.openshell.internal:8562/video-watch")
@@ -3874,7 +3603,7 @@ class TestAPI(unittest.TestCase):
 
     @patch("mn_api.state.client")
     def test_blueprint_launch_run_uses_sdk_submission_for_catalog_blueprint(self, mock_client):
-        mock_client.submit_job.return_value = "job-from-sdk"
+        self._mock_blueprint_submission(mock_client, "job-from-sdk")
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
             self._write_blueprint_repo(repo)
@@ -3898,10 +3627,10 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertEqual(body["job_id"], "job-from-sdk")
-        self.assertEqual(body["id"], "job-from-sdk")
+        self.assertEqual(body["id"], "run-from-launch-api")
         self.assertEqual(body["run_id"], "run-from-launch-api")
         self.assertEqual(body["source"], "catalog")
-        manifest_json, payloads = mock_client.submit_job.call_args.args
+        manifest_json, payloads = mock_client.create_stable_job.call_args.args
         submitted = json.loads(manifest_json)
         self.assertEqual(submitted["run_id"], "run-from-launch-api")
         self.assertEqual(submitted["metadata"]["mn_cli"]["blueprint_id"], "worker_one")
@@ -3948,7 +3677,7 @@ class TestAPI(unittest.TestCase):
 
         mock_install.side_effect = install_side_effect
         mock_validate.side_effect = validate_side_effect
-        mock_client.submit_job.return_value = "job-from-sdk"
+        self._mock_blueprint_submission(mock_client, "job-from-sdk")
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
             self._write_blueprint_repo(repo)
@@ -3988,11 +3717,12 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(phase_by_id["context_engine"]["status"], "skipped")
         self.assertEqual(progress_body["events"][-1]["phase"], "launch")
         self.assertEqual(progress_body["events"][-1]["status"], "completed")
-        mock_client.submit_job.assert_called_once()
+        mock_client.create_stable_job.assert_called_once()
+        mock_client.start_run.assert_called_once()
 
     @patch("mn_api.state.client")
     def test_blueprint_launch_progress_records_context_engine_when_required(self, mock_client):
-        mock_client.submit_job.return_value = "job-context"
+        self._mock_blueprint_submission(mock_client, "job-context")
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
             self._write_blueprint_repo(repo)
@@ -4084,7 +3814,8 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.headers["content-type"], "application/problem+json")
         self.assertEqual(response.json()["error"], "blueprint_model_install_failed")
         self.assertEqual(response.json()["errors"][0]["location"]["path"], "llm.runtime_model")
-        mock_client.submit_job.assert_not_called()
+        mock_client.create_stable_job.assert_not_called()
+        mock_client.start_run.assert_not_called()
 
     @patch("mn_api.state.client")
     @patch("mn_api.routes.blueprints.defer_blueprint_runtime_models")
@@ -4121,7 +3852,8 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
         self.assertEqual(response.json()["error"], "blueprint_model_install_failed")
         self.assertIn("LiteLLM gateway synchronization failed", response.json()["errors"][0]["message"])
-        mock_client.submit_job.assert_not_called()
+        mock_client.create_stable_job.assert_not_called()
+        mock_client.start_run.assert_not_called()
 
     @patch("mn_api.state.client")
     @patch("mn_api.routes.blueprints.defer_blueprint_runtime_models")
@@ -4144,11 +3876,12 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.json()["error"], "requirements_not_met")
         self.assertEqual(response.json()["errors"][0]["code"], "requirements.gpu_node_unavailable")
         mock_install.assert_not_called()
-        mock_client.submit_job.assert_not_called()
+        mock_client.create_stable_job.assert_not_called()
+        mock_client.start_run.assert_not_called()
 
     @patch("mn_api.state.client")
     def test_blueprint_launch_run_uses_sdk_submission_for_filesystem_path(self, mock_client):
-        mock_client.submit_job.return_value = "job-path-sdk"
+        self._mock_blueprint_submission(mock_client, "job-path-sdk")
         with tempfile.TemporaryDirectory() as tmpdir:
             bundle_dir = Path(tmpdir) / "local_worker"
             (bundle_dir / "payloads").mkdir(parents=True)
@@ -4167,7 +3900,7 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["job_id"], "job-path-sdk")
         self.assertEqual(response.json()["source"], "path")
-        manifest_json, _payloads = mock_client.submit_job.call_args.args
+        manifest_json, _payloads = mock_client.create_stable_job.call_args.args
         self.assertEqual(json.loads(manifest_json)["graph_id"], "local_worker_graph")
 
     @patch("mn_api.state.client")
@@ -4194,7 +3927,8 @@ class TestAPI(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422)
         self.assertEqual(response.json()["error"], "blueprint_validation_failed")
-        mock_client.submit_job.assert_not_called()
+        mock_client.create_stable_job.assert_not_called()
+        mock_client.start_run.assert_not_called()
 
     @patch("mn_api.state.client")
     @patch("mn_api.routes.blueprints.validate_blueprint_inputs")
@@ -4216,7 +3950,7 @@ class TestAPI(unittest.TestCase):
 
         mock_install.side_effect = install_side_effect
         mock_validate.side_effect = validate_side_effect
-        mock_client.submit_job.return_value = "job-with-model"
+        self._mock_blueprint_submission(mock_client, "job-with-model")
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
             runs_root = (repo / "runs").resolve()
@@ -4260,7 +3994,8 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.json()["errors"][0]["code"], "requirements.gpu_node_unavailable")
         mock_install.assert_not_called()
         mock_prelaunch.assert_not_called()
-        mock_client.submit_job.assert_not_called()
+        mock_client.create_stable_job.assert_not_called()
+        mock_client.start_run.assert_not_called()
 
     @patch("mn_api.routes.blueprints.start_blueprint_pre_launch_hook")
     @patch("mn_api.routes.blueprints.validate_blueprint_inputs")
@@ -4304,7 +4039,7 @@ class TestAPI(unittest.TestCase):
             "errors": [],
         }
         mock_validate.return_value = {"ok": True, "status": "passed", "issues": [], "errors": []}
-        mock_client.submit_job.return_value = "job-spark"
+        self._mock_blueprint_submission(mock_client, "job-spark")
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
             runs_root = (repo / "runs").resolve()
@@ -4322,11 +4057,12 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.json()["model_install"]["models"][0]["status"], "cluster_provided")
         mock_install.assert_called_once()
         mock_prelaunch.assert_called_once()
-        mock_client.submit_job.assert_called_once()
+        mock_client.create_stable_job.assert_called_once()
+        mock_client.start_run.assert_called_once()
 
     @patch("mn_api.state.client")
     def test_blueprint_run_validation_failure_blocks_submit_unless_forced(self, mock_client):
-        mock_client.submit_job.return_value = "job-forced"
+        self._mock_blueprint_submission(mock_client, "job-forced")
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
             self._write_blueprint_repo(repo)
@@ -4367,10 +4103,10 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(failed.json()["errors"][0]["location"]["path"], "llm.api_base")
         self.assertEqual(forced.status_code, 200)
         self.assertEqual(forced.json()["job_id"], "job-forced")
-        manifest_json, _payloads = mock_client.submit_job.call_args.args
+        manifest_json, _payloads = mock_client.create_stable_job.call_args.args
         self.assertTrue(json.loads(manifest_json)["metadata"]["mn_validation"]["force"])
         self.assertEqual(json.loads(manifest_json)["metadata"]["mn_validation"]["status"], "skipped")
-        self.assertTrue(mock_client.submit_job.call_args.kwargs["force"])
+        self.assertTrue(json.loads(manifest_json)["metadata"]["mn_validation"]["force"])
 
     @patch("mn_api.state.client")
     def test_blueprint_run_validation_failure_runs_post_launch_cleanup(self, mock_client):
@@ -4433,7 +4169,8 @@ class TestAPI(unittest.TestCase):
         self.assertTrue(cleanup_record["ready_file"].endswith("pre_launch.ready"))
         self.assertTrue(cleanup_record["process_file"].endswith("pre_launch_process.json"))
         self.assertTrue(cleanup_record["state_file"].endswith("post_launch_state.json"))
-        mock_client.submit_job.assert_not_called()
+        mock_client.create_stable_job.assert_not_called()
+        mock_client.start_run.assert_not_called()
 
     @patch("mn_api.state.client")
     def test_blueprint_run_rejects_invalid_run_id_before_submit(self, mock_client):
@@ -4451,7 +4188,8 @@ class TestAPI(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["detail"], "invalid run id")
-        mock_client.submit_job.assert_not_called()
+        mock_client.create_stable_job.assert_not_called()
+        mock_client.start_run.assert_not_called()
 
     @patch("mn_api.state.client")
     def test_blueprint_run_rejects_invalid_config_override_format(self, mock_client):
@@ -4461,7 +4199,8 @@ class TestAPI(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 422)
-        mock_client.submit_job.assert_not_called()
+        mock_client.create_stable_job.assert_not_called()
+        mock_client.start_run.assert_not_called()
 
     @patch("mn_api.state.client")
     def test_blueprint_run_rejects_malformed_manifest_before_submit(self, mock_client):
@@ -4480,7 +4219,8 @@ class TestAPI(unittest.TestCase):
 
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.json()["detail"], "blueprint manifest.json is malformed")
-        mock_client.submit_job.assert_not_called()
+        mock_client.create_stable_job.assert_not_called()
+        mock_client.start_run.assert_not_called()
 
     def test_blueprint_path_escape_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmpdir:

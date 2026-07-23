@@ -39,8 +39,6 @@ from mn_api.blueprints import (
     deep_merge,
     defer_blueprint_runtime_models,
     runtime_blueprint_environment_overrides,
-    runtime_web_ui_service_from_manifest,
-    scheduler_allocated_ports_from_jobs_payload,
     start_background_event_relay_if_needed,
     start_blueprint_pre_launch_hook,
     local_blueprint_from_path,
@@ -921,7 +919,6 @@ def run_blueprint_record(
             config_overrides=config_overrides,
             env_overrides=env_overrides,
             force=force,
-            web_ui_reserved_ports=runtime_blueprint_web_ui_reserved_ports(),
             progress_callback=lambda message, detail, expectation: record_launch_progress(
                 progress_id,
                 "prepare_bundle",
@@ -1004,16 +1001,14 @@ def run_blueprint_record(
             )
         )
         execution_id = str(started["run_id"])
-        submitted_manifest = json.loads(manifest_json)
-        web_ui_service = runtime_web_ui_service_from_manifest(submitted_manifest)
         write_blueprint_job_mapping(
             run_id,
+            stable_job_id,
             execution_id,
             blueprint_id=blueprint["id"],
             blueprint_revision=blueprint.get("revision") or None,
             blueprint_source=source,
             blueprint_path=str(validate_blueprint_bundle(repo_root, blueprint)),
-            web_ui_service=web_ui_service,
         )
         current_config = _current_config()
         start_background_event_relay_if_needed(
@@ -1049,7 +1044,6 @@ def run_blueprint_record(
             "model_install": model_install,
             "progress_id": progress_id,
             "progress_url": f"/api/v1/blueprints/launch/progress/{progress_id}" if progress_id else None,
-            "web_ui_service": web_ui_service or None,
         }
     except Exception as exc:
         cleanup_blueprint_run_processes(run_id, reason="launch_failed")
@@ -1648,75 +1642,3 @@ def runtime_active_job_ids(payload: object | None = None) -> set[str] | None:
     if payload is None:
         return None
     return active_job_ids_from_jobs_payload(payload)
-
-
-def runtime_blueprint_web_ui_reserved_ports() -> set[int]:
-    active_jobs_payload = runtime_active_jobs_payload()
-    active_job_ids = runtime_active_job_ids(active_jobs_payload)
-    ports = scheduler_allocated_ports_from_jobs_payload(
-        active_jobs_payload,
-        active_job_ids=active_job_ids,
-    )
-    for job_id in active_job_ids or set():
-        try:
-            job_payload = json.loads(state.client.get_job(job_id))
-        except Exception:
-            continue
-        ports.update(scheduler_allocated_ports_from_jobs_payload(job_payload))
-    try:
-        payload = json.loads(
-            state.client.resolve_service(
-                "blueprint-web-ui",
-                tags=["web_ui"],
-                passing_only=False,
-            )
-        )
-    except Exception:
-        return ports
-    ports.update(service_ports_from_payload(payload, live_only=True))
-    return ports
-
-
-def service_ports_from_payload(
-    payload: object,
-    *,
-    active_job_ids: set[str] | None = None,
-    live_only: bool = False,
-) -> set[int]:
-    if not isinstance(payload, dict):
-        return set()
-    services = payload.get("services")
-    if not isinstance(services, list):
-        return set()
-    ports: set[int] = set()
-    for service in services:
-        if not isinstance(service, dict):
-            continue
-        if active_job_ids is not None and active_job_ids and str(service.get("job_id") or "") not in active_job_ids:
-            continue
-        if live_only and not service_may_be_live(service):
-            continue
-        raw_port = service.get("port")
-        try:
-            port = int(raw_port)
-        except (TypeError, ValueError):
-            continue
-        if 1 <= port <= 65535:
-            ports.add(port)
-    return ports
-
-
-def service_may_be_live(service: dict[str, object]) -> bool:
-    status = str(service.get("status") or "").strip().lower()
-    health = service.get("health") if isinstance(service.get("health"), dict) else {}
-    health_status = str(health.get("status") or "").strip().lower()
-    terminal_statuses = {
-        "archived",
-        "cancelled",
-        "critical",
-        "failed",
-        "offline",
-        "stopped",
-        "unavailable",
-    }
-    return status not in terminal_statuses and health_status not in terminal_statuses

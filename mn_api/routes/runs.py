@@ -4,13 +4,11 @@ import json
 import subprocess
 import sys
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 import asyncio
 from collections import deque
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response, StreamingResponse
@@ -28,8 +26,6 @@ from mn_sdk.blueprint_support.observability import (
     read_run_timeline,
     record_human_response,
 )
-from mn_sdk.blueprint_support.web_ui import render_static_run_report
-
 from mn_api import state
 from mn_api.artifacts import artifact_content_type, artifact_ref, list_artifact_files
 from mn_api.dependencies import require_auth, require_websocket_auth
@@ -218,8 +214,6 @@ def export_run(
         return record
     if normalized_format in {"markdown", "md"}:
         return Response(content=_render_markdown_export(record), media_type="text/markdown")
-    if normalized_format in {"html", "static_html", "web"}:
-        return Response(content=render_static_run_report(record), media_type="text/html")
     raise HTTPException(status_code=400, detail="unsupported export format")
 
 
@@ -284,16 +278,9 @@ def get_run_ui(run_id: str, limit: int = Query(200, ge=0, le=1000), _auth=Depend
         raise HTTPException(status_code=404, detail="run not found")
 
     ui = _read_json_file(run_dir / "ui.json")
-    service = _stored_web_ui_service(run_id, run_dir) or _registered_web_ui_service(run_id, run_dir)
     if not ui:
-        if not service:
-            raise HTTPException(status_code=404, detail="run UI not found")
-        ui = _ui_from_service(service, run_id)
-        web_ui = _web_ui_from_service(service, run_id, run_dir)
-    else:
-        web_ui = _read_json_file(run_dir / "web_ui.json") or (
-            _web_ui_from_service(service, run_id, run_dir) if service else {}
-        )
+        raise HTTPException(status_code=404, detail="run UI not found")
+    web_ui = _read_json_file(run_dir / "web_ui.json")
 
     return {
         "run_id": run_id,
@@ -303,213 +290,6 @@ def get_run_ui(run_id: str, limit: int = Query(200, ge=0, le=1000), _auth=Depend
         "job": _read_json_file(run_dir / "job.json"),
         "run": _read_json_file(run_dir / "run.json"),
         "events": _read_event_tail(run_dir / "events.jsonl", limit=limit),
-    }
-
-
-def _registered_web_ui_service(run_id: str, run_dir: Path) -> dict[str, Any]:
-    job = _read_json_file(run_dir / "job.json")
-    job_id = job.get("job_id") if isinstance(job.get("job_id"), str) else None
-    try:
-        response = state.client.resolve_service(
-            "blueprint-web-ui",
-            job_id=job_id,
-            tags=["web_ui"],
-            passing_only=False,
-        )
-        decoded = json.loads(response)
-    except Exception:
-        return {}
-    services = decoded.get("services") if isinstance(decoded, dict) else []
-    if not isinstance(services, list):
-        return {}
-    for service in services:
-        if not isinstance(service, dict):
-            continue
-        meta = service.get("meta") if isinstance(service.get("meta"), dict) else {}
-        if meta.get("run_id") == run_id or (job_id and service.get("job_id") == job_id):
-            return service
-    return {}
-
-
-def _stored_web_ui_service(run_id: str, run_dir: Path) -> dict[str, Any]:
-    job = _read_json_file(run_dir / "job.json")
-    run = _read_json_file(run_dir / "run.json")
-    event_relay = _read_json_file(run_dir / "event_relay.json")
-    for record in (job, run, event_relay):
-        service_info = _web_ui_service_info_from_record(record)
-        if service_info:
-            return _service_from_web_ui_service_info(service_info, run_id, run_dir, job)
-
-    job_id = job.get("job_id") if isinstance(job.get("job_id"), str) else None
-    if not job_id:
-        return {}
-    try:
-        runtime_job = json.loads(state.client.get_job(job_id))
-    except Exception:
-        return {}
-    service_info = _web_ui_service_info_from_record(runtime_job)
-    if service_info:
-        return _service_from_web_ui_service_info(service_info, run_id, run_dir, job)
-    return {}
-
-
-def _web_ui_service_info_from_record(record: dict[str, Any]) -> dict[str, Any]:
-    if not isinstance(record, dict):
-        return {}
-    for key in ("web_ui_service", "blueprint_web_ui_service"):
-        value = record.get(key)
-        if isinstance(value, dict) and value:
-            return value
-    metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
-    value = metadata.get("blueprint_web_ui_service")
-    if isinstance(value, dict) and value:
-        return value
-    manifest = record.get("manifest") if isinstance(record.get("manifest"), dict) else {}
-    manifest_metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
-    value = manifest_metadata.get("blueprint_web_ui_service")
-    if isinstance(value, dict) and value:
-        return value
-    service = record.get("service") if isinstance(record.get("service"), dict) else {}
-    service_name = _first_string(service.get("service_name"), service.get("name"))
-    if service and service_name == "blueprint-web-ui":
-        return service
-    nested_job = record.get("job") if isinstance(record.get("job"), dict) else {}
-    if nested_job:
-        return _web_ui_service_info_from_record(nested_job)
-    return {}
-
-
-def _service_from_web_ui_service_info(
-    service_info: dict[str, Any],
-    run_id: str,
-    run_dir: Path,
-    job: dict[str, Any],
-) -> dict[str, Any]:
-    name = _first_string(service_info.get("service_name"), service_info.get("name"), "blueprint-web-ui")
-    address = _first_string(service_info.get("address"), service_info.get("host"), "127.0.0.1")
-    port = _positive_port(service_info.get("port"))
-    url = _first_string(service_info.get("url"))
-    if not url and port:
-        url = f"http://{address}:{port}"
-    meta = dict(service_info)
-    meta.setdefault("run_id", run_id)
-    meta.setdefault("url", url)
-    meta.setdefault("run_ui_path", str(run_dir / "ui.json"))
-    meta.setdefault("web_ui_path", str(run_dir / "web_ui.json"))
-    meta.setdefault("run_dir", str(run_dir))
-    job_id = _first_string(job.get("job_id"), service_info.get("job_id"))
-    service_id = _first_string(
-        service_info.get("service_id"),
-        service_info.get("id"),
-        f"{job_id}:{service_info.get('node_id') or 'web_ui_dashboard'}:{name}" if job_id else "",
-    )
-    return {
-        "id": service_id or None,
-        "name": name,
-        "job_id": job_id or None,
-        "agent_id": service_info.get("node_id") or "web_ui_dashboard",
-        "address": address,
-        "port": port,
-        "status": _web_ui_url_status(url) if url else "starting",
-        "tags": ["web_ui", "blueprint", str(service_info.get("blueprint_id") or ""), "gradio"],
-        "meta": meta,
-        "source": "job_mapping",
-    }
-
-
-def _positive_port(value: Any) -> int | None:
-    try:
-        port = int(value)
-    except (TypeError, ValueError):
-        return None
-    return port if 1 <= port <= 65535 else None
-
-
-def _web_ui_url_status(
-    url: str,
-    *,
-    timeout_seconds: float = 0.75,
-    opener: Callable[..., Any] | None = None,
-) -> str:
-    if not isinstance(url, str) or not url:
-        return "starting"
-    parsed = urllib.parse.urlparse(url)
-    if parsed.scheme not in {"http", "https"}:
-        return "available"
-    open_url = opener or urllib.request.urlopen
-    try:
-        request = urllib.request.Request(url, headers={"User-Agent": "mn-api-web-ui-probe/1.0"})
-        with open_url(request, timeout=timeout_seconds) as response:
-            status = getattr(response, "status", 200)
-            return "running" if int(status) < 500 else "starting"
-    except urllib.error.HTTPError as exc:
-        return "running" if int(exc.code) < 500 else "starting"
-    except Exception:
-        return "starting"
-
-
-def _ui_from_service(service: dict[str, Any], run_id: str) -> dict[str, Any]:
-    meta = service.get("meta") if isinstance(service.get("meta"), dict) else {}
-    return {
-        "version": 1,
-        "schema_version": 1,
-        "adapter": meta.get("adapter") or "gradio",
-        "kind": "output",
-        "title": meta.get("title") or "Blueprint Dashboard",
-        "run_id": run_id,
-        "blueprint_id": meta.get("blueprint_id"),
-        "components": [
-            {
-                "type": "video",
-                "label": "Live Stream Source",
-                "browser_source": meta.get("browser_video_source") or "",
-            },
-            {
-                "type": "events",
-                "label": "Live Blueprint Event Stream",
-                "max_events": 200,
-            },
-        ],
-        "metadata": {
-            "registered_by": "mirror_neuron_service_registry"
-            if service.get("source") != "job_mapping"
-            else "blueprint_job_mapping",
-            "service_id": service.get("id"),
-            "service_name": service.get("name"),
-            "status": service.get("status"),
-            "run_ui_path": meta.get("run_ui_path"),
-        },
-    }
-
-
-def _web_ui_from_service(service: dict[str, Any], run_id: str, run_dir: Path) -> dict[str, Any]:
-    meta = service.get("meta") if isinstance(service.get("meta"), dict) else {}
-    url = meta.get("url")
-    if not isinstance(url, str) or not url:
-        address = service.get("address") or "127.0.0.1"
-        port = service.get("port") or ""
-        url = f"http://{address}:{port}" if port else ""
-    return {
-        "adapter": meta.get("adapter") or "gradio",
-        "kind": "output",
-        "url": url,
-        "title": meta.get("title") or "Blueprint Dashboard",
-        "path": str(run_dir),
-        "status": "running" if service.get("status") == "passing" else str(service.get("status") or "starting"),
-        "metadata": {
-            "blueprint_id": meta.get("blueprint_id"),
-            "run_id": run_id,
-            "events_path": str(run_dir / "events.jsonl"),
-            "ui_path": meta.get("run_ui_path") or str(run_dir / "ui.json"),
-            "registered_by": "mirror_neuron_service_registry"
-            if service.get("source") != "job_mapping"
-            else "blueprint_job_mapping",
-            "launch_adapter": "runtime_service",
-            "service_id": service.get("id"),
-            "service_name": service.get("name"),
-            "browser_video_source": meta.get("browser_video_source"),
-            "browser_publish_source": meta.get("browser_publish_source"),
-        },
     }
 
 

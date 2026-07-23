@@ -67,6 +67,8 @@ model placement algorithms, blueprint domain behavior, or the browser UI.
   forcing a rewrite.
 - Blueprint launch creates a stable job plus its first run unless an existing
   `job_id` is supplied, and returns both identities.
+- Blueprint-specific live controls are served by the owning blueprint service.
+  `mn-api` does not translate product action routes into runtime messages.
 - Stable-job creation may resolve a catalog `blueprint_id`; only API-trusted
   catalog sources or uploaded bundle roots are read from the host filesystem.
   Caller-provided arbitrary host paths are rejected.

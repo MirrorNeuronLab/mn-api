@@ -216,13 +216,22 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertEqual(blueprints[0]["capabilities"], [])
         self.assertEqual(blueprints[0]["init_config_review"]["fields"][0]["path"], "vl_model.model")
 
+    @patch("mn_api.blueprints.resolve_runtime_cluster_model_for_api", return_value=None)
+    @patch("mn_api.blueprints.resolve_runtime_model_endpoint_for_api", return_value=None)
     @patch("mn_api.blueprints.record_model_owner")
     @patch("mn_api.blueprints.load_model_ownership")
     @patch("mn_api.blueprints.docker_model_installed")
     @patch("mn_api.blueprints.install_model_entry")
     @patch("mn_api.blueprints.sync_runtime_model_gateways_for_api", return_value={})
     def test_install_blueprint_runtime_models_passes_backend_and_context(
-        self, mock_sync, mock_install, mock_installed, mock_ledger, mock_record
+        self,
+        mock_sync,
+        mock_install,
+        mock_installed,
+        mock_ledger,
+        mock_record,
+        _mock_endpoint,
+        _mock_cluster,
     ):
         mock_install.return_value = {"compatibility": {"backend": "llama.cpp"}}
         mock_installed.return_value = False
@@ -425,11 +434,21 @@ class TestBlueprintServices(unittest.TestCase):
             },
         )
 
+    @patch("mn_api.blueprints.resolve_runtime_cluster_model_for_api", return_value=None)
+    @patch("mn_api.blueprints.resolve_runtime_model_endpoint_for_api", return_value=None)
     @patch("mn_api.blueprints.record_model_owner")
     @patch("mn_api.blueprints.load_model_ownership")
     @patch("mn_api.blueprints.docker_model_installed")
     @patch("mn_api.blueprints.install_model_entry")
-    def test_install_blueprint_runtime_models_failure_does_not_record_owner(self, mock_install, mock_installed, mock_ledger, mock_record):
+    def test_install_blueprint_runtime_models_failure_does_not_record_owner(
+        self,
+        mock_install,
+        mock_installed,
+        mock_ledger,
+        mock_record,
+        _mock_endpoint,
+        _mock_cluster,
+    ):
         mock_install.side_effect = RuntimeError("pull failed")
         mock_installed.return_value = False
         mock_ledger.return_value = {"version": 1, "models": {}}
@@ -692,7 +711,7 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertEqual(summary["models"][0]["fallback"]["id"], "gemma4:e2b")
         self.assertEqual(
             json.loads(summary["env"]["MN_BLUEPRINT_CONFIG_JSON"])["llm"]["model"],
-            "docker.io/ai/gemma4:E2B",
+            "gemma4:e2b",
         )
         self.assertEqual(
             json.loads(summary["env"]["MN_BLUEPRINT_CONFIG_JSON"])["llm"]["api_base"],
@@ -782,13 +801,13 @@ class TestBlueprintServices(unittest.TestCase):
 
         self.assertTrue(summary["ok"])
         self.assertEqual(summary["models"][0]["cluster"]["node"], "remote")
-        self.assertEqual(summary["models"][0]["endpoint"]["api_base"], "http://10.0.0.20:12434/engines/v1")
+        self.assertEqual(summary["models"][0]["endpoint"]["api_base"], "http://10.0.0.20:4000/v1")
         mock_client.prepare_runtime_model.assert_not_called()
         remote_runtime.prepare_runtime_model.assert_called_once()
         self.assertEqual(client_class.call_count, 2)
         remote_runtime.sync_litellm_gateway.assert_called_once()
         fanout_payload = remote_runtime.sync_litellm_gateway.call_args.args[0]
-        self.assertEqual(fanout_payload["runtime_endpoints"]["medium"]["api_base"], "http://10.0.0.20:12434/engines/v1")
+        self.assertEqual(fanout_payload["runtime_endpoints"]["medium"]["api_base"], "http://10.0.0.20:4000/v1")
         self.assertEqual(
             json.loads(summary["env"]["MN_MODEL_ENDPOINTS_JSON"])["medium"]["api_base"],
             "http://mn-litellm-proxy:4000/v1",
@@ -1045,7 +1064,7 @@ class TestBlueprintServices(unittest.TestCase):
                                 "config": {
                                     "runner_module": "MirrorNeuron.Runner.HostLocal",
                                     "python_environment": {
-                                        "packages": ["gradio>=5"],
+                                        "packages": ["fastapi>=0.115"],
                                         "requirements": "worker/requirements.txt",
                                     },
                                 },
@@ -1080,7 +1099,7 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertEqual(observed["node"], "worker-a")
         self.assertEqual(observed["blueprint_id"], "host_worker")
         self.assertEqual(observed["node_id"], "worker")
-        self.assertEqual(observed["packages"], ["gradio>=5"])
+        self.assertEqual(observed["packages"], ["fastapi>=0.115"])
         self.assertEqual(observed["requirements_content"], "requests==2.32.0\n")
         self.assertTrue(observed["ensure_hostlocal_python_environment"])
 
@@ -1307,97 +1326,6 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertNotIn("tax_workflow/mn_local_inputs/tax_documents/w2.txt", payload_bytes)
         self.assertNotIn("tax_workflow/mn_local_inputs/tax_documents/ignore.csv", payload_bytes)
         self.assertEqual(manifest["metadata"]["mn_local_inputs"]["folders"][0]["file_count"], 1)
-
-    def test_load_blueprint_bundle_injects_runtime_web_ui_service(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            repo = Path(tmpdir)
-            bundle = repo / "video_watch_assistant"
-            payloads = bundle / "payloads"
-            payloads.mkdir(parents=True)
-            config_dir = bundle / "config"
-            config_dir.mkdir()
-            (config_dir / "default.json").write_text(
-                json.dumps(
-                    {
-                        "identity": {"blueprint_id": "video_watch_assistant", "name": "Video Watch"},
-                        "web_ui": {
-                            "enabled": True,
-                            "output": {"adapter": "gradio", "title": "Video Dashboard"},
-                            "dashboard": {
-                                "browser_video_source": "http://127.0.0.1:8889/video-watch/"
-                            },
-                        },
-                    }
-                )
-            )
-            (bundle / "manifest.json").write_text(
-                json.dumps(
-                    {
-                        "manifest_version": "1.0",
-                        "type": "service",
-                        "graph_id": "video_watch_assistant_v1",
-                        "nodes": [
-                            {
-                                "node_id": "worker",
-                                "agent_type": "executor",
-                                "config": {"environment": {}},
-                            }
-                        ],
-                        "entrypoints": ["worker"],
-                        "initial_inputs": {"worker": [{}]},
-                        "metadata": {},
-                    }
-                )
-            )
-
-            with patch.dict(
-                os.environ,
-                {
-                    "MN_BLUEPRINT_WEB_UI_PORT_START": "61000",
-                    "MN_BLUEPRINT_WEB_UI_PORT_END": "61001",
-                    "MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE": "prepublished",
-                },
-            ), patch(
-                "mn_sdk.blueprint_support.runtime_web_ui.web_ui_port_available",
-                return_value=False,
-            ), patch.object(
-                blueprints_module,
-                "call_prepare_runtime_model",
-                return_value={
-                    "status": "ready",
-                    "runtime_path": "/runtime/shared/blueprint-python-envs/web-ui",
-                    "host_path": "/host/shared/blueprint-python-envs/web-ui",
-                },
-            ):
-                manifest_json, payload_bytes = load_blueprint_bundle(
-                    repo.resolve(),
-                    {"id": "video_watch_assistant", "path": "video_watch_assistant"},
-                    "video-run-7",
-                    web_ui_reserved_ports={61000},
-                )
-
-        manifest = json.loads(manifest_json)
-        web_ui_node = next(node for node in manifest["nodes"] if node["node_id"] == "web_ui_dashboard")
-        self.assertIn("web_ui_dashboard", manifest["entrypoints"])
-        self.assertEqual(web_ui_node["resources"]["ports"][0]["port"], 61001)
-        self.assertEqual(web_ui_node["services"][0]["name"], "blueprint-web-ui")
-        self.assertEqual(web_ui_node["services"][0]["meta"]["run_id"], "video-run-7")
-        self.assertEqual(
-            web_ui_node["services"][0]["meta"]["browser_video_source"],
-            "http://127.0.0.1:8889/video-watch/",
-        )
-        self.assertEqual(
-            manifest["metadata"]["blueprint_web_ui_service"]["url"],
-            "http://localhost:61001",
-        )
-        self.assertEqual(
-            web_ui_node["config"]["python_environment"]["path"],
-            "/runtime/shared/blueprint-python-envs/web-ui",
-        )
-        self.assertIn(
-            "mn_runtime_web_ui/src/mn_sdk/blueprint_support/gradio_dashboard.py",
-            payload_bytes,
-        )
 
     def test_dirty_hosted_git_cache_is_reset_before_pull(self):
         repo_url = "https://example.test/MirrorNeuronLab/otterdesk-blueprints.git"
@@ -1793,8 +1721,8 @@ def test_custom_model_api_prepares_selected_remote_node():
     payload = runtime_client.prepare_runtime_model.call_args.args[0]
     assert payload["customize_mode"] is True
     assert payload["source_model"] == "hf.co/acme/custom:Q4_K_M"
-    assert result["endpoint"]["api_base"] == "http://192.168.4.128:12434/engines/v1"
-    assert result["endpoint"]["source"] == "remote-dmr"
+    assert result["endpoint"]["api_base"] == "http://192.168.4.128:4000/v1"
+    assert result["endpoint"]["source"] == "remote_litellm_gateway"
 
 def test_launch_model_policy_is_deferred_without_installing():
     with tempfile.TemporaryDirectory() as tmpdir:

@@ -47,6 +47,17 @@ class FakeRuntimeClient:
         self.calls.append(("drain_node", node_name, deadline_ms, dry_run, ignore_system_jobs, wait))
         return json.dumps({"node": node_name, "status": "dry_run" if dry_run else "started", "deadline_ms": deadline_ms})
 
+    def start_operation(self, kind, options):
+        self.calls.append(("start_operation", kind, options))
+        return json.dumps(
+            {
+                "operation_id": "op-1",
+                "kind": kind,
+                "status": "running",
+                "options": options,
+            }
+        )
+
     def cancel_node_drain(self, node_name, reason="", mark_eligible=False):
         return json.dumps({"node": node_name, "status": "cancelled", "scheduling_eligible": mark_eligible})
 
@@ -88,8 +99,18 @@ def test_node_drain_route_parses_cli_duration(monkeypatch):
     response = client.post("/api/v1/nodes/mirror_neuron@worker/drain", json={"deadline": "10s", "dry_run": True})
 
     assert response.status_code == 200
-    assert response.json()["deadline_ms"] == 10_000
-    assert fake.calls[0] == ("drain_node", "mirror_neuron@worker", 10_000, True, True, False)
+    assert response.json()["options"]["deadline_ms"] == 10_000
+    assert fake.calls[0] == (
+        "start_operation",
+        "drain_node",
+        {
+            "node_name": "mirror_neuron@worker",
+            "reason": "",
+            "deadline_ms": 10_000,
+            "dry_run": True,
+            "ignore_system_jobs": True,
+        },
+    )
 
 
 def test_job_backup_restore_routes_encode_bundle_bytes(monkeypatch):
@@ -160,17 +181,25 @@ API_COVERED_COMMANDS = {
     "deployment status",
     "event emit",
     "event list",
+    "job archive",
     "job backup",
     "job cancel",
     "job cancel-all",
     "job clear",
+    "job create",
     "job dead-letters",
+    "job definitions",
+    "job delete",
+    "job inspect",
     "job list",
     "job monitor",
     "job pause",
+    "job reset-data",
     "job restore",
     "job result",
     "job resume",
+    "job runs",
+    "job start",
     "job status",
     "job submit",
     "job unfinished",

@@ -105,7 +105,7 @@ All paths below are under `/api/v1`.
 - Nodes/resources: `GET /resource`, `POST /resource`, `POST /nodes/{node_name}/reconcile`, `POST /nodes/{node_name}/drain`, `POST /nodes/{node_name}/undrain`, `POST /nodes/{node_name}/maintenance`
 - Services: `GET /services`, `GET /services/{name}/resolve`
 - Models: `GET /models`, `GET /models/catalog`, `GET /models/{model_id}`, `POST /models/{model_id}/install`, `POST /models/{model_id}/update`, `DELETE /models/{model_id}`, `GET /models/{model_id}/doctor`, `POST /models/{model_id}/benchmark`
-- Blueprints/runs/bundles: `GET /blueprints`, async `POST /blueprints/{blueprint_id}/runs`, async `POST /blueprints/launch/runs`, `GET /blueprints/launch/progress/{progress_id}`, `WS /realtime` topic `launch_progress:{progress_id}`, `POST /bundles/upload`, plus `/runs/{run_id}/...` artifact, UI, event, log, human-response, and observability routes.
+- Blueprints/runs/bundles: `GET /blueprints`, async `POST /blueprints/{blueprint_id}/runs`, async `POST /blueprints/launch/runs`, `GET /blueprints/launch/progress/{progress_id}`, `WS /realtime` topic `launch_progress:{progress_id}`, `POST /bundles/upload`, plus `/runs/{run_id}/...` artifact, UI, event, log, human-response, and observability routes. Blueprint-specific live controls are served by the owning blueprint service.
 
 Stable jobs use `/api/v2`:
 

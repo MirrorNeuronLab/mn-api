@@ -7,7 +7,18 @@ from fastapi.testclient import TestClient
 
 from mn_api import state
 from mn_api.app import create_app
-from mn_api.routes import blueprints, bundles, deployments, jobs, models, runs, schedules, services, system
+from mn_api.routes import (
+    blueprints,
+    bundles,
+    deployments,
+    jobs,
+    jobs_v2,
+    models,
+    runs,
+    schedules,
+    services,
+    system,
+)
 from tests.test_cli_parity_routes import API_COVERED_COMMANDS
 
 
@@ -94,7 +105,18 @@ def test_valid_bearer_token_reaches_route(monkeypatch, state_snapshot):
 
 
 def _api_route_paths() -> set[str]:
-    modules = (blueprints, bundles, deployments, jobs, models, runs, schedules, services, system)
+    modules = (
+        blueprints,
+        bundles,
+        deployments,
+        jobs,
+        jobs_v2,
+        models,
+        runs,
+        schedules,
+        services,
+        system,
+    )
     return {route.path for module in modules for route in module.router.routes}
 
 
@@ -127,17 +149,25 @@ COMMAND_ENDPOINTS = {
     "deployment status": "/api/v1/deployments/{id_or_key}",
     "event emit": "/api/v1/events",
     "event list": "/api/v1/events",
+    "job archive": "/api/v2/jobs/{job_id}/archive",
     "job backup": "/api/v1/jobs/{job_id}/backup",
     "job cancel": "/api/v1/jobs/{job_id}/cancel",
     "job cancel-all": "/api/v1/jobs:cancel-all",
     "job clear": "/api/v1/jobs:cleanup",
+    "job create": "/api/v2/jobs",
     "job dead-letters": "/api/v1/jobs/{job_id}/dead-letters",
+    "job definitions": "/api/v2/jobs",
+    "job delete": "/api/v2/jobs/{job_id}",
+    "job inspect": "/api/v2/jobs/{job_id}",
     "job list": "/api/v1/jobs",
     "job monitor": "/api/v1/jobs/{job_id}/workflow-progress/stream",
     "job pause": "/api/v1/jobs/{job_id}/pause",
+    "job reset-data": "/api/v2/jobs/{job_id}/data:reset",
     "job restore": "/api/v1/jobs/restore",
     "job result": "/api/v1/jobs/{job_id}",
     "job resume": "/api/v1/jobs/{job_id}/resume",
+    "job runs": "/api/v2/jobs/{job_id}/runs",
+    "job start": "/api/v2/jobs/{job_id}/runs",
     "job status": "/api/v1/jobs/{job_id}",
     "job submit": "/api/v1/jobs",
     "job unfinished": "/api/v1/jobs/unfinished",

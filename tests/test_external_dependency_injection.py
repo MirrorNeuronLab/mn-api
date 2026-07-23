@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import subprocess
 import unittest
-import urllib.error
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -143,48 +142,6 @@ class TestExternalDependencyInjection(unittest.TestCase):
                 (["model", "list"], 60),
             ],
         )
-
-    def test_web_ui_url_status_uses_injected_opener(self):
-        opened = []
-
-        class FakeResponse:
-            status = 204
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, exc_type, exc, tb):
-                return False
-
-        def fake_opener(request, timeout):
-            opened.append((request.full_url, timeout, request.headers["User-agent"]))
-            return FakeResponse()
-
-        status = runs._web_ui_url_status(
-            "http://localhost:61000",
-            timeout_seconds=0.1,
-            opener=fake_opener,
-        )
-
-        self.assertEqual(status, "running")
-        self.assertEqual(opened, [("http://localhost:61000", 0.1, "mn-api-web-ui-probe/1.0")])
-
-    def test_web_ui_url_status_handles_http_errors_without_network(self):
-        def failing_opener(_request, timeout):
-            raise urllib.error.HTTPError(
-                url="http://localhost:61000",
-                code=503,
-                msg="warming up",
-                hdrs=None,
-                fp=None,
-            )
-
-        self.assertEqual(
-            runs._web_ui_url_status("http://localhost:61000", opener=failing_opener),
-            "starting",
-        )
-        self.assertEqual(runs._web_ui_url_status("file:///tmp/dashboard.html"), "available")
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -4,7 +4,6 @@ import json
 import os
 from pathlib import Path
 
-
 def test_run_export_and_compare_error_paths(api_client, run_writer):
     runs_root = Path(os.environ["MN_HOME"]) / "runs"
     run_writer(runs_root, "run-a", final_artifact={"score": 1})

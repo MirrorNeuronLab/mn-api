@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from mn_api import state
 from mn_api.routes import jobs_v2
 
@@ -71,6 +73,14 @@ class StableJobClient:
         return json.dumps({"version": 2, "job_id": job_id, "schedule_id": "schedule-1"})
 
 
+class FailingStableJobClient:
+    def __getattr__(self, _name):
+        def fail(*_args, **_kwargs):
+            raise RuntimeError("private runtime failure")
+
+        return fail
+
+
 def test_v2_job_and_run_lifecycle_routes(monkeypatch, api_client):
     runtime = StableJobClient()
     monkeypatch.setattr(state, "client", runtime)
@@ -129,6 +139,68 @@ def test_v2_create_requires_manifest_or_bundle(monkeypatch, api_client):
 
     assert response.status_code == 422
     assert runtime.calls == []
+
+
+def test_v2_create_accepts_uploaded_bundle_reference(monkeypatch, api_client):
+    runtime = StableJobClient()
+    monkeypatch.setattr(state, "client", runtime)
+    monkeypatch.setattr(
+        jobs_v2,
+        "load_uploaded_bundle",
+        lambda bundle_path, _upload_root: (
+            '{"graph_id":"uploaded","nodes":[]}',
+            {"worker.py": b"pass"},
+        ),
+    )
+
+    response = api_client.post(
+        "/api/v2/jobs",
+        json={"_bundle_path": "bundle-token", "job_id": "uploaded-job"},
+    )
+
+    assert response.status_code == 200
+    operation, manifest_json, payloads, kwargs = runtime.calls[0]
+    assert operation == "create_stable_job"
+    assert json.loads(manifest_json)["graph_id"] == "uploaded"
+    assert payloads == {"worker.py": b"pass"}
+    assert kwargs["job_id"] == "uploaded-job"
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body"),
+    [
+        ("POST", "/api/v2/jobs", {"manifest_json": '{"nodes":[]}'}),
+        ("GET", "/api/v2/jobs", None),
+        ("GET", "/api/v2/jobs/job-1", None),
+        ("PATCH", "/api/v2/jobs/job-1", {"attrs": {"job_name": "updated"}}),
+        ("POST", "/api/v2/jobs/job-1/archive", None),
+        ("POST", "/api/v2/jobs/job-1/data:reset", None),
+        ("DELETE", "/api/v2/jobs/job-1", {"confirmed": True}),
+        ("POST", "/api/v2/jobs/job-1/runs", {"run_id": "run-1"}),
+        ("GET", "/api/v2/jobs/job-1/runs", None),
+        (
+            "POST",
+            "/api/v2/jobs/job-1/schedules",
+            {"schedule": {"kind": "periodic", "every": "1h"}},
+        ),
+        ("GET", "/api/v2/runs/run-1", None),
+        ("POST", "/api/v2/runs/run-1/pause", None),
+        ("POST", "/api/v2/runs/run-1/resume", None),
+        ("POST", "/api/v2/runs/run-1/cancel", None),
+        ("DELETE", "/api/v2/runs/run-1", {"confirmed": True}),
+    ],
+)
+def test_v2_routes_sanitize_runtime_failures(
+    monkeypatch, api_client, method, path, body
+):
+    monkeypatch.setattr(state, "client", FailingStableJobClient())
+
+    kwargs = {"json": body} if body is not None else {}
+    response = api_client.request(method, path, **kwargs)
+
+    assert response.status_code == 500
+    assert response.json()["error"] == "MN_EXECUTION_FAILED"
+    assert "private runtime failure" not in response.text
 
 
 def test_v2_create_resolves_a_trusted_catalog_blueprint(monkeypatch, api_client):

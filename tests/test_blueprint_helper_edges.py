@@ -11,8 +11,6 @@ from mn_api import blueprints
 
 
 def test_blueprint_small_helpers_normalize_inputs():
-    assert blueprints.blueprint_web_ui_enabled({"web_ui": {"enabled": True}}) is True
-    assert blueprints.blueprint_web_ui_enabled({"web_ui": {"enabled": False}}) is False
     assert blueprints.as_dict([]) == {}
     assert blueprints.as_list({}) == []
     assert blueprints.string_env_values({"A": 1, "B": None}) == {"A": "1"}
@@ -187,7 +185,7 @@ def test_background_relay_config_helpers(monkeypatch):
     values = {}
     monkeypatch.setattr("mn_api.blueprints.config_optional_value", lambda name: values.get(name))
 
-    assert blueprints.background_event_relay_poll_seconds({"web_ui": {"output": {"refresh_seconds": "0"}}}) == 0.1
+    assert blueprints.background_event_relay_poll_seconds({}) == 1.0
     assert blueprints.background_event_relay_max_seconds({"budgets": {"max_stream_duration_seconds": "2"}}) == 2.0
     values["MN_RUN_EVENT_RELAY_POLL_SECONDS"] = "bad"
     values["MN_RUN_EVENT_RELAY_MAX_SECONDS"] = "none"

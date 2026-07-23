@@ -137,10 +137,7 @@ from mn_sdk.submission_preparation import (
     strip_docker_model_runner_placement_requirements,
 )
 from mn_sdk.blueprint_support import (
-    inject_runtime_web_ui_service,
     render_manifest_agent_templates,
-    runtime_web_ui_service_from_manifest as sdk_runtime_web_ui_service_from_manifest,
-    runtime_web_ui_support_payloads,
     stage_local_input_payloads_for_manifest as stage_sdk_local_input_payloads,
 )
 
@@ -261,11 +258,6 @@ def ensure_runtime_modules_for_submission(
             http_status=500,
             cause=exc,
         ) from exc
-
-
-def blueprint_web_ui_enabled(config: Dict[str, Any] | None) -> bool:
-    web_ui = config.get("web_ui") if isinstance(config, dict) else None
-    return isinstance(web_ui, dict) and web_ui.get("enabled") is True
 
 
 def as_dict(value: Any) -> Dict[str, Any]:
@@ -1373,7 +1365,6 @@ def load_blueprint_bundle(
     config_overrides: Dict[str, Any] | None = None,
     env_overrides: Dict[str, str] | None = None,
     force: bool = False,
-    web_ui_reserved_ports: set[int] | None = None,
     progress_callback: Callable[[str, str, str], None] | None = None,
 ) -> tuple[str, Dict[str, bytes]]:
     from mn_api import state
@@ -1436,16 +1427,6 @@ def load_blueprint_bundle(
         prepare_skill_runtime_for_submission(manifest, config, bundle_dir=bundle_root)
         ensure_blueprint_support_sdk_build_context_uploads_for_submission(manifest)
         refresh_embedded_blueprint_config_for_submission(manifest, config)
-        if blueprint_web_ui_enabled(config):
-            inject_runtime_web_ui_service_for_submission(
-                manifest,
-                bundle_dir=bundle_root,
-                config=config,
-                run_id=run_id,
-                runs_root=runs_root,
-                env_overrides=env_overrides,
-                reserved_ports=web_ui_reserved_ports,
-            )
     localize_skill_dependencies_for_submission(manifest)
     localize_agent_dependencies_for_submission(manifest)
     inject_skill_dependency_python_environments_for_submission(manifest)
@@ -1476,7 +1457,6 @@ def load_blueprint_bundle(
 
     payloads = load_bundle_payloads(bundle_root)
     stage_blueprint_payloads_for_submission(manifest, payloads, bundle_dir=bundle_root)
-    payloads.update(runtime_web_ui_support_payloads_for_manifest(manifest))
     normalize_host_local_uploads_for_submission(manifest)
     lower_manifest_topology_for_submission(manifest)
     if progress_callback and any(
@@ -1770,45 +1750,6 @@ def normalize_host_local_uploads_for_submission(manifest: dict[str, Any]) -> Non
 
 def lower_manifest_topology_for_submission(manifest: dict[str, Any]) -> None:
     lower_manifest_topology_for_runtime_submission(manifest)
-
-
-def inject_runtime_web_ui_service_for_submission(
-    manifest: Dict[str, Any],
-    *,
-    bundle_dir: Path,
-    config: Dict[str, Any],
-    run_id: str,
-    runs_root: str,
-    env_overrides: Dict[str, str] | None = None,
-    reserved_ports: set[int] | None = None,
-) -> Dict[str, Any] | None:
-    ensure_runtime_modules_for_submission(manifest, config)
-    try:
-        return inject_runtime_web_ui_service(
-            manifest,
-            bundle_dir=bundle_dir,
-            config=config,
-            run_id=run_id,
-            runs_root=runs_root,
-            env_overrides=env_overrides,
-            reserved_ports=reserved_ports,
-        )
-    except RuntimeError as exc:
-        raise AppError(
-            "MN_FAILED_PRECONDITION",
-            "The runtime web UI service could not be prepared for this blueprint.",
-            internal_message=str(exc),
-            hint="Review the blueprint web UI configuration and try again.",
-            http_status=409,
-            cause=exc,
-        ) from exc
-
-
-def runtime_web_ui_support_payloads_for_manifest(manifest: Dict[str, Any]) -> Dict[str, bytes]:
-    ensure_runtime_modules_for_submission(manifest)
-    if not sdk_runtime_web_ui_service_from_manifest(manifest):
-        return {}
-    return runtime_web_ui_support_payloads()
 
 
 def stage_local_input_payloads_for_manifest(
@@ -2563,9 +2504,8 @@ def start_background_event_relay_if_needed(
         return
     runs_root = Path(shared_runs_root()).expanduser()
     run_dir = runs_root / run_id
-    service_info = runtime_web_ui_service_from_manifest(manifest)
     has_post_launch_hook = (run_dir / "post_launch_hook.json").is_file()
-    if not service_info and not has_post_launch_hook:
+    if not has_post_launch_hook:
         return
 
     bundle_root = validate_blueprint_bundle(repo_root, blueprint)
@@ -2626,19 +2566,12 @@ def start_background_event_relay_if_needed(
         "max_seconds": max_seconds,
         "log_path": str(log_path),
         "run_id": run_id,
-        "service": service_info,
         "started_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     process_group_id = process_group_id_for_pid(process.pid)
     if process_group_id:
         relay_info["process_group_id"] = process_group_id
     (run_dir / "event_relay.json").write_text(json.dumps(relay_info, indent=2, sort_keys=True) + "\n")
-
-
-def runtime_web_ui_service_from_manifest(manifest: Dict[str, Any]) -> Dict[str, Any]:
-    metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
-    service_info = metadata.get("blueprint_web_ui_service") if isinstance(metadata, dict) else {}
-    return service_info if isinstance(service_info, dict) else {}
 
 
 def background_event_relay_poll_seconds(config: Dict[str, Any] | None) -> float:
@@ -2649,13 +2582,7 @@ def background_event_relay_poll_seconds(config: Dict[str, Any] | None) -> float:
         except ValueError:
             return 1.0
 
-    config = config if isinstance(config, dict) else {}
-    web_ui = config.get("web_ui") if isinstance(config.get("web_ui"), dict) else {}
-    output = web_ui.get("output") if isinstance(web_ui.get("output"), dict) else {}
-    try:
-        return max(float(output.get("refresh_seconds", 1.0)), 0.1)
-    except (TypeError, ValueError):
-        return 1.0
+    return 1.0
 
 
 def background_event_relay_max_seconds(config: Dict[str, Any] | None) -> float | None:
@@ -2989,20 +2916,21 @@ def with_shared_run_store_config(
 
 
 def write_blueprint_job_mapping(
-    run_id: str,
+    blueprint_run_id: str,
     job_id: str,
+    run_id: str,
     *,
     blueprint_id: str | None = None,
     blueprint_revision: str | None = None,
     blueprint_source: str | None = None,
     blueprint_path: str | None = None,
-    web_ui_service: Dict[str, Any] | None = None,
 ) -> Path:
-    run_dir = Path(shared_runs_root()).expanduser() / run_id
+    run_dir = Path(shared_runs_root()).expanduser() / blueprint_run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     payload = {
         "run_id": run_id,
         "job_id": job_id,
+        "blueprint_run_id": blueprint_run_id,
         "blueprint_id": blueprint_id,
         "blueprint_revision": blueprint_revision,
         "submitted_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -3011,8 +2939,6 @@ def write_blueprint_job_mapping(
         payload["blueprint_source"] = blueprint_source
     if blueprint_path:
         payload["blueprint_path"] = blueprint_path
-    if web_ui_service:
-        payload["web_ui_service"] = dict(web_ui_service)
     tmp = run_dir / f".job.json.{os.getpid()}.tmp"
     tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
     tmp.replace(run_dir / "job.json")

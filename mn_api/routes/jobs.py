@@ -43,8 +43,12 @@ from mn_sdk.staged_artifacts import (
 from mn_api import state
 from mn_api.agent_graph import build_agent_graph
 from mn_api.artifacts import artifact_ref, list_artifact_files
-from mn_api.blueprints import blueprint_bundle_root, find_blueprint
-from mn_api.blueprints import runtime_resource_report
+from mn_api.blueprints import (
+    blueprint_bundle_root,
+    cleanup_blueprint_processes_for_job,
+    find_blueprint,
+    runtime_resource_report,
+)
 from mn_api.bundles import load_uploaded_bundle
 from mn_api.dependencies import require_auth, require_websocket_auth
 from mn_api.errors import handle_grpc_error, validation_problem_response
@@ -324,7 +328,7 @@ def stream_operation_events(
                 event_id = event.get("sequence")
                 prefix = f"id: {event_id}\n" if isinstance(event_id, int) else ""
                 yield f"{prefix}event: {event_name}\ndata: {json.dumps(event)}\n\n"
-        except Exception as exc:
+        except Exception:
             yield "event: error\ndata: {\"error\": \"MN_OPERATION_STREAM_FAILED\"}\n\n"
 
     return StreamingResponse(event_source(), media_type="text/event-stream")

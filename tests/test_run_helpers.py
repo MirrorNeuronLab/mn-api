@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import urllib.error
 from pathlib import Path
 
 import pytest
@@ -40,30 +39,6 @@ def test_video_source_helpers_resolve_and_constrain_paths(tmp_path):
     assert runs._is_allowed_local_path(run_dir / "clip.mp4", roots) is True
     assert runs._is_allowed_local_path(bundle_dir / "clip.mp4", roots) is True
     assert runs._is_allowed_local_path(tmp_path / "other.mp4", roots) is False
-
-
-def test_web_ui_url_status_handles_success_http_error_and_invalid_urls():
-    class Response:
-        status = 204
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-    assert runs._web_ui_url_status("file:///tmp/ui") == "available"
-    assert runs._web_ui_url_status("http://ui.local", opener=lambda request, timeout=0.75: Response()) == "running"
-
-    def http_404(request, timeout=0.75):
-        raise urllib.error.HTTPError(str(request.full_url), 404, "not found", {}, None)
-
-    def http_503(request, timeout=0.75):
-        raise urllib.error.HTTPError(str(request.full_url), 503, "down", {}, None)
-
-    assert runs._web_ui_url_status("http://ui.local", opener=http_404) == "running"
-    assert runs._web_ui_url_status("http://ui.local", opener=http_503) == "starting"
-    assert runs._web_ui_url_status("") == "starting"
 
 
 def test_run_compare_payload_uses_result_final_artifact_fallback():
