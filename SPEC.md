@@ -20,6 +20,12 @@ runtime model events. RAG and OCR models are specified by their skills at call
 time and are therefore absent from launch declarations and progress details.
 Explicit model install routes remain eager.
 
+Catalog blueprint loading applies the shared `mn.payloads.v1` contract before
+agent rendering or validation. Payload Python dependencies participate in
+HostLocal environment preparation, large assets are staged by reference, and
+payload model files are packaged locally before normal runtime-model
+preparation.
+
 ## Owned Surface
 
 The API owns:

@@ -16,13 +16,13 @@ from typing import Any, Callable, Dict, Optional
 from urllib.parse import urlparse
 
 from fastapi import HTTPException
-from mn_sdk.bundle_io import load_bundle_payloads
 from mn_sdk import (
     AppError,
     BlueprintModelOps,
     BlueprintCatalogError,
     Client,
     ModelPrepareError,
+    PayloadModelPackageError,
     build_prepare_runtime_model_request,
     call_prepare_runtime_model,
     cluster_provided_model,
@@ -42,8 +42,11 @@ from mn_sdk import (
     blueprint_model_dependency_summary,
     install_model_entry,
     is_custom_model_requirement,
+    is_payload_model_requirement,
     gateway_endpoint_map,
     prepare_job_submission,
+    payload_agent_root,
+    package_payload_models,
     record_model_owner,
     required_blueprint_models,
     resolve_llm_environment,
@@ -51,6 +54,7 @@ from mn_sdk import (
     resolve_cluster_model_placement,
     remote_runtime_model_endpoint,
     resolve_requirement_entry,
+    resolve_blueprint_payload_contract,
     resolve_model_endpoint,
     resolve_model_entry,
     run_hardware_requirements_validation,
@@ -59,11 +63,13 @@ from mn_sdk import (
     run_service_validation,
     runtime_model_prepare_timeout_seconds,
     sync_litellm_gateway,
+    stage_payload_assets,
     validate_input_validation_spec_issues,
     validate_requirements_spec_issues,
     validate_resource_spec_issues,
     validate_service_spec_issues,
 )
+from mn_sdk.runtime_config import resolve_mn_home
 from mn_sdk.model_preparation import (
     config_with_auto_runtime_model_profile,
     config_with_runtime_model_endpoints,
@@ -125,6 +131,7 @@ from mn_sdk.skill_dependencies import skill_dependency_package_names
 from mn_sdk.submission_preparation import (
     ensure_blueprint_support_sdk_build_context_uploads,
     inject_skill_dependency_python_environments,
+    inject_localized_hostlocal_python_environments,
     localize_agent_dependencies_for_dev,
     localize_skill_dependencies_for_dev,
     lower_manifest_topology_for_runtime_submission,
@@ -402,6 +409,27 @@ def expand_blueprint_manifest_if_source(bundle_root: Path, manifest: Dict[str, A
     return manifest
 
 
+def package_payload_models_for_api(
+    bundle_root: Path,
+    manifest: Dict[str, Any],
+) -> list[dict[str, str]]:
+    try:
+        return package_payload_models(
+            bundle_root,
+            manifest,
+            env=runtime_process_environment(),
+        )
+    except PayloadModelPackageError as exc:
+        raise AppError(
+            "MN_EXECUTION_FAILED",
+            "A blueprint payload model could not be prepared.",
+            internal_message=str(exc),
+            hint="Check Docker Model Runner and the runtime.models payload declaration.",
+            http_status=500,
+            cause=exc,
+        ) from exc
+
+
 def install_blueprint_runtime_models(
     repo_root: Path,
     blueprint: Dict[str, Any],
@@ -418,6 +446,8 @@ def install_blueprint_runtime_models(
     if not isinstance(manifest, dict):
         raise HTTPException(status_code=500, detail="blueprint manifest.json must be an object")
     manifest = expand_blueprint_manifest_if_source(bundle_root, manifest)
+    resolve_blueprint_payload_contract(manifest, bundle_root)
+    package_payload_models_for_api(bundle_root, manifest)
     base_config = load_blueprint_config(
         bundle_root, config_overrides=config_overrides
     ) or {}
@@ -528,6 +558,8 @@ def defer_blueprint_runtime_models(
     if not isinstance(manifest, dict):
         raise HTTPException(status_code=500, detail="blueprint manifest.json must be an object")
     manifest = expand_blueprint_manifest_if_source(bundle_root, manifest)
+    resolve_blueprint_payload_contract(manifest, bundle_root)
+    package_payload_models_for_api(bundle_root, manifest)
     config = load_blueprint_config(bundle_root, config_overrides=config_overrides) or {}
     catalog = load_model_catalog()
     resource_report = runtime_resource_report()
@@ -583,8 +615,16 @@ def defer_blueprint_runtime_models(
                 "model": logical,
                 "runtime_model": str(entry.get("model") or requested),
                 "provider": str(entry.get("provider") or "docker_model_runner"),
-                "status": "deferred_runtime_install",
-                "install_policy": "on_first_model_call",
+                "status": (
+                    "packaged_payload"
+                    if is_payload_model_requirement(requirement)
+                    else "deferred_runtime_install"
+                ),
+                "install_policy": (
+                    "payload"
+                    if is_payload_model_requirement(requirement)
+                    else "on_first_model_call"
+                ),
                 "selection_policy": policy,
                 "source": str(
                     requirement.get("path")
@@ -1381,6 +1421,8 @@ def load_blueprint_bundle(
     if not isinstance(manifest, dict):
         raise HTTPException(status_code=500, detail="blueprint manifest.json must be an object")
     manifest = expand_blueprint_manifest_if_source(bundle_root, manifest)
+    resolve_blueprint_payload_contract(manifest, bundle_root)
+    package_payload_models_for_api(bundle_root, manifest)
 
     metadata = manifest.setdefault("metadata", {})
     if not isinstance(metadata, dict):
@@ -1412,7 +1454,7 @@ def load_blueprint_bundle(
         metadata["blueprint_revision"] = blueprint["revision"]
     manifest["run_id"] = run_id
     ensure_runtime_modules_for_submission(manifest)
-    render_agent_templates_for_submission(manifest)
+    render_agent_templates_for_submission(manifest, bundle_root=bundle_root)
     materialize_agent_topology_for_runtime(manifest)
     prepare_openshell_custom_images(bundle_root, manifest)
     runs_root = shared_runs_root()
@@ -1429,6 +1471,7 @@ def load_blueprint_bundle(
         refresh_embedded_blueprint_config_for_submission(manifest, config)
     localize_skill_dependencies_for_submission(manifest)
     localize_agent_dependencies_for_submission(manifest)
+    inject_localized_hostlocal_python_environments(manifest)
     inject_skill_dependency_python_environments_for_submission(manifest)
     runtime_env = blueprint_runtime_environment(
         bundle_root,
@@ -1455,7 +1498,11 @@ def load_blueprint_bundle(
             )
         prepare_hostlocal_python_environments_for_submission(bundle_root, manifest)
 
-    payloads = load_bundle_payloads(bundle_root)
+    payloads = stage_payload_assets(
+        manifest,
+        bundle_root,
+        blob_root=resolve_mn_home() / "blobs",
+    )
     stage_blueprint_payloads_for_submission(manifest, payloads, bundle_dir=bundle_root)
     normalize_host_local_uploads_for_submission(manifest)
     lower_manifest_topology_for_submission(manifest)
@@ -1942,12 +1989,15 @@ def build_openshell_sandbox_image(source_path: Path) -> str:
     return ANSI_ESCAPE_PATTERN.sub("", matches[-1])
 
 
-def render_agent_templates_for_submission(manifest: Dict[str, Any]) -> None:
+def render_agent_templates_for_submission(
+    manifest: Dict[str, Any], *, bundle_root: Path | None = None
+) -> None:
     nodes = manifest_agent_nodes(manifest)
     if not nodes or not any(isinstance(node, dict) and "uses" in node for node in nodes):
         return
     ensure_runtime_modules_for_submission(manifest)
-    rendered = render_manifest_agent_templates(manifest)
+    local_root = payload_agent_root(bundle_root) if bundle_root is not None else None
+    rendered = render_manifest_agent_templates(manifest, agent_root=local_root)
     manifest.clear()
     manifest.update(rendered)
 
@@ -2804,6 +2854,7 @@ def validate_blueprint_inputs(
     if not isinstance(manifest, dict):
         raise HTTPException(status_code=500, detail="blueprint manifest.json must be an object")
     manifest = expand_blueprint_manifest_if_source(bundle_root, manifest)
+    resolve_blueprint_payload_contract(manifest, bundle_root)
 
     spec_issues = (
         validate_service_spec_issues(manifest)

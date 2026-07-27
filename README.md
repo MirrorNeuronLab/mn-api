@@ -9,6 +9,11 @@ The shared business logic lives in `../mn-python-sdk/mn_sdk`. The CLI and API
 are adapters over that SDK: CLI commands render terminal output, while API
 routes validate HTTP payloads and return JSON/problem responses.
 
+Blueprint launch accepts blueprint-owned source packages or wheels below
+`payloads/skills` and `payloads/agents`, including a bundled agent index. It
+streams large assets to the shared blob store and packages declared
+`payloads/models` sources in Docker Model Runner before launch.
+
 Blueprint launch preserves the `model_install` progress phase for compatibility
 but only validates and reports lazy policies. Automatic DMR preparation occurs
 inside the submitted job on the first LLM call, or when RAG/OCR skills pass

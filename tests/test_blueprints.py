@@ -62,6 +62,36 @@ def _port_accepts_connection(port: int) -> bool:
 
 
 class TestBlueprintServices(unittest.TestCase):
+    @patch("mn_api.blueprints.runtime_process_environment", return_value={"PATH": "/docker"})
+    @patch(
+        "mn_api.blueprints.package_payload_models",
+        return_value=[
+            {
+                "id": "primary",
+                "model": "demo/payload:latest",
+                "status": "packaged",
+            }
+        ],
+    )
+    def test_package_payload_models_for_api_uses_runtime_environment(
+        self,
+        mock_package,
+        _mock_environment,
+    ):
+        manifest = {"runtime": {"models": {}}}
+
+        result = blueprints_module.package_payload_models_for_api(
+            Path("/bundle"),
+            manifest,
+        )
+
+        self.assertEqual(result[0]["status"], "packaged")
+        mock_package.assert_called_once_with(
+            Path("/bundle"),
+            manifest,
+            env={"PATH": "/docker"},
+        )
+
     def test_model_service_tags_include_nemotron_aliases(self):
         entry = {
             "id": "nemotron3",
