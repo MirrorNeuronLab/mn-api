@@ -123,6 +123,9 @@ Stable jobs use `/api/v2`:
 uploaded `_bundle_path`, or a catalog `blueprint_id`. Catalog creation is the
 preferred application integration: the API resolves and packages its trusted
 blueprint source, so clients never submit arbitrary host filesystem paths.
+`PATCH /api/v2/jobs/{job_id}` may include `manifest_json` and `payloads` to
+atomically replace an inactive job's executable bundle while requiring the
+same graph and blueprint identity.
 
 In v2, `job_id` is a persistent configuration/data owner and `run_id` is one
 execution. Every manual or scheduled start creates a new run; retries do not.
@@ -133,6 +136,9 @@ facade and therefore receive a run identity.
 before starting the first run unless the body supplies an existing `job_id`.
 Responses return both identities. Run cleanup never deletes the stable job's
 shared data.
+When an existing `job_id` is supplied, the API installs the freshly prepared
+bundle before starting the run; job data, schedules, and prior run history are
+preserved.
 
 ## SDK Usage
 

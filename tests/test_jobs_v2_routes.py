@@ -24,8 +24,8 @@ class StableJobClient:
         self.calls.append(("get_stable_job", job_id))
         return json.dumps({"version": 2, "job_id": job_id, "status": "active"})
 
-    def update_stable_job(self, job_id, attrs):
-        self.calls.append(("update_stable_job", job_id, attrs))
+    def update_stable_job(self, job_id, attrs, **kwargs):
+        self.calls.append(("update_stable_job", job_id, attrs, kwargs))
         return json.dumps({"version": 2, "job_id": job_id, **attrs})
 
     def archive_stable_job(self, job_id):
@@ -221,6 +221,10 @@ def test_v2_create_resolves_a_trusted_catalog_blueprint(monkeypatch, api_client)
         assert blueprint == {"id": "researcher"}
         assert run_id == "catalog-bootstrap-run"
         assert kwargs["config_overrides"] == {"mode": "safe"}
+        assert kwargs["stable_job_id"].startswith("job_r-")
+        assert kwargs["submission_id"].startswith(
+            f"{kwargs['stable_job_id']}-def-"
+        )
         return '{"graph_id":"researcher","nodes":[]}', {"worker.py": b"pass"}
 
     monkeypatch.setattr(jobs_v2, "load_blueprint_bundle", load_bundle)
@@ -239,8 +243,30 @@ def test_v2_create_resolves_a_trusted_catalog_blueprint(monkeypatch, api_client)
     assert operation == "create_stable_job"
     assert json.loads(manifest_json)["graph_id"] == "researcher"
     assert payloads["worker.py"] == b"pass"
-    assert kwargs == {
-        "job_id": "",
-        "resolved_configuration": {"mode": "safe"},
-        "storage": {},
-    }
+    assert kwargs["job_id"].startswith("job_r-")
+    assert kwargs["resolved_configuration"] == {"mode": "safe"}
+    assert kwargs["storage"] == {}
+
+
+def test_v2_update_can_atomically_replace_the_executable_bundle(
+    monkeypatch, api_client
+):
+    runtime = StableJobClient()
+    monkeypatch.setattr(state, "client", runtime)
+
+    response = api_client.patch(
+        "/api/v2/jobs/job-1",
+        json={
+            "attrs": {"job_name": "updated"},
+            "manifest_json": '{"graph_id":"g","nodes":[]}',
+            "payloads": {"worker.py": "pass"},
+        },
+    )
+
+    assert response.status_code == 200
+    operation, job_id, attrs, kwargs = runtime.calls[-1]
+    assert operation == "update_stable_job"
+    assert job_id == "job-1"
+    assert attrs == {"job_name": "updated"}
+    assert json.loads(kwargs["manifest_json"])["graph_id"] == "g"
+    assert kwargs["payloads"] == {"worker.py": b"pass"}

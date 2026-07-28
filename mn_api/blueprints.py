@@ -45,6 +45,10 @@ from mn_sdk import (
     is_payload_model_requirement,
     gateway_endpoint_map,
     prepare_job_submission,
+    reapply_selected_workflow_placement,
+    resolve_and_apply_workflow_placement,
+    workflow_placement_mode,
+    workflow_requires_single_node,
     payload_agent_root,
     package_payload_models,
     record_model_owner,
@@ -1406,6 +1410,8 @@ def load_blueprint_bundle(
     env_overrides: Dict[str, str] | None = None,
     force: bool = False,
     progress_callback: Callable[[str, str, str], None] | None = None,
+    stable_job_id: str | None = None,
+    submission_id: str | None = None,
 ) -> tuple[str, Dict[str, bytes]]:
     from mn_api import state
 
@@ -1488,6 +1494,39 @@ def load_blueprint_bundle(
         inject_node_environment(manifest, runtime_env)
         strip_docker_model_runner_placement_requirements_for_submission(manifest)
 
+    placement = None
+    placement_env = {**os.environ, **string_env_values(env_overrides)}
+    placement_mode = workflow_placement_mode(manifest, env=placement_env)
+    if placement_mode == "single_node" or (
+        placement_mode is None and workflow_requires_single_node(manifest)
+    ):
+        try:
+            resource_report = json.loads(state.client.get_resource())
+            system_summary = json.loads(state.client.get_system_summary())
+        except Exception as exc:
+            raise RuntimeError(
+                f"could not inspect runtime nodes for workflow placement: {exc}"
+            ) from exc
+        placement = resolve_and_apply_workflow_placement(
+            manifest,
+            resource_report=resource_report if isinstance(resource_report, dict) else {},
+            system_summary=system_summary if isinstance(system_summary, dict) else {},
+            env=placement_env,
+            constraint_source="mn-api-workflow-placement",
+        )
+    if placement:
+        selected_node = str(placement["selected_node"])
+        runtime_env["MN_SELECTED_RUNTIME_NODE"] = selected_node
+        inject_node_environment(
+            manifest, {"MN_SELECTED_RUNTIME_NODE": selected_node}
+        )
+        if progress_callback:
+            progress_callback(
+                "Workflow placement resolved.",
+                f"All workflow nodes are pinned to {selected_node}.",
+                "Node-local workers and generated control nodes will run together.",
+            )
+
     hostlocal_nodes = hostlocal_python_environment_nodes(manifest)
     if hostlocal_nodes:
         if progress_callback:
@@ -1506,6 +1545,7 @@ def load_blueprint_bundle(
     stage_blueprint_payloads_for_submission(manifest, payloads, bundle_dir=bundle_root)
     normalize_host_local_uploads_for_submission(manifest)
     lower_manifest_topology_for_submission(manifest)
+    reapply_selected_workflow_placement(manifest)
     if progress_callback and any(
         str((node.get("config") or {}).get("runner_module") or "") == "MirrorNeuron.Runner.DockerWorker"
         for node in manifest_agent_nodes(manifest)
@@ -1522,7 +1562,10 @@ def load_blueprint_bundle(
             payloads,
             bundle_dir=bundle_root,
             run_id=run_id,
+            job_id=stable_job_id,
+            submission_id=submission_id,
             cluster_client=state.client,
+            env={**os.environ, **runtime_env},
         )
 
     return prepared.manifest_json, prepared.payloads

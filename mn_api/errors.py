@@ -127,8 +127,22 @@ def _legacy_validation_response(error: Exception):
                 },
             )
     if isinstance(error, grpc.RpcError) and error.code() == grpc.StatusCode.FAILED_PRECONDITION:
-        detail = error.details()
-        error_name = "requirements_not_met" if str(detail).startswith("requirements_not_met:") else "failed_precondition"
+        detail = str(error.details())
+        if "coordination_store_mismatch" in detail:
+            return problem_response(
+                status_code=412,
+                error="coordination_store_mismatch",
+                title="Coordination store mismatch",
+                detail=detail,
+            )
+        if "single_node_manifest_spans_multiple_nodes" in detail:
+            return problem_response(
+                status_code=412,
+                error="single_node_placement_failed",
+                title="Single-node placement failed",
+                detail=detail,
+            )
+        error_name = "requirements_not_met" if detail.startswith("requirements_not_met:") else "failed_precondition"
         validation = _validation_report_from_prefixed_detail(str(detail), "requirements_not_met:")
         return problem_response(
             status_code=412,

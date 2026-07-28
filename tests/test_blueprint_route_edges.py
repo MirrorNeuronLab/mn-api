@@ -284,6 +284,7 @@ def test_blueprint_run_route_submits_after_real_preflight_with_runtime_environme
     class FakeRuntimeClient:
         def __init__(self):
             self.submissions = []
+            self.updates = []
             self.environment_preparations = []
 
         def list_jobs(self, _limit=0, _include_terminal=False):
@@ -292,9 +293,44 @@ def test_blueprint_run_route_submits_after_real_preflight_with_runtime_environme
         def resolve_service(self, *_args, **_kwargs):
             return json.dumps({"services": []})
 
+        def get_resource(self):
+            return json.dumps(
+                {
+                    "nodes": [
+                        {
+                            "name": "local@runtime",
+                            "status": "healthy",
+                            "scheduling_eligible": True,
+                        }
+                    ]
+                }
+            )
+
+        def get_system_summary(self):
+            return json.dumps(
+                {
+                    "nodes": [
+                        {
+                            "name": "local@runtime",
+                            "status": "healthy",
+                            "scheduling_eligible": True,
+                            "self": True,
+                        }
+                    ]
+                }
+            )
+
         def create_stable_job(self, manifest_json, payloads, **kwargs):
             self.submissions.append((json.loads(manifest_json), payloads, kwargs))
             return json.dumps({"job_id": "job-route-real"})
+
+        def update_stable_job(
+            self, job_id, attrs, *, manifest_json=None, payloads=None
+        ):
+            self.updates.append(
+                (job_id, attrs, json.loads(manifest_json), payloads)
+            )
+            return json.dumps({"job_id": job_id})
 
         def start_run(self, job_id, *, run_id, inputs):
             assert job_id == "job-route-real"
@@ -452,12 +488,36 @@ def test_blueprint_run_route_submits_after_real_preflight_with_runtime_environme
     assert submitted_manifest["metadata"]["mn_cli"]["blueprint_id"] == "vc_assistant"
     assert submitted_manifest["metadata"]["mn_cli"]["blueprint_run_id"] == "vc-route-real"
     assert payloads == {"payload.txt": b"hello"}
-    assert submit_kwargs == {"resolved_configuration": {}}
+    assert submit_kwargs["resolved_configuration"] == {}
+    assert submit_kwargs["job_id"].startswith("job_va-")
     assert observed == {"force": True, "path": "/runtime/docker/bin:/api/process/bin"}
     assert os.environ["PATH"] == "/api/process/bin"
     assert progress.status_code == 200
     assert progress.json()["status"] == "completed"
     assert progress.json()["job_id"] == "job-route-real"
+
+    rerun = api_client.post(
+        "/api/v1/blueprints/vc_assistant/runs",
+        json={
+            "job_id": "job-route-real",
+            "run_id": "vc-route-rerun",
+            "progress_id": "progress-route-rerun",
+            "force": True,
+            "fake_llm": True,
+            "fake_skills": True,
+        },
+    )
+
+    assert rerun.status_code == 200
+    assert rerun.json()["job_id"] == "job-route-real"
+    assert fake_runtime.updates
+    updated_job_id, updated_attrs, updated_manifest, updated_payloads = (
+        fake_runtime.updates[-1]
+    )
+    assert updated_job_id == "job-route-real"
+    assert updated_attrs == {}
+    assert updated_manifest["workflow"]["workflow_id"] == "vc_assistant_v1"
+    assert updated_payloads == {"payload.txt": b"hello"}
 
 
 def test_blueprint_launch_returns_progress_session_immediately(monkeypatch, api_client, tmp_path):
@@ -502,6 +562,12 @@ def test_blueprint_launch_route_background_uses_shared_sdk_submission(monkeypatc
 
         def resolve_service(self, *_args, **_kwargs):
             return json.dumps({"services": []})
+
+        def get_resource(self):
+            return json.dumps({"nodes": []})
+
+        def get_system_summary(self):
+            return json.dumps({"nodes": []})
 
         def create_stable_job(self, manifest_json, payloads, **kwargs):
             self.submissions.append((json.loads(manifest_json), payloads, kwargs))
@@ -578,7 +644,8 @@ def test_blueprint_launch_route_background_uses_shared_sdk_submission(monkeypatc
     assert submitted_manifest["run_id"] == "launch-route-run"
     assert submitted_manifest["metadata"]["mn_cli"]["blueprint_id"] == "worker_one"
     assert payloads == {"worker.py": b"print('ok')\n"}
-    assert submit_kwargs == {"resolved_configuration": {}}
+    assert submit_kwargs["resolved_configuration"] == {}
+    assert submit_kwargs["job_id"].startswith("job_wo-")
     assert progress.status_code == 200
     assert progress.json()["status"] == "completed"
     assert progress.json()["job_id"] == "job-launch-route"

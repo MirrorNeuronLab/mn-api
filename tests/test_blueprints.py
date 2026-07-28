@@ -1013,7 +1013,15 @@ class TestBlueprintServices(unittest.TestCase):
     def test_load_blueprint_bundle_prepares_submission_with_runtime_process_environment(self):
         observed = {}
 
-        def fake_prepare_job_submission(manifest, payloads, *, bundle_dir, run_id, cluster_client=None):
+        def fake_prepare_job_submission(
+            manifest,
+            payloads,
+            *,
+            bundle_dir,
+            run_id,
+            cluster_client=None,
+            **_kwargs,
+        ):
             observed["path"] = os.environ.get("PATH")
             observed["docker_bin"] = os.environ.get("MN_DOCKER_BIN")
             observed["cluster_client"] = cluster_client
@@ -1113,6 +1121,35 @@ class TestBlueprintServices(unittest.TestCase):
                 blueprints_module,
                 "hostlocal_runtime_client",
                 return_value=object(),
+            ), patch.object(
+                state.client,
+                "get_resource",
+                return_value=json.dumps(
+                    {
+                        "nodes": [
+                            {
+                                "name": "worker-a",
+                                "status": "healthy",
+                                "scheduling_eligible": True,
+                            }
+                        ]
+                    }
+                ),
+            ), patch.object(
+                state.client,
+                "get_system_summary",
+                return_value=json.dumps(
+                    {
+                        "nodes": [
+                            {
+                                "name": "worker-a",
+                                "status": "healthy",
+                                "scheduling_eligible": True,
+                                "self": True,
+                            }
+                        ]
+                    }
+                ),
             ):
                 manifest_json, _payloads = load_blueprint_bundle(
                     repo.resolve(),

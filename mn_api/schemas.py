@@ -27,6 +27,8 @@ class StableJobCreateRequest(BaseModel):
 class StableJobUpdateRequest(BaseModel):
     version: int = 2
     attrs: Dict[str, Any] = Field(default_factory=dict)
+    manifest_json: Optional[str] = None
+    payloads: Optional[Dict[str, str]] = Field(default_factory=dict)
 
 
 class StartRunRequest(BaseModel):

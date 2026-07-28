@@ -14,7 +14,10 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from mn_sdk import (
+    cleanup_job_definition_resources,
     cleanup_blueprint_resources,
+    generate_job_definition_submission_id,
+    generate_stable_job_id,
     load_blueprint_index,
     load_model_ownership,
     remove_model_owner,
@@ -755,6 +758,7 @@ def run_blueprint_record(
     validation: dict | None = None,
     source: str = "catalog",
 ):
+    definition_committed = False
     blueprint_id = blueprint["id"]
     progress_id = validate_progress_id(req.progress_id if req else None)
     record_launch_progress(
@@ -912,6 +916,8 @@ def run_blueprint_record(
             label="Package workflow",
             detail="Packaging workflow files, local inputs, and runtime support code.",
         )
+        stable_job_id = req.job_id or generate_stable_job_id(blueprint["id"])
+        submission_id = generate_job_definition_submission_id(stable_job_id)
         manifest_json, payloads = load_blueprint_bundle(
             repo_root,
             blueprint,
@@ -919,6 +925,8 @@ def run_blueprint_record(
             config_overrides=config_overrides,
             env_overrides=env_overrides,
             force=force,
+            stable_job_id=stable_job_id,
+            submission_id=submission_id,
             progress_callback=lambda message, detail, expectation: record_launch_progress(
                 progress_id,
                 "prepare_bundle",
@@ -978,21 +986,27 @@ def run_blueprint_record(
             label="Submit runtime job",
             detail="Handing the prepared job bundle to MirrorNeuron core.",
         )
-        stable_job_id = req.job_id
-        if not stable_job_id:
+        if not req.job_id:
             created = json.loads(
                 state.client.create_stable_job(
                     manifest_json,
                     payloads,
+                    job_id=stable_job_id,
                     resolved_configuration=config_overrides,
                 )
             )
             stable_job_id = str(created["job_id"])
-        elif config_overrides:
+            definition_committed = True
+        else:
             state.client.update_stable_job(
                 stable_job_id,
-                {"resolved_configuration": config_overrides},
+                {"resolved_configuration": config_overrides}
+                if config_overrides
+                else {},
+                manifest_json=manifest_json,
+                payloads=payloads,
             )
+            definition_committed = True
         started = json.loads(
             state.client.start_run(
                 stable_job_id,
@@ -1046,6 +1060,14 @@ def run_blueprint_record(
             "progress_url": f"/api/v1/blueprints/launch/progress/{progress_id}" if progress_id else None,
         }
     except Exception as exc:
+        if "submission_id" in locals() and not definition_committed:
+            try:
+                cleanup_job_definition_resources(manifest_json)
+            except Exception:
+                state.logger.exception(
+                    "failed to clean prepared DockerWorker definition after launch failure",
+                    extra={"submission_id": submission_id},
+                )
         cleanup_blueprint_run_processes(run_id, reason="launch_failed")
         record_launch_progress(
             progress_id,

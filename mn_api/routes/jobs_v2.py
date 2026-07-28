@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
-from mn_sdk import RuntimeService
+from mn_sdk import (
+    RuntimeService,
+    generate_job_definition_submission_id,
+    generate_stable_job_id,
+)
 
 from mn_api import state
 from mn_api.blueprints import create_blueprint_run_id, find_blueprint, load_blueprint_bundle
@@ -32,11 +36,16 @@ def create_job(request: StableJobCreateRequest, _auth=Depends(require_auth)):
                 state.refresh_config_from_env(), request.blueprint_id
             )
             bootstrap_run_id = create_blueprint_run_id(request.blueprint_id)
+            stable_job_id = request.job_id or generate_stable_job_id(
+                request.blueprint_id
+            )
             manifest_json, payloads = load_blueprint_bundle(
                 repo_root,
                 blueprint,
                 bootstrap_run_id,
                 config_overrides=request.resolved_configuration,
+                stable_job_id=stable_job_id,
+                submission_id=generate_job_definition_submission_id(stable_job_id),
             )
             bundle_dir = None
         elif request.bundle_path:
@@ -60,7 +69,11 @@ def create_job(request: StableJobCreateRequest, _auth=Depends(require_auth)):
             manifest_json,
             payloads,
             bundle_dir=bundle_dir,
-            job_id=request.job_id,
+            job_id=(
+                stable_job_id
+                if request.blueprint_id
+                else request.job_id
+            ),
             resolved_configuration=request.resolved_configuration,
             storage=request.storage,
         )
@@ -91,7 +104,17 @@ def update_job(
     job_id: str, request: StableJobUpdateRequest, _auth=Depends(require_auth)
 ):
     try:
-        return _service().update_stable_job(job_id, request.attrs)
+        if request.manifest_json is None:
+            return _service().update_stable_job(job_id, request.attrs)
+        return _service().update_stable_job(
+            job_id,
+            request.attrs,
+            manifest_json=request.manifest_json,
+            payloads={
+                key: value.encode("utf-8")
+                for key, value in (request.payloads or {}).items()
+            },
+        )
     except Exception as exc:
         return handle_grpc_error(exc)
 

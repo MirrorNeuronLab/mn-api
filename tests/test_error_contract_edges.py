@@ -43,6 +43,20 @@ def test_failed_precondition_validation_problem_parses_json_report():
     assert body["validation"]["errors"] == ["gpu missing"]
 
 
+def test_coordination_store_mismatch_preserves_machine_readable_error():
+    response = handle_grpc_error(
+        RpcError(
+            grpc.StatusCode.FAILED_PRECONDITION,
+            "placement_failed: coordination_store_mismatch: node-a uses a read-only replica",
+        )
+    )
+
+    body = json.loads(response.body)
+    assert response.status_code == 412
+    assert body["error"] == "coordination_store_mismatch"
+    assert "coordination_store_mismatch" in body["detail"]
+
+
 def test_invalid_argument_validation_problem_builds_legacy_report_for_plain_detail():
     response = handle_grpc_error(
         RpcError(grpc.StatusCode.INVALID_ARGUMENT, "input_validation_failed: missing input document")

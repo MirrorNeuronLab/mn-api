@@ -72,7 +72,9 @@ model placement algorithms, blueprint domain behavior, or the browser UI.
   identifier to a run. Historical terminal records remain readable without
   forcing a rewrite.
 - Blueprint launch creates a stable job plus its first run unless an existing
-  `job_id` is supplied, and returns both identities.
+  `job_id` is supplied, and returns both identities. Existing jobs receive the
+  freshly prepared manifest and payloads through atomic bundle replacement
+  before the new run starts.
 - Blueprint-specific live controls are served by the owning blueprint service.
   `mn-api` does not translate product action routes into runtime messages.
 - Stable-job creation may resolve a catalog `blueprint_id`; only API-trusted
@@ -82,6 +84,9 @@ model placement algorithms, blueprint domain behavior, or the browser UI.
 The route definitions and generated OpenAPI document are authoritative for
 exact fields and paths. `tests/test_api_contract.py` and route-specific tests
 protect consumer-visible behavior.
+`PATCH /api/v2/jobs/{job_id}` accepts optional `manifest_json` and `payloads`
+for replacement of an inactive job's executable bundle; omitting
+`manifest_json` retains the configuration-only update behavior.
 
 ## Errors
 
