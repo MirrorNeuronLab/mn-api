@@ -67,6 +67,72 @@ class TestAPI(unittest.TestCase):
             return _ResponseShim(result)
         return _ResponseShim(result, status_code=200)
 
+    def test_public_workflow_projection_keeps_dynamic_nodes_and_sanitized_regions(self):
+        from mn_api.routes.jobs import _public_workflow_manifest_from_job
+
+        workflow = _public_workflow_manifest_from_job(
+            {
+                "job_id": "job-dynamic",
+                "graph_id": "dynamic_v1",
+                "workflow_state": {
+                    "enabled": True,
+                    "mode": "dynamic_dag",
+                    "dynamic_enabled": True,
+                    "graph_revision": 1,
+                    "step_order": ["inspect", "followup_1", "report"],
+                    "steps": {
+                        "inspect": {"id": "inspect", "status": "completed"},
+                        "followup_1": {
+                            "id": "followup_1",
+                            "status": "running",
+                            "dynamic_instance": True,
+                            "template_id": "followup_research",
+                            "region_id": "research_followups",
+                            "agent_ids": ["followup_worker"],
+                        },
+                        "report": {"id": "report", "status": "pending"},
+                    },
+                    "edges": [
+                        {
+                            "id": "inspect_to_followup",
+                            "from": "inspect",
+                            "to": "followup_1",
+                        },
+                        {
+                            "id": "followup_to_report",
+                            "from": "followup_1",
+                            "to": "report",
+                        },
+                    ],
+                    "dynamic_regions": {
+                        "research_followups": {
+                            "id": "research_followups",
+                            "strategy": "replace_path",
+                            "controller": "inspect",
+                            "exit": "report",
+                            "templates": ["followup_research"],
+                            "mutable_edges": ["inspect_to_report"],
+                        }
+                    },
+                },
+            },
+            {"status": "running"},
+        )
+
+        self.assertIsNotNone(workflow)
+        public = workflow["workflow"]
+        self.assertEqual(public["mode"], "dynamic_dag")
+        self.assertEqual(public["graph_revision"], 1)
+        self.assertEqual(
+            [step["id"] for step in public["steps"]],
+            ["inspect", "followup_1", "report"],
+        )
+        self.assertEqual(
+            [edge["id"] for edge in public["edges"]],
+            ["inspect_to_followup", "followup_to_report"],
+        )
+        self.assertNotIn("with", json.dumps(public["dynamic"]))
+
     def _mock_blueprint_submission(self, mock_client, job_id: str) -> None:
         mock_client.create_stable_job.return_value = json.dumps({"job_id": job_id})
         mock_client.start_run.side_effect = lambda stable_job_id, *, run_id, inputs: json.dumps(

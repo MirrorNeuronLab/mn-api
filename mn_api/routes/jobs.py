@@ -966,6 +966,9 @@ def _public_workflow_manifest_from_job(
                     for edge in edges
                     if str(edge.get("to") or "") == step_id
                 ],
+                "dynamic_instance": record.get("dynamic_instance") is True,
+                "template_id": record.get("template_id"),
+                "region_id": record.get("region_id"),
                 "kind": "source" if index == 0 else "sink" if index == len(step_ids) - 1 else "stage",
             }
         )
@@ -990,6 +993,17 @@ def _public_workflow_manifest_from_job(
         "policies": {"stream_mode": "live"} if job_type.lower() == "service" else {},
         "workflow": {
             "workflow_id": workflow_id,
+            "mode": str(
+                workflow_state.get("mode") or "static_dag"
+                if isinstance(workflow_state, dict)
+                else "static_dag"
+            ),
+            "graph_revision": int(
+                workflow_state.get("graph_revision") or 0
+                if isinstance(workflow_state, dict)
+                else 0
+            ),
+            "dynamic": _public_dynamic_workflow_state(workflow_state),
             "entrypoint": step_ids[0],
             "source": step_ids[0],
             "sink": step_ids[-1],
@@ -997,6 +1011,40 @@ def _public_workflow_manifest_from_job(
             "edges": edges,
         },
         "runtime": {"bindings": {}},
+    }
+
+
+def _public_dynamic_workflow_state(
+    workflow_state: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if (
+        not isinstance(workflow_state, dict)
+        or workflow_state.get("dynamic_enabled") is not True
+    ):
+        return None
+    regions = workflow_state.get("dynamic_regions")
+    public_regions = []
+    if isinstance(regions, dict):
+        for region in regions.values():
+            if isinstance(region, dict):
+                public_regions.append(
+                    {
+                        key: region[key]
+                        for key in (
+                            "id",
+                            "strategy",
+                            "controller",
+                            "exit",
+                            "templates",
+                            "mutable_edges",
+                        )
+                        if key in region
+                    }
+                )
+    return {
+        "enabled": True,
+        "apply_at": "between_steps",
+        "regions": public_regions,
     }
 
 
