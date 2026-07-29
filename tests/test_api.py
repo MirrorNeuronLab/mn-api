@@ -3187,8 +3187,8 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(manifest["metadata"]["mn_cli"]["blueprint_source"], str(repo.resolve()))
         env = manifest["nodes"][0]["config"]["environment"]
         self.assertEqual(env["MN_RUN_ID"], "run-123")
-        self.assertTrue(env["MN_RUNS_ROOT"].startswith(str(repo / "shared" / "submissions" / "run-123-")))
-        self.assertTrue(env["MN_RUNS_ROOT"].endswith("/outputs/runs"))
+        submission_root = repo / "shared" / "submissions" / env["MN_STORAGE_SUBMISSION_ID"]
+        self.assertEqual(env["MN_RUNS_ROOT"], str(submission_root / "outputs" / "runs"))
         injected_config = json.loads(env["MN_BLUEPRINT_CONFIG_JSON"])
         self.assertEqual(injected_config["identity"]["run_id"], "run-123")
         self.assertEqual(injected_config["outputs"]["run_root"], env["MN_RUNS_ROOT"])
@@ -3326,8 +3326,9 @@ class TestAPI(unittest.TestCase):
                 env = manifest["nodes"][0]["config"]["environment"]
                 injected_config = json.loads(env["MN_BLUEPRINT_CONFIG_JSON"])
                 staged_folder = injected_config["document_sources"]["folder_path"]
+                submission_root = repo / "shared" / "submissions" / env["MN_STORAGE_SUBMISSION_ID"]
                 self.assertTrue(
-                    staged_folder.startswith(str(repo / "shared" / "submissions" / f"run-{label}-")),
+                    staged_folder.startswith(str(submission_root)),
                     staged_folder,
                 )
                 self.assertTrue(staged_folder.endswith("/inputs/document_workflow/mn_local_inputs/document_sources"))

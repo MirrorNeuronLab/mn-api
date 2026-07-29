@@ -8,7 +8,7 @@ from unittest.mock import Mock
 
 import grpc
 
-from mn_api.routes import models, runs, system
+from mn_api.routes import models, system
 
 
 class TestExternalDependencyInjection(unittest.TestCase):
