@@ -61,6 +61,21 @@ def _port_accepts_connection(port: int) -> bool:
         return False
 
 
+def _single_node_resource_report(node_name: str = "test-runtime-node") -> str:
+    return json.dumps(
+        {
+            "nodes": [
+                {
+                    "name": node_name,
+                    "status": "healthy",
+                    "scheduling_eligible": True,
+                    "self": True,
+                }
+            ]
+        }
+    )
+
+
 class TestBlueprintServices(unittest.TestCase):
     @patch("mn_api.blueprints.runtime_process_environment", return_value={"PATH": "/docker"})
     @patch(
@@ -1055,6 +1070,14 @@ class TestBlueprintServices(unittest.TestCase):
                 blueprints_module,
                 "prepare_job_submission",
                 side_effect=fake_prepare_job_submission,
+            ), patch.object(
+                state.client,
+                "get_resource",
+                return_value=_single_node_resource_report(),
+            ), patch.object(
+                state.client,
+                "get_system_summary",
+                return_value=_single_node_resource_report(),
             ):
                 _manifest_json, _payload_bytes = load_blueprint_bundle(
                     repo.resolve(),
@@ -1245,6 +1268,14 @@ class TestBlueprintServices(unittest.TestCase):
                 blueprints_module,
                 "prepare_job_submission",
                 side_effect=fake_prepare_job_submission,
+            ), patch.object(
+                state.client,
+                "get_resource",
+                return_value=_single_node_resource_report(),
+            ), patch.object(
+                state.client,
+                "get_system_summary",
+                return_value=_single_node_resource_report(),
             ):
                 load_blueprint_bundle(
                     repo.resolve(),
@@ -1309,11 +1340,20 @@ class TestBlueprintServices(unittest.TestCase):
                 )
             )
 
-            manifest_json, _payload_bytes = load_blueprint_bundle(
-                repo.resolve(),
-                {"id": "worker_one", "path": "worker_one"},
-                "run-7",
-            )
+            with patch.object(
+                state.client,
+                "get_resource",
+                return_value=_single_node_resource_report(),
+            ), patch.object(
+                state.client,
+                "get_system_summary",
+                return_value=_single_node_resource_report(),
+            ):
+                manifest_json, _payload_bytes = load_blueprint_bundle(
+                    repo.resolve(),
+                    {"id": "worker_one", "path": "worker_one"},
+                    "run-7",
+                )
 
         manifest = json.loads(manifest_json)
         env = manifest["nodes"][0]["config"]["environment"]
