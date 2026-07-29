@@ -24,6 +24,14 @@ def test_blueprint_small_helpers_normalize_inputs():
         blueprints.validate_run_id("bad/run")
 
 
+def test_blueprint_run_id_omits_timestamp():
+    run_id = blueprints.create_blueprint_run_id("vc_assistant")
+
+    assert run_id.startswith("vc_assistant-")
+    assert len(run_id) == len("vc_assistant-") + 10
+    assert "T" not in run_id
+
+
 def test_cached_git_repo_path_uses_configured_cache(monkeypatch, tmp_path):
     monkeypatch.setattr("mn_api.blueprints.config_path", lambda name, default="": tmp_path / "cache")
 

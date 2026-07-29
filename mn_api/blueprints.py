@@ -148,6 +148,7 @@ from mn_sdk.submission_preparation import (
     strip_docker_model_runner_placement_requirements,
 )
 from mn_sdk.blueprint_support import (
+    make_run_id,
     render_manifest_agent_templates,
     stage_local_input_payloads_for_manifest as stage_sdk_local_input_payloads,
 )
@@ -322,8 +323,7 @@ def sanitize_blueprint_id(value: Any, fallback: str = "local_blueprint") -> str:
 
 
 def create_blueprint_run_id(blueprint_id: str) -> str:
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    return f"{blueprint_id}-{stamp}"
+    return make_run_id(blueprint_id)
 
 
 def cached_git_repo_path(repo_url: str) -> Path:
