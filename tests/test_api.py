@@ -133,6 +133,71 @@ class TestAPI(unittest.TestCase):
         )
         self.assertNotIn("with", json.dumps(public["dynamic"]))
 
+    def test_public_workflow_projection_collapses_hidden_runtime_forks_and_joins(self):
+        from mn_api.routes.jobs import _public_workflow_manifest_from_job
+
+        step_ids = [
+            "plan__research_planner",
+            "collect__identity",
+            "collect__funding",
+            "reconcile__research_reconciler",
+            "score__berkus",
+            "score__first_chicago",
+            "audit__auditor",
+        ]
+        workflow = _public_workflow_manifest_from_job(
+            {
+                "job_id": "job-expanded",
+                "graph_id": "vc_assistant_v1",
+                "workflow_state": {
+                    "workflow_id": "vc_assistant_v1",
+                    "step_order": step_ids,
+                    "steps": {step_id: {"id": step_id, "status": "pending"} for step_id in step_ids},
+                    "edges": [],
+                },
+                "runtime_topology": {
+                    "edges": [
+                        {"from_node": "plan__research_planner", "to_node": "plan__end"},
+                        {"from_node": "plan__end", "to_node": "collect__start"},
+                        {"from_node": "collect__start", "to_node": "collect__fork"},
+                        {"from_node": "collect__fork", "to_node": "collect__identity"},
+                        {"from_node": "collect__fork", "to_node": "collect__funding"},
+                        {"from_node": "collect__identity", "to_node": "collect__join"},
+                        {"from_node": "collect__funding", "to_node": "collect__join"},
+                        {"from_node": "collect__join", "to_node": "reconcile__research_reconciler"},
+                        {"from_node": "reconcile__research_reconciler", "to_node": "score__fork"},
+                        {"from_node": "score__fork", "to_node": "score__berkus"},
+                        {"from_node": "score__fork", "to_node": "score__first_chicago"},
+                        {"from_node": "score__berkus", "to_node": "score__join"},
+                        {"from_node": "score__first_chicago", "to_node": "score__join"},
+                        {"from_node": "score__join", "to_node": "audit__auditor"},
+                    ]
+                },
+            },
+            {"status": "running"},
+        )
+
+        self.assertIsNotNone(workflow)
+        public = workflow["workflow"]
+        self.assertEqual(
+            [(edge["from"], edge["to"]) for edge in public["edges"]],
+            [
+                ("plan__research_planner", "collect__identity"),
+                ("plan__research_planner", "collect__funding"),
+                ("collect__identity", "reconcile__research_reconciler"),
+                ("collect__funding", "reconcile__research_reconciler"),
+                ("reconcile__research_reconciler", "score__berkus"),
+                ("reconcile__research_reconciler", "score__first_chicago"),
+                ("score__berkus", "audit__auditor"),
+                ("score__first_chicago", "audit__auditor"),
+            ],
+        )
+        steps = {step["id"]: step for step in public["steps"]}
+        self.assertEqual(
+            steps["reconcile__research_reconciler"]["needs"],
+            ["collect__identity", "collect__funding"],
+        )
+
     def _mock_blueprint_submission(self, mock_client, job_id: str) -> None:
         mock_client.create_stable_job.return_value = json.dumps({"job_id": job_id})
         mock_client.start_run.side_effect = lambda stable_job_id, *, run_id, inputs: json.dumps(

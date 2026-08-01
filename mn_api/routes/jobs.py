@@ -1079,30 +1079,70 @@ def _public_workflow_edges(
     step_ids: list[str],
 ) -> list[dict[str, Any]]:
     raw_edges = workflow_state.get("edges") if isinstance(workflow_state, dict) else None
-    if not isinstance(raw_edges, list):
+    if not isinstance(raw_edges, list) or not raw_edges:
         topology = job.get("runtime_topology") if isinstance(job.get("runtime_topology"), dict) else {}
         raw_edges = topology.get("edges") if isinstance(topology.get("edges"), list) else []
     known_steps = set(step_ids)
-    edges: list[dict[str, Any]] = []
+    adjacency: dict[str, list[tuple[str, dict[str, Any]]]] = {}
+
+    def public_node_id(node_id: str) -> str | None:
+        if node_id in known_steps:
+            return node_id
+        for suffix in ("__start", "__end"):
+            if node_id.endswith(suffix) and node_id.removesuffix(suffix) in known_steps:
+                return node_id.removesuffix(suffix)
+        return None
+
     for raw_edge in raw_edges:
         if not isinstance(raw_edge, dict):
             continue
-        source = str(raw_edge.get("from") or raw_edge.get("from_node") or "")
-        target = str(raw_edge.get("to") or raw_edge.get("to_node") or "")
-        if source.endswith("__end"):
-            source = source.removesuffix("__end")
-        if target.endswith("__start"):
-            target = target.removesuffix("__start")
-        if source not in known_steps or target not in known_steps:
+        raw_source = str(raw_edge.get("from") or raw_edge.get("from_node") or "")
+        raw_target = str(raw_edge.get("to") or raw_edge.get("to_node") or "")
+        if not raw_source or not raw_target:
             continue
-        edges.append(
-            {
-                "id": str(raw_edge.get("id") or raw_edge.get("edge_id") or f"{source}_to_{target}"),
-                "from": source,
-                "to": target,
-                "event": str(raw_edge.get("event") or raw_edge.get("message_type") or f"{source}_completed"),
-            }
+        source = public_node_id(raw_source) or raw_source
+        target = public_node_id(raw_target) or raw_target
+        adjacency.setdefault(source, []).append((target, raw_edge))
+
+    edges: list[dict[str, Any]] = []
+    emitted_pairs: set[tuple[str, str]] = set()
+    for source in step_ids:
+        queue: deque[tuple[str, dict[str, Any], int]] = deque(
+            (target, edge, 1) for target, edge in adjacency.get(source, [])
         )
+        visited_hidden_nodes: set[str] = set()
+        while queue:
+            target, first_edge, distance = queue.popleft()
+            if target in known_steps:
+                pair = (source, target)
+                if target == source or pair in emitted_pairs:
+                    continue
+                emitted_pairs.add(pair)
+                direct = distance == 1
+                edges.append(
+                    {
+                        "id": str(
+                            first_edge.get("id")
+                            or first_edge.get("edge_id")
+                            or f"{source}_to_{target}"
+                        ) if direct else f"{source}_to_{target}",
+                        "from": source,
+                        "to": target,
+                        "event": str(
+                            first_edge.get("event")
+                            or first_edge.get("message_type")
+                            or f"{source}_completed"
+                        ),
+                    }
+                )
+                continue
+            if target in visited_hidden_nodes:
+                continue
+            visited_hidden_nodes.add(target)
+            queue.extend(
+                (next_target, first_edge, distance + 1)
+                for next_target, _edge in adjacency.get(target, [])
+            )
     return edges
 
 
