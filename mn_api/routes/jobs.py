@@ -1096,8 +1096,20 @@ def _public_workflow_edges(
     for raw_edge in raw_edges:
         if not isinstance(raw_edge, dict):
             continue
-        raw_source = str(raw_edge.get("from") or raw_edge.get("from_node") or "")
-        raw_target = str(raw_edge.get("to") or raw_edge.get("to_node") or "")
+        raw_source = str(
+            raw_edge.get("from")
+            or raw_edge.get("from_node")
+            or raw_edge.get("source")
+            or raw_edge.get("source_id")
+            or ""
+        )
+        raw_target = str(
+            raw_edge.get("to")
+            or raw_edge.get("to_node")
+            or raw_edge.get("target")
+            or raw_edge.get("target_id")
+            or ""
+        )
         if not raw_source or not raw_target:
             continue
         source = public_node_id(raw_source) or raw_source
@@ -1105,7 +1117,7 @@ def _public_workflow_edges(
         adjacency.setdefault(source, []).append((target, raw_edge))
 
     edges: list[dict[str, Any]] = []
-    emitted_pairs: set[tuple[str, str]] = set()
+    emitted_edges: set[tuple[str, str, str]] = set()
     for source in step_ids:
         queue: deque[tuple[str, dict[str, Any], int]] = deque(
             (target, edge, 1) for target, edge in adjacency.get(source, [])
@@ -1114,10 +1126,17 @@ def _public_workflow_edges(
         while queue:
             target, first_edge, distance = queue.popleft()
             if target in known_steps:
-                pair = (source, target)
-                if target == source or pair in emitted_pairs:
+                event_name = str(
+                    first_edge.get("event")
+                    or first_edge.get("message_type")
+                    or first_edge.get("label")
+                    or first_edge.get("type")
+                    or f"{source}_completed"
+                )
+                edge_key = (source, target, event_name)
+                if target == source or edge_key in emitted_edges:
                     continue
-                emitted_pairs.add(pair)
+                emitted_edges.add(edge_key)
                 direct = distance == 1
                 edges.append(
                     {
@@ -1128,11 +1147,7 @@ def _public_workflow_edges(
                         ) if direct else f"{source}_to_{target}",
                         "from": source,
                         "to": target,
-                        "event": str(
-                            first_edge.get("event")
-                            or first_edge.get("message_type")
-                            or f"{source}_completed"
-                        ),
+                        "event": event_name,
                     }
                 )
                 continue

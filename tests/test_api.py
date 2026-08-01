@@ -134,6 +134,8 @@ class TestAPI(unittest.TestCase):
         self.assertNotIn("with", json.dumps(public["dynamic"]))
 
     def test_public_workflow_projection_collapses_hidden_runtime_forks_and_joins(self):
+        from mn_sdk import workflow_progress_snapshot
+
         from mn_api.routes.jobs import _public_workflow_manifest_from_job
 
         step_ids = [
@@ -196,6 +198,23 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(
             steps["reconcile__research_reconciler"]["needs"],
             ["collect__identity", "collect__funding"],
+        )
+        snapshot = workflow_progress_snapshot(
+            workflow,
+            [],
+            job={"job_id": "job-expanded", "status": "running"},
+            summary={"status": "running"},
+            job_id="job-expanded",
+        )
+        self.assertEqual(
+            snapshot["layers"],
+            [
+                ["plan__research_planner"],
+                ["collect__identity", "collect__funding"],
+                ["reconcile__research_reconciler"],
+                ["score__berkus", "score__first_chicago"],
+                ["audit__auditor"],
+            ],
         )
 
     def _mock_blueprint_submission(self, mock_client, job_id: str) -> None:

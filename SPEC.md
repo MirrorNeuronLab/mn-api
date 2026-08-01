@@ -58,6 +58,9 @@ model placement algorithms, blueprint domain behavior, or the browser UI.
   registered, such as `services:check` and `services/check`.
 - Streaming endpoints must terminate on completion, error, timeout, or client
   disconnect and must not leak background tasks.
+- Workflow-progress polling and streams expose public step dependencies. Hidden
+  lowered runtime nodes such as start/end/fork/join nodes are transitively
+  projected into source-facing edges and layers at the API boundary.
 - Group operations use fixed Core-owned kinds (`cancel_all_jobs`, `clear_jobs`,
   `reconcile_node`, and `drain_node`). Their item events are replayable by
   sequence cursor. `cancellation_pending` is accepted durable work, while
