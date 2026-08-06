@@ -2349,22 +2349,41 @@ class TestAPI(unittest.TestCase):
                         "status": "running",
                         "workflow_state": {
                             "workflow_id": "vc_assistant_v1",
-                            "step_order": ["collect", "analyze"],
+                            "step_order": [
+                                "collect__start",
+                                "collect__public_collector",
+                                "collect__end",
+                                "analyze__start",
+                                "analyze__public_analyst",
+                                "analyze__fork_1",
+                                "analyze__join_2",
+                                "analyze__end",
+                            ],
                             "steps": {
                                 "collect": {
-                                    "status": "done",
-                                    "agent_ids": ["collect__start", "collect__public_collector", "collect__end"],
+                                    "agent_ids": [
+                                        "collect__start",
+                                        "collect__public_collector",
+                                        "collect__end",
+                                    ]
                                 },
                                 "analyze": {
-                                    "status": "queued",
                                     "agent_ids": [
                                         "analyze__start",
                                         "analyze__public_analyst",
                                         "analyze__fork_1",
                                         "analyze__join_2",
                                         "analyze__end",
-                                    ],
+                                    ]
                                 },
+                                "collect__start": {"status": "done"},
+                                "collect__public_collector": {"status": "done"},
+                                "collect__end": {"status": "done"},
+                                "analyze__start": {"status": "running"},
+                                "analyze__public_analyst": {"status": "queued"},
+                                "analyze__fork_1": {"status": "queued"},
+                                "analyze__join_2": {"status": "queued"},
+                                "analyze__end": {"status": "queued"},
                             },
                         },
                         "manifest": {
@@ -2407,7 +2426,7 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(stream_body["steps"][0]["agents"][0]["id"], "public_collector")
 
     @patch("mn_api.state.client")
-    def test_get_job_workflow_progress_marks_service_workers_idle_from_runtime_topology(self, mock_client):
+    def test_get_job_workflow_progress_does_not_expose_runtime_topology_as_public_steps(self, mock_client):
         mock_client.get_job.return_value = json.dumps(
             {
                 "job": {
@@ -2448,10 +2467,9 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertEqual(body["workflow_kind"], "service")
-        self.assertEqual(body["current_step_id"], "visual_detector")
-        self.assertEqual(body["current_step"]["status"], "idle")
-        self.assertEqual(body["steps"][0]["status"], "done")
-        self.assertEqual(body["agent_count"]["ready"], 2)
+        self.assertIsNone(body["current_step_id"])
+        self.assertEqual(body["steps"], [])
+        self.assertEqual(body["total_steps"], 0)
 
     @patch("mn_api.state.client")
     def test_stream_job_workflow_progress_emits_snapshots(self, mock_client):
@@ -3282,6 +3300,16 @@ class TestAPI(unittest.TestCase):
                 json.dumps(
                     {
                         "graph_id": "worker_one_graph",
+                        "workflow": {
+                            "workflow_id": "worker_one_v1",
+                            "steps": [
+                                {
+                                    "id": "worker",
+                                    "label": "Worker",
+                                    "run": "worker",
+                                }
+                            ],
+                        },
                         "nodes": [{"node_id": "worker", "config": {"environment": {}}}],
                         "edges": [],
                         "metadata": {},
@@ -3320,6 +3348,9 @@ class TestAPI(unittest.TestCase):
                 ):
                     response = self._sync_blueprint_run(repo, {"run_id": "run-123"})
                     job_mapping = json.loads((runs_root / "run-123" / "job.json").read_text())
+                    monitor_manifest = json.loads(
+                        (runs_root / "run-123" / "manifest.json").read_text()
+                    )
             finally:
                 self._restore_config(original)
 
@@ -3335,7 +3366,8 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(manifest["metadata"]["mn_cli"]["blueprint_id"], "worker_one")
         self.assertEqual(manifest["metadata"]["mn_cli"]["blueprint_run_id"], "run-123")
         self.assertEqual(manifest["metadata"]["mn_cli"]["blueprint_source"], str(repo.resolve()))
-        env = manifest["nodes"][0]["config"]["environment"]
+        submitted_nodes = manifest.get("nodes") or manifest["flow"]["nodes"]
+        env = submitted_nodes[0]["config"]["environment"]
         self.assertEqual(env["MN_RUN_ID"], "run-123")
         submission_root = repo / "shared" / "submissions" / env["MN_STORAGE_SUBMISSION_ID"]
         self.assertEqual(env["MN_RUNS_ROOT"], str(submission_root / "outputs" / "runs"))
@@ -3344,6 +3376,11 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(injected_config["outputs"]["run_root"], env["MN_RUNS_ROOT"])
         self.assertEqual(job_mapping["job_id"], "job-blueprint-1")
         self.assertEqual(job_mapping["blueprint_id"], "worker_one")
+        self.assertEqual(
+            [step["id"] for step in monitor_manifest["workflow"]["steps"]],
+            ["worker"],
+        )
+        self.assertNotIn("flow", monitor_manifest)
         self.assertFalse((repo / "blueprints" / "worker_one" / "runs").exists())
         self.assertEqual(payloads, {"payload.txt": b"hello"})
 

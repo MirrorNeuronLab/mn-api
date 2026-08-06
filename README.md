@@ -16,6 +16,9 @@ streams large assets to the shared blob store and packages declared
 Manifest expansion, config application, dependency localization, environment
 injection, and topology lowering use the SDK's shared manifest-preparation
 path, the same path used by `mn blueprint run`.
+After a run starts, the API uses the SDK run-store writer to persist the same
+public monitor manifest as the CLI, keeping generated control nodes and
+internal runtime staff out of the workflow step view.
 
 Blueprint launch preserves the `model_install` progress phase for compatibility
 but only validates and reports lazy policies. Automatic DMR preparation occurs
@@ -124,8 +127,14 @@ Stable jobs use `/api/v2`:
 
 - Definitions: `POST /jobs`, `GET /jobs`, `GET/PATCH /jobs/{job_id}`
 - Lifecycle: `POST /jobs/{job_id}/archive`, `POST /jobs/{job_id}/data:reset`, confirmed `DELETE /jobs/{job_id}`
-- Runs: `POST/GET /jobs/{job_id}/runs`, `GET /runs/{run_id}`, `POST /runs/{run_id}/{pause|resume|cancel}`, confirmed `DELETE /runs/{run_id}`
+- Blueprint launch: `POST /blueprints/{blueprint_id}/runs`, `GET /blueprints/launch/progress/{progress_id}`
+- Runs: `POST/GET /jobs/{job_id}/runs`, `GET /runs/{run_id}`, `GET /runs/{run_id}/monitor`, `GET /runs/{run_id}/workflow-progress`, `GET /runs/{run_id}/workflow-progress/stream`, `WS /runs/{run_id}/workflow-progress/ws`, `POST /runs/{run_id}/{pause|resume|cancel}`, confirmed `DELETE /runs/{run_id}`
+- Runtime output: `/runtime-runs/{runtime_run_id}/...` for logs, events, resources, human interaction, UI, artifacts, outputs, and observability summaries
 - Scheduling: `POST /jobs/{job_id}/schedules`
+
+Job launch, status, control, and workflow progress are v2-only consumer
+contracts. The three identities remain explicit: stable `job_id`, execution
+`run_id`/`execution_id`, and internal `runtime_run_id`.
 
 `POST /api/v2/jobs` accepts either `manifest_json`/`payloads`, a previously
 uploaded `_bundle_path`, or a catalog `blueprint_id`. Catalog creation is the

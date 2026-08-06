@@ -1023,6 +1023,7 @@ def run_blueprint_record(
             blueprint_revision=blueprint.get("revision") or None,
             blueprint_source=source,
             blueprint_path=str(validate_blueprint_bundle(repo_root, blueprint)),
+            monitor_manifest=json.loads(manifest_json),
         )
         current_config = _current_config()
         start_background_event_relay_if_needed(

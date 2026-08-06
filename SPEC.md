@@ -47,8 +47,9 @@ model placement algorithms, blueprint domain behavior, or the browser UI.
 
 ## Interface Contract
 
-- Existing application routes are rooted at `/api/v1`; stable job/run lifecycle
-  routes are rooted at `/api/v2`.
+- Runtime-wide application routes remain rooted at `/api/v1`; blueprint job
+  launch, stable job/run lifecycle, monitor snapshots, public progress, and
+  runtime-run artifacts are rooted at `/api/v2`.
 - Ordinary mapping responses receive top-level `version: 1` when a route did
   not already provide a version.
 - The surface includes runtime/system health, blueprints, bundles, jobs, runs,
@@ -71,9 +72,9 @@ model placement algorithms, blueprint domain behavior, or the browser UI.
 - Archive retains shared data. Data reset and permanent job deletion are
   explicit operations; confirmed deletion is rejected while runs are active.
   Individual run deletion never deletes job data.
-- The v1 `/jobs/{id}` contract remains execution-oriented and maps its old
-  identifier to a run. Historical terminal records remain readable without
-  forcing a rewrite.
+- Job consumers must not fall back to the v1 execution-oriented job routes.
+  Stable `job_id`, execution `run_id`/`execution_id`, and internal
+  `runtime_run_id` are separate v2 identities.
 - Blueprint launch creates a stable job plus its first run unless an existing
   `job_id` is supplied, and returns both identities. Existing jobs receive the
   freshly prepared manifest and payloads through atomic bundle replacement
@@ -81,6 +82,9 @@ model placement algorithms, blueprint domain behavior, or the browser UI.
 - Blueprint launch delegates manifest expansion, config application,
   dependency localization, environment injection, and topology lowering to the
   same SDK preparation path consumed by the CLI.
+- Blueprint launch persists the SDK's sanitized source-facing monitor manifest
+  beside the run identity mapping, matching `mn blueprint run` and preventing
+  lowered control nodes from appearing as public workflow steps.
 - Blueprint-specific live controls are served by the owning blueprint service.
   `mn-api` does not translate product action routes into runtime messages.
 - Stable-job creation may resolve a catalog `blueprint_id`; only API-trusted

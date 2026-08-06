@@ -37,6 +37,17 @@ class StartRunRequest(BaseModel):
     inputs: Dict[str, Any] = Field(default_factory=dict)
 
 
+class BlueprintRunV2Request(BaseModel):
+    version: int = 2
+    job_id: Optional[str] = None
+    run_id: Optional[str] = None
+    config_overrides: Dict[str, Any] = Field(default_factory=dict)
+    force: bool = False
+    progress_id: Optional[str] = None
+    fake_llm: bool = False
+    fake_skills: bool = False
+
+
 class ConfirmDeleteRequest(BaseModel):
     version: int = 2
     confirmed: bool = False

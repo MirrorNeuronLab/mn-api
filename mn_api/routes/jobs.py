@@ -27,9 +27,12 @@ from mn_sdk import (
     validate_requirements_spec_issues,
     validate_resource_spec_issues,
     failure_from_event,
+    is_lowered_runtime_projection as _is_lowered_runtime_projection,
     is_manifest_source,
+    matches_public_workflow_contract as _matches_public_workflow_contract,
     normalize_error,
     workflow_progress_snapshot,
+    workflow_step_ids as _workflow_step_ids,
 )
 from mn_sdk.blueprint_support.observability import read_run_resources
 from mn_sdk.staged_artifacts import (
@@ -764,6 +767,19 @@ def _workflow_progress_snapshot_for_job(job_id: str) -> dict[str, Any]:
         summary=summary,
         job_id=job_id,
     )
+    if not _workflow_step_ids(manifest):
+        snapshot.update(
+            {
+                "current_step_id": None,
+                "current_step_ids": [],
+                "current_step": None,
+                "completed_steps": 0,
+                "total_steps": 0,
+                "steps": [],
+                "edges": [],
+                "layers": [],
+            }
+        )
     _apply_default_assigned_node(snapshot, details)
     _enrich_workflow_progress_activity(snapshot, events)
     _clear_success_failure(snapshot)
@@ -803,7 +819,9 @@ def _manifest_from_job_details(details: dict[str, Any], *, run_dir: Path | None 
     run_manifest = _manifest_from_run_dir(run_dir)
     blueprint_manifest = _blueprint_manifest_from_run_mapping(run_dir)
     for candidate in (run_manifest, blueprint_manifest):
-        if _matches_public_workflow_contract(candidate, public_manifest):
+        if _matches_public_workflow_contract(
+            candidate, public_manifest
+        ) or _is_lowered_runtime_projection(public_manifest, candidate):
             return candidate
 
     direct_manifests = (
@@ -812,7 +830,9 @@ def _manifest_from_job_details(details: dict[str, Any], *, run_dir: Path | None 
         summary.get("manifest"),
     )
     for candidate in direct_manifests:
-        if _matches_public_workflow_contract(candidate, public_manifest):
+        if _matches_public_workflow_contract(
+            candidate, public_manifest
+        ) or _is_lowered_runtime_projection(public_manifest, candidate):
             return candidate
 
     manifest_ref = job.get("manifest_ref")
@@ -832,23 +852,36 @@ def _manifest_from_job_details(details: dict[str, Any], *, run_dir: Path | None 
                     break
             except OSError:
                 continue
-    if _matches_public_workflow_contract(ref_manifest, public_manifest):
+    if _matches_public_workflow_contract(
+        ref_manifest, public_manifest
+    ) or _is_lowered_runtime_projection(public_manifest, ref_manifest):
         return ref_manifest
 
     if public_manifest:
         return public_manifest
 
-    for candidate in (run_manifest, blueprint_manifest, *direct_manifests, ref_manifest):
-        if isinstance(candidate, dict) and candidate:
-            return candidate
-
-    return _fallback_manifest_from_details(details)
-
-
-def _manifest_has_workflow_flow(manifest: dict[str, Any]) -> bool:
-    workflow = manifest.get("workflow") if isinstance(manifest, dict) else None
-    steps = workflow.get("steps") if isinstance(workflow, dict) else None
-    return isinstance(steps, list) and bool(steps)
+    workflow_id = _first_string(
+        job.get("workflow_id"),
+        summary.get("workflow_id"),
+        job.get("graph_id"),
+        summary.get("graph_id"),
+        job.get("job_id"),
+        "workflow",
+    )
+    return {
+        "apiVersion": "mn.workflow/v1",
+        "kind": "Workflow",
+        "id": workflow_id,
+        "name": _first_string(
+            job.get("job_name"), summary.get("job_name"), workflow_id
+        ),
+        "workflow": {
+            "workflow_id": workflow_id,
+            "steps": [],
+            "edges": [],
+        },
+        "runtime": {"bindings": {}},
+    }
 
 
 def _manifest_from_run_dir(run_dir: Path | None) -> dict[str, Any]:
@@ -899,20 +932,6 @@ def _blueprint_manifest_from_run_mapping(run_dir: Path | None) -> dict[str, Any]
         return _read_workflow_manifest(blueprint_bundle_root(repo_root, blueprint) / "manifest.json")
     except Exception:
         return {}
-
-
-def _matches_public_workflow_contract(candidate: Any, public_manifest: dict[str, Any] | None) -> bool:
-    if not isinstance(candidate, dict) or not candidate or not _manifest_has_workflow_flow(candidate):
-        return False
-    if public_manifest is None:
-        return True
-    return _workflow_step_ids(candidate) == _workflow_step_ids(public_manifest)
-
-
-def _workflow_step_ids(manifest: dict[str, Any]) -> list[str]:
-    workflow = manifest.get("workflow") if isinstance(manifest.get("workflow"), dict) else {}
-    steps = workflow.get("steps") if isinstance(workflow.get("steps"), list) else []
-    return [str(step.get("id")) for step in steps if isinstance(step, dict) and step.get("id")]
 
 
 def _public_workflow_manifest_from_job(
@@ -1338,47 +1357,6 @@ def _known_assigned_node(value: Any) -> bool:
     if not isinstance(value, str):
         return False
     return value.strip().lower() not in {"", "unknown", "unassigned"}
-
-
-def _fallback_manifest_from_details(details: dict[str, Any]) -> dict[str, Any]:
-    job = _job_from_details(details)
-    summary = _summary_from_details(details)
-    topology = job.get("runtime_topology") if isinstance(job.get("runtime_topology"), dict) else {}
-    topology_nodes = topology.get("nodes") if isinstance(topology.get("nodes"), list) else []
-    agents = topology_nodes or (details.get("agents") if isinstance(details.get("agents"), list) else [])
-    nodes = []
-    for index, agent in enumerate(agents):
-        if not isinstance(agent, dict):
-            continue
-        agent_id = _first_string(agent.get("agent_id"), agent.get("id"), agent.get("node_id")) or f"agent_{index + 1}"
-        nodes.append(
-            {
-                "node_id": agent_id,
-                "alias": _first_string(agent.get("alias")),
-                "display_name": _first_string(agent.get("display_name"), agent.get("label")),
-                "agent_type": _first_string(agent.get("agent_type"), agent.get("type"), "worker"),
-                "role": _first_string(agent.get("role"), agent.get("current_task"), agent.get("agent_type"), "worker"),
-                "type": _first_string(agent.get("node_type"), agent.get("type")),
-                "live": agent.get("live?") if "live?" in agent else agent.get("live"),
-                "config": {
-                    "llm_config": _first_string(agent.get("model"), agent.get("llm_config"), "runtime"),
-                },
-            }
-        )
-    job_type = _first_string(job.get("job_type"), job.get("type"), summary.get("job_type"), summary.get("type"))
-    policies: dict[str, Any] = {}
-    if str(job_type or "").lower() == "service":
-        policies["stream_mode"] = "live"
-    return {
-        "id": _first_string(job.get("graph_id"), summary.get("graph_id"), job.get("job_id"), "job"),
-        "name": _first_string(job.get("job_name"), summary.get("job_name"), job.get("job_id"), "Job"),
-        "description": _first_string(summary.get("description"), job.get("description")),
-        "graph_id": _first_string(job.get("graph_id"), summary.get("graph_id")),
-        "type": job_type,
-        "job_type": job_type,
-        "policies": policies,
-        "nodes": nodes,
-    }
 
 
 def _event_key(event: dict[str, Any]) -> str:

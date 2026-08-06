@@ -74,6 +74,9 @@ from mn_sdk import (
     validate_service_spec_issues,
 )
 from mn_sdk.runtime_config import resolve_mn_home
+from mn_sdk.run_store import (
+    write_blueprint_job_mapping as sdk_write_blueprint_job_mapping,
+)
 from mn_sdk.model_preparation import (
     config_with_auto_runtime_model_profile,
     config_with_runtime_model_endpoints,
@@ -2970,25 +2973,19 @@ def write_blueprint_job_mapping(
     blueprint_revision: str | None = None,
     blueprint_source: str | None = None,
     blueprint_path: str | None = None,
+    monitor_manifest: Dict[str, Any] | None = None,
 ) -> Path:
-    run_dir = Path(shared_runs_root()).expanduser() / blueprint_run_id
-    run_dir.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "run_id": run_id,
-        "job_id": job_id,
-        "blueprint_run_id": blueprint_run_id,
-        "blueprint_id": blueprint_id,
-        "blueprint_revision": blueprint_revision,
-        "submitted_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    }
-    if blueprint_source:
-        payload["blueprint_source"] = blueprint_source
-    if blueprint_path:
-        payload["blueprint_path"] = blueprint_path
-    tmp = run_dir / f".job.json.{os.getpid()}.tmp"
-    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
-    tmp.replace(run_dir / "job.json")
-    return run_dir / "job.json"
+    return sdk_write_blueprint_job_mapping(
+        blueprint_run_id,
+        job_id,
+        run_id,
+        root=shared_runs_root(),
+        blueprint_id=blueprint_id,
+        blueprint_revision=blueprint_revision,
+        blueprint_source=blueprint_source,
+        blueprint_path=blueprint_path,
+        monitor_manifest=monitor_manifest,
+    )
 
 
 def enrich_blueprint_from_manifest(repo_root: Path, blueprint: Dict[str, Any]) -> Dict[str, Any]:

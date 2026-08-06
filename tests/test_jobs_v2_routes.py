@@ -131,6 +131,104 @@ def test_v2_job_and_run_lifecycle_routes(monkeypatch, api_client):
     assert ("delete_stable_job", "job-1", True) in runtime.calls
 
 
+def test_v2_blueprint_run_exposes_explicit_execution_identity(monkeypatch, api_client):
+    monkeypatch.setattr(
+        jobs_v2.blueprint_routes,
+        "run_blueprint",
+        lambda blueprint_id, request, _auth: {
+            "job_id": "job-researcher",
+            "run_id": "researcher-346dab41d3",
+            "id": "researcher-346dab41d3",
+            "status": "pending",
+            "blueprint": {"id": blueprint_id},
+        },
+    )
+
+    response = api_client.post(
+        "/api/v2/blueprints/researcher/runs",
+        json={"config_overrides": {"mode": "safe"}},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "job_id": "job-researcher",
+        "run_id": "researcher-346dab41d3",
+        "id": "researcher-346dab41d3",
+        "status": "pending",
+        "blueprint": {"id": "researcher"},
+        "version": 2,
+        "execution_id": "researcher-346dab41d3",
+    }
+
+
+def test_v2_run_monitor_and_progress_use_stable_and_execution_ids(monkeypatch, api_client):
+    runtime = StableJobClient()
+    monkeypatch.setattr(state, "client", runtime)
+    monkeypatch.setattr(
+        jobs_v2,
+        "_compact_job_detail",
+        lambda run_id: {
+            "job": {"job_id": run_id, "run_id": "runtime-output-run", "status": "running"},
+            "summary": {
+                "status": "running",
+                "full_detail_url": (
+                    f"/api/v1/jobs/{run_id}?include=full"
+                ),
+            },
+            "artifacts": [
+                {
+                    "url": (
+                        "/api/v1/runs/runtime-output-run/artifacts/report.json"
+                    )
+                }
+            ],
+            "recent_events": [],
+        },
+    )
+    monkeypatch.setattr(
+        jobs_v2,
+        "_workflow_progress_snapshot_for_job",
+        lambda _run_id: {
+            "schema_version": 1,
+            "job_id": "researcher-346dab41d3",
+            "run_id": "runtime-output-run",
+            "workflow_id": "researcher_v1",
+            "status": "running",
+            "steps": [
+                {"id": "detect"},
+                {"id": "research"},
+                {"id": "publish"},
+            ],
+        },
+    )
+
+    monitor = api_client.get("/api/v2/runs/researcher-346dab41d3/monitor").json()
+    progress = api_client.get(
+        "/api/v2/runs/researcher-346dab41d3/workflow-progress"
+    ).json()
+
+    assert monitor["version"] == 2
+    assert monitor["job_id"] == "job-1"
+    assert monitor["run_id"] == "researcher-346dab41d3"
+    assert monitor["runtime_run_id"] == "runtime-output-run"
+    assert monitor["summary"]["full_detail_url"] == (
+        "/api/v2/runs/researcher-346dab41d3/monitor?include=full"
+    )
+    assert monitor["artifacts"][0]["url"] == (
+        "/api/v2/runtime-runs/runtime-output-run/artifacts/report.json"
+    )
+    assert progress["version"] == 2
+    assert progress["schema_version"] == 2
+    assert progress["job_id"] == "job-1"
+    assert progress["run_id"] == "researcher-346dab41d3"
+    assert progress["runtime_run_id"] == "runtime-output-run"
+    assert [step["id"] for step in progress["steps"]] == [
+        "detect",
+        "research",
+        "publish",
+    ]
+
+
 def test_v2_create_requires_manifest_or_bundle(monkeypatch, api_client):
     runtime = StableJobClient()
     monkeypatch.setattr(state, "client", runtime)
@@ -184,6 +282,8 @@ def test_v2_create_accepts_uploaded_bundle_reference(monkeypatch, api_client):
             {"schedule": {"kind": "periodic", "every": "1h"}},
         ),
         ("GET", "/api/v2/runs/run-1", None),
+        ("GET", "/api/v2/runs/run-1/monitor", None),
+        ("GET", "/api/v2/runs/run-1/workflow-progress", None),
         ("POST", "/api/v2/runs/run-1/pause", None),
         ("POST", "/api/v2/runs/run-1/resume", None),
         ("POST", "/api/v2/runs/run-1/cancel", None),
