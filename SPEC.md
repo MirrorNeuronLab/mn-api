@@ -30,7 +30,7 @@ preparation.
 
 The API owns:
 
-- the FastAPI application and `/api/v1` route surface;
+- the FastAPI application and `/api/v2` route surface;
 - the `/api/v2` HTTP adaptation for stable-job definitions and one-to-many
   execution runs;
 - HTTP request parsing, schema validation, authentication, and request limits;
@@ -47,7 +47,7 @@ model placement algorithms, blueprint domain behavior, or the browser UI.
 
 ## Interface Contract
 
-- Runtime-wide application routes remain rooted at `/api/v1`; blueprint job
+- Runtime-wide application routes remain rooted at `/api/v2`; blueprint job
   launch, stable job/run lifecycle, monitor snapshots, public progress, and
   runtime-run artifacts are rooted at `/api/v2`.
 - Ordinary mapping responses receive top-level `version: 1` when a route did

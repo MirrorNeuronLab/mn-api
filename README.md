@@ -104,7 +104,7 @@ safe to commit.
 
 ## Endpoint Summary
 
-All paths below are under `/api/v1`.
+All paths below are under `/api/v2`.
 
 - Health/runtime: `GET /health`, `GET /runtime/status`, `GET /system/summary`, `GET /metrics`
 - Jobs: `POST /jobs`, `GET /jobs`, `GET /jobs/{job_id}`, `POST /jobs/{job_id}/cancel`, `POST /jobs/{job_id}/pause`, `POST /jobs/{job_id}/resume`, `POST /jobs/cleanup`, `POST /jobs/cancel-all`
@@ -149,7 +149,7 @@ execution. Every manual or scheduled start creates a new run; retries do not.
 The v1 `/jobs/{old_job_id}` routes remain an execution-oriented compatibility
 facade and therefore receive a run identity.
 
-`POST /api/v1/blueprints/{blueprint_id}/runs` creates an ephemeral stable job
+`POST /api/v2/blueprints/{blueprint_id}/runs` creates an ephemeral stable job
 before starting the first run unless the body supplies an existing `job_id`.
 Responses return both identities. Run cleanup never deletes the stable job's
 shared data.

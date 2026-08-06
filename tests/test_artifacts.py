@@ -29,8 +29,8 @@ class TestArtifacts(unittest.TestCase):
         self.assertEqual(ref["size_bytes"], len(content))
         self.assertEqual(ref["sha256"], hashlib.sha256(content).hexdigest())
         self.assertEqual(ref["content_type"], "application/json")
-        self.assertEqual(ref["url"], "/api/v1/runs/run%3Aone/artifacts/result.json")
-        self.assertEqual(ref["reveal_url"], "/api/v1/runs/run%3Aone/artifacts/result.json/reveal")
+        self.assertEqual(ref["url"], "/api/v2/runtime-runs/run%3Aone/artifacts/result.json")
+        self.assertEqual(ref["reveal_url"], "/api/v2/runtime-runs/run%3Aone/artifacts/result.json/reveal")
 
     def test_artifact_id_handles_rotated_and_nested_artifacts(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -49,7 +49,7 @@ class TestArtifacts(unittest.TestCase):
         self.assertEqual(report_ref["artifact_id"], "nested_output_review_packet_md")
         self.assertEqual(
             report_ref["url"],
-            "/api/v1/runs/run%20with%20spaces/artifacts/nested%20output/review%20packet.md",
+            "/api/v2/runtime-runs/run%20with%20spaces/artifacts/nested%20output/review%20packet.md",
         )
 
     def test_list_artifact_files_keeps_supported_files_in_stable_order(self):

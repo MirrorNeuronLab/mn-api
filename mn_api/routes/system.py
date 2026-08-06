@@ -35,7 +35,7 @@ from mn_api.schemas import (
 )
 
 
-router = APIRouter(prefix="/api/v1")
+router = APIRouter(prefix="/api/v2")
 
 DEFAULT_NODE_ADD_GRPC_PORTS = (55051, 50051)
 
@@ -80,7 +80,7 @@ def runtime_doctor(timeout: float = 3.0, _auth=Depends(require_auth)):
     components = list(status.get("components") or []) + foundation
     overall = _overall_status(components)
     return {
-        "version": status.get("version", 1),
+        "version": 2,
         "overall": overall,
         "checked_at": status.get("checked_at"),
         "runtime": status.get("runtime") or {},
@@ -96,7 +96,7 @@ def runtime_doctor(timeout: float = 3.0, _auth=Depends(require_auth)):
 @router.get("/system/summary")
 def get_system_summary(_auth=Depends(require_auth)):
     try:
-        return RuntimeService(state.client).system_summary()
+        return {**RuntimeService(state.client).system_summary(), "version": 2}
     except Exception as exc:
         return handle_grpc_error(exc)
 

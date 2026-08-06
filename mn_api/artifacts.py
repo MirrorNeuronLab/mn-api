@@ -22,8 +22,8 @@ def artifact_ref(run_id: str, path: Path, run_dir: Path) -> dict[str, Any]:
     quoted_run_id = urllib.parse.quote(run_id)
     ref.update(
         {
-            "url": f"/api/v1/runs/{quoted_run_id}/artifacts/{artifact_path}",
-            "reveal_url": f"/api/v1/runs/{quoted_run_id}/artifacts/{artifact_path}/reveal",
+            "url": f"/api/v2/runtime-runs/{quoted_run_id}/artifacts/{artifact_path}",
+            "reveal_url": f"/api/v2/runtime-runs/{quoted_run_id}/artifacts/{artifact_path}/reveal",
         }
     )
     return ref

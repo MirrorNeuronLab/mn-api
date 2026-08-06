@@ -204,7 +204,7 @@ def test_deployment_action_success_paths(monkeypatch):
     assert deployments.list_deployments() == {"action": "list"}
     assert deployments.get_deployment("d") == {"action": "get", "id": "d"}
     assert deployments.promote_deployment("d") == {"action": "promote", "id": "d"}
-    assert deployments.rollback_deployment("d", SimpleNamespace(version="v2", tag="stable", reason="bad"))["tag"] == "stable"
+    assert deployments.rollback_deployment("d", SimpleNamespace(target_version="v2", tag="stable", reason="bad"))["tag"] == "stable"
     assert deployments.pause_deployment("d", None)["reason"] == ""
     assert deployments.resume_deployment("d", SimpleNamespace(reason="done"))["reason"] == "done"
     assert deployments.fail_deployment("d", None)["reason"] == ""
@@ -217,7 +217,7 @@ def test_deployment_action_success_paths(monkeypatch):
     assert deployments.list_deployments().status_code == 500
     assert deployments.get_deployment("d").status_code == 500
     assert deployments.promote_deployment("d").status_code == 500
-    assert deployments.rollback_deployment("d", SimpleNamespace(version="v2", tag="stable", reason="bad")).status_code == 500
+    assert deployments.rollback_deployment("d", SimpleNamespace(target_version="v2", tag="stable", reason="bad")).status_code == 500
     assert deployments.pause_deployment("d", None).status_code == 500
     assert deployments.resume_deployment("d", None).status_code == 500
     assert deployments.fail_deployment("d", None).status_code == 500
@@ -235,7 +235,7 @@ def test_logging_paths_and_static_ui_fallbacks(monkeypatch, tmp_path):
     assert resolve_dist_dir(cwd=tmp_path) == tmp_path / "dist"
     assert resolve_dist_dir(str(tmp_path)) == tmp_path
 
-    app = create_app(dist_dir=tmp_path / "missing", api_url="http://api.local/api/v1")
+    app = create_app(dist_dir=tmp_path / "missing", api_url="http://api.local/api/v2")
     response = __import__("fastapi.testclient", fromlist=["TestClient"]).TestClient(app).get("/health")
     assert response.json()["status"] == "missing"
 

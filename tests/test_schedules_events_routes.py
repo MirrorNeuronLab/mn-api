@@ -55,9 +55,9 @@ def test_schedule_shortcuts_set_expected_kind(monkeypatch, api_client):
     monkeypatch.setattr(state, "client", fake)
 
     for path, expected_kind in (
-        ("/api/v1/schedules/periodic", "periodic"),
-        ("/api/v1/schedules/delayed", "delayed"),
-        ("/api/v1/triggers", "event"),
+        ("/api/v2/schedules/periodic", "periodic"),
+        ("/api/v2/schedules/delayed", "delayed"),
+        ("/api/v2/triggers", "event"),
     ):
         response = api_client.post(
             path,
@@ -73,13 +73,13 @@ def test_schedule_mutation_routes_proxy_reasons_and_payloads(monkeypatch, api_cl
     monkeypatch.setattr(state, "client", fake)
 
     requests = [
-        ("get", "/api/v1/schedules?kind=cron&status=paused", None, ("list_schedules", "cron", "paused")),
-        ("get", "/api/v1/schedules/sched-1", None, ("get_schedule", "sched-1")),
-        ("patch", "/api/v1/schedules/sched-1", {"attrs": {"status": "paused"}, "reason": "manual"}, "update_schedule"),
-        ("post", "/api/v1/schedules/sched-1/pause", {"reason": "manual"}, "pause_schedule"),
-        ("post", "/api/v1/schedules/sched-1/resume", {"reason": "done"}, "resume_schedule"),
-        ("delete", "/api/v1/schedules/sched-1?reason=retired", None, ("delete_schedule", "sched-1", "retired")),
-        ("post", "/api/v1/schedules/sched-1/dispatch", {"payload": {"x": 1}, "reason": "now"}, "dispatch_schedule"),
+        ("get", "/api/v2/schedules?kind=cron&status=paused", None, ("list_schedules", "cron", "paused")),
+        ("get", "/api/v2/schedules/sched-1", None, ("get_schedule", "sched-1")),
+        ("patch", "/api/v2/schedules/sched-1", {"attrs": {"status": "paused"}, "reason": "manual"}, "update_schedule"),
+        ("post", "/api/v2/schedules/sched-1/pause", {"reason": "manual"}, "pause_schedule"),
+        ("post", "/api/v2/schedules/sched-1/resume", {"reason": "done"}, "resume_schedule"),
+        ("delete", "/api/v2/schedules/sched-1?reason=retired", None, ("delete_schedule", "sched-1", "retired")),
+        ("post", "/api/v2/schedules/sched-1/dispatch", {"payload": {"x": 1}, "reason": "now"}, "dispatch_schedule"),
     ]
 
     for method, path, body, expected in requests:
@@ -96,10 +96,10 @@ def test_trigger_event_routes_proxy_runtime(monkeypatch, api_client):
     fake = FakeScheduleClient()
     monkeypatch.setattr(state, "client", fake)
 
-    emitted = api_client.post("/api/v1/events", json={"event_type": "ready", "payload": {"ok": True}, "source": "test"})
-    listed = api_client.get("/api/v1/events?limit=5")
-    triggers = api_client.get("/api/v1/triggers")
-    deleted = api_client.delete("/api/v1/triggers/sched-1?reason=done")
+    emitted = api_client.post("/api/v2/events", json={"event_type": "ready", "payload": {"ok": True}, "source": "test"})
+    listed = api_client.get("/api/v2/events?limit=5")
+    triggers = api_client.get("/api/v2/triggers")
+    deleted = api_client.delete("/api/v2/triggers/sched-1?reason=done")
 
     assert emitted.status_code == 200
     assert listed.status_code == 200
@@ -115,7 +115,7 @@ def test_schedule_create_rejects_missing_manifest_before_sdk_call(monkeypatch, a
     fake = FakeScheduleClient()
     monkeypatch.setattr(state, "client", fake)
 
-    response = api_client.post("/api/v1/schedules", json={"schedule": {"kind": "cron"}})
+    response = api_client.post("/api/v2/schedules", json={"schedule": {"kind": "cron"}})
 
     assert response.status_code == 422
     assert fake.calls == []

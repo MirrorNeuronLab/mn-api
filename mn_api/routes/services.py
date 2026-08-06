@@ -19,7 +19,7 @@ from mn_api.schemas import ServiceCheckRequest
 from mn_sdk import run_service_validation
 
 
-router = APIRouter(prefix="/api/v1")
+router = APIRouter(prefix="/api/v2")
 
 
 @router.get("/services")

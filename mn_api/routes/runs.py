@@ -35,10 +35,12 @@ from mn_api.run_store import runs_root as _runs_root
 from mn_api.schemas import RunCompareRequest
 
 
-router = APIRouter(prefix="/api/v1")
+# Runtime-output helpers are called by the v2 runtime-runs adapter. This
+# internal router is intentionally not mounted.
+router = APIRouter(prefix="/api/v2")
 
 
-@router.get("/runs")
+@router.get("/runtime-runs")
 def list_blueprint_runs(
     blueprint_id: str | None = Query(default=None),
     limit: int = Query(20, ge=1, le=500),
@@ -47,7 +49,7 @@ def list_blueprint_runs(
     return {"data": list_runs(runs_root=_runs_root(), blueprint_id=blueprint_id, limit=limit)}
 
 
-@router.post("/runs:compare")
+@router.post("/runtime-runs:compare")
 def compare_runs(req: RunCompareRequest, _auth=Depends(require_auth)):
     try:
         record_a = load_run(req.run_a, runs_root=_runs_root(), include_observability=True)
@@ -57,7 +59,7 @@ def compare_runs(req: RunCompareRequest, _auth=Depends(require_auth)):
     return _run_compare_payload(req.run_a, record_a, req.run_b, record_b)
 
 
-@router.websocket("/runs/ws")
+@router.websocket("/runtime-runs/ws")
 async def websocket_runs_monitor(
     websocket: WebSocket,
     blueprint_id: str | None = Query(default=None),
@@ -185,19 +187,19 @@ def _is_allowed_local_path(path: Path, roots: list[Path]) -> bool:
     return any(path == root or path.is_relative_to(root) for root in roots)
 
 
-@router.get("/runs/{run_id}/result")
+@router.get("/runtime-runs/{run_id}/result")
 def get_run_result(run_id: str, _auth=Depends(require_auth)):
     run_dir = _ensure_run_exists(run_id)
     return _read_required_json_file(run_dir / "result.json", "result")
 
 
-@router.get("/runs/{run_id}/final-artifact")
+@router.get("/runtime-runs/{run_id}/final-artifact")
 def get_run_final_artifact(run_id: str, _auth=Depends(require_auth)):
     run_dir = _ensure_run_exists(run_id)
     return _read_required_json_file(run_dir / "final_artifact.json", "final artifact")
 
 
-@router.get("/runs/{run_id}/export")
+@router.get("/runtime-runs/{run_id}/export")
 def export_run(
     run_id: str,
     format: str = Query("json"),
@@ -215,7 +217,7 @@ def export_run(
     raise HTTPException(status_code=400, detail="unsupported export format")
 
 
-@router.get("/runs/{run_id}/artifacts")
+@router.get("/runtime-runs/{run_id}/artifacts")
 def list_run_artifacts(run_id: str, _auth=Depends(require_auth)):
     run_dir = _ensure_run_exists(run_id)
     artifacts = [_artifact_ref(run_id, path, run_dir) for path in list_artifact_files(run_dir)]
@@ -223,7 +225,7 @@ def list_run_artifacts(run_id: str, _auth=Depends(require_auth)):
     return {"run_id": run_id, "run_dir": str(run_dir), "artifacts": artifacts}
 
 
-@router.post("/runs/{run_id}/artifacts/{artifact_path:path}/reveal")
+@router.post("/runtime-runs/{run_id}/artifacts/{artifact_path:path}/reveal")
 def reveal_run_artifact(run_id: str, artifact_path: str, _auth=Depends(require_auth)):
     run_dir = _ensure_run_exists(run_id)
     path = _artifact_file_path(run_dir, artifact_path)
@@ -234,20 +236,20 @@ def reveal_run_artifact(run_id: str, artifact_path: str, _auth=Depends(require_a
     return {"ok": True, "path": str(path), "folder": str(path.parent)}
 
 
-@router.get("/runs/{run_id}/artifacts/{artifact_path:path}")
+@router.get("/runtime-runs/{run_id}/artifacts/{artifact_path:path}")
 def get_run_artifact(run_id: str, artifact_path: str, _auth=Depends(require_auth)):
     run_dir = _ensure_run_exists(run_id)
     path = _artifact_file_path(run_dir, artifact_path)
     return FileResponse(path, media_type=artifact_content_type(path))
 
 
-@router.get("/runs/{run_id}/outputs")
+@router.get("/runtime-runs/{run_id}/outputs")
 def list_run_outputs(run_id: str, _auth=Depends(require_auth)):
     run_dir = _ensure_run_exists(run_id)
     return {"run_id": run_id, "run_dir": str(run_dir), "outputs": output_refs(run_id, run_dir)}
 
 
-@router.post("/runs/{run_id}/outputs/{output_index}/reveal")
+@router.post("/runtime-runs/{run_id}/outputs/{output_index}/reveal")
 def reveal_run_output(run_id: str, output_index: int, _auth=Depends(require_auth)):
     run_dir = _ensure_run_exists(run_id)
     path = output_path_by_index(run_dir, output_index)
@@ -260,7 +262,7 @@ def reveal_run_output(run_id: str, output_index: int, _auth=Depends(require_auth
     return {"ok": True, "path": str(path), "folder": str(path.parent)}
 
 
-@router.get("/runs/{run_id}/outputs/{output_index}")
+@router.get("/runtime-runs/{run_id}/outputs/{output_index}")
 def get_run_output(run_id: str, output_index: int, _auth=Depends(require_auth)):
     run_dir = _ensure_run_exists(run_id)
     path = output_path_by_index(run_dir, output_index)
@@ -269,7 +271,7 @@ def get_run_output(run_id: str, output_index: int, _auth=Depends(require_auth)):
     return FileResponse(path, media_type=output_content_type(path), filename=path.name)
 
 
-@router.get("/runs/{run_id}/ui")
+@router.get("/runtime-runs/{run_id}/ui")
 def get_run_ui(run_id: str, limit: int = Query(200, ge=0, le=1000), _auth=Depends(require_auth)):
     run_dir = _run_dir(run_id)
     if not run_dir.exists():
@@ -291,7 +293,7 @@ def get_run_ui(run_id: str, limit: int = Query(200, ge=0, le=1000), _auth=Depend
     }
 
 
-@router.get("/runs/{run_id}/events")
+@router.get("/runtime-runs/{run_id}/events")
 def get_run_events(
     run_id: str,
     limit: int = Query(200, ge=0, le=5000),
@@ -309,7 +311,7 @@ def get_run_events(
     return {"run_id": run_id, "data": events[-limit:] if limit else events}
 
 
-@router.get("/runs/{run_id}/logs")
+@router.get("/runtime-runs/{run_id}/logs")
 def get_run_logs(
     run_id: str,
     level: str | None = Query(default=None),
@@ -331,7 +333,7 @@ def get_run_logs(
     }
 
 
-@router.get("/runs/{run_id}/timeline")
+@router.get("/runtime-runs/{run_id}/timeline")
 def get_run_timeline(
     run_id: str,
     limit: int = Query(500, ge=0, le=5000),
@@ -351,7 +353,7 @@ def get_run_timeline(
     }
 
 
-@router.get("/runs/{run_id}/observability-summary")
+@router.get("/runtime-runs/{run_id}/observability-summary")
 def get_run_observability_summary(run_id: str, _auth=Depends(require_auth)):
     _ensure_run_exists(run_id)
     tools = _observability_tools()
@@ -361,7 +363,7 @@ def get_run_observability_summary(run_id: str, _auth=Depends(require_auth)):
     return summary
 
 
-@router.get("/runs/{run_id}/stream")
+@router.get("/runtime-runs/{run_id}/stream")
 def stream_run_observability(
     run_id: str,
     channels: str = Query("events,logs,human,resources"),
@@ -403,7 +405,7 @@ def stream_run_observability(
     return StreamingResponse(event_source(), media_type="text/event-stream")
 
 
-@router.websocket("/runs/{run_id}/stream/ws")
+@router.websocket("/runtime-runs/{run_id}/stream/ws")
 async def websocket_run_stream(
     websocket: WebSocket,
     run_id: str,
@@ -453,7 +455,7 @@ async def websocket_run_stream(
         pass
 
 
-@router.get("/runs/{run_id}/resources")
+@router.get("/runtime-runs/{run_id}/resources")
 def get_run_resources(
     run_id: str,
     window: str = Query("24h"),
@@ -470,7 +472,7 @@ def get_run_resources(
     )
 
 
-@router.get("/runs/{run_id}/resources/stream")
+@router.get("/runtime-runs/{run_id}/resources/stream")
 def stream_run_resources(
     run_id: str,
     interval: float = Query(5.0, ge=1.0, le=60.0),
@@ -488,7 +490,7 @@ def stream_run_resources(
     return StreamingResponse(event_source(), media_type="text/event-stream")
 
 
-@router.websocket("/runs/{run_id}/resources/ws")
+@router.websocket("/runtime-runs/{run_id}/resources/ws")
 async def websocket_run_resources(
     websocket: WebSocket,
     run_id: str,
@@ -510,7 +512,7 @@ async def websocket_run_resources(
         pass
 
 
-@router.get("/runs/{run_id}/human")
+@router.get("/runtime-runs/{run_id}/human")
 def get_run_human_events(
     run_id: str,
     status: str | None = Query(default=None),
@@ -526,7 +528,7 @@ def get_run_human_events(
     return {"run_id": run_id, "data": events}
 
 
-@router.post("/runs/{run_id}/human/{request_id}/response")
+@router.post("/runtime-runs/{run_id}/human/{request_id}/response")
 def post_run_human_response(
     run_id: str,
     request_id: str,
@@ -538,7 +540,7 @@ def post_run_human_response(
     return tools["record_human_response"](run_id, request_id, payload, runs_root=_runs_root())
 
 
-@router.post("/runs/{run_id}/human/{notice_id}/ack")
+@router.post("/runtime-runs/{run_id}/human/{notice_id}/ack")
 def post_run_human_ack(
     run_id: str,
     notice_id: str,
@@ -550,7 +552,7 @@ def post_run_human_ack(
     return tools["acknowledge_human_notice"](run_id, notice_id, payload or {}, runs_root=_runs_root())
 
 
-@router.get("/runs/{run_id}/ui/video")
+@router.get("/runtime-runs/{run_id}/ui/video")
 def get_run_ui_video(run_id: str, _auth=Depends(require_auth)):
     run_dir = _run_dir(run_id)
     if not run_dir.exists():

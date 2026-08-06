@@ -5,7 +5,7 @@ import json
 import pytest
 
 from mn_api import state
-from mn_api.routes import jobs_v2
+from mn_api.routes import blueprints, jobs_v2
 
 
 class StableJobClient:
@@ -132,15 +132,17 @@ def test_v2_job_and_run_lifecycle_routes(monkeypatch, api_client):
 
 
 def test_v2_blueprint_run_exposes_explicit_execution_identity(monkeypatch, api_client):
+    monkeypatch.setattr(blueprints, "find_blueprint", lambda *_args: (None, {"id": "researcher"}))
+    monkeypatch.setattr(blueprints, "record_launch_progress", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
-        jobs_v2.blueprint_routes,
-        "run_blueprint",
-        lambda blueprint_id, request, _auth: {
+        blueprints,
+        "run_blueprint_record",
+        lambda _repo_root, blueprint, _request: {
             "job_id": "job-researcher",
             "run_id": "researcher-346dab41d3",
             "id": "researcher-346dab41d3",
             "status": "pending",
-            "blueprint": {"id": blueprint_id},
+            "blueprint": blueprint,
         },
     )
 
@@ -172,13 +174,13 @@ def test_v2_run_monitor_and_progress_use_stable_and_execution_ids(monkeypatch, a
             "summary": {
                 "status": "running",
                 "full_detail_url": (
-                    f"/api/v1/jobs/{run_id}?include=full"
+                    f"/api/v2/runs/{run_id}/monitor?include=full"
                 ),
             },
             "artifacts": [
                 {
                     "url": (
-                        "/api/v1/runs/runtime-output-run/artifacts/report.json"
+                        "/api/v2/runtime-runs/runtime-output-run/artifacts/report.json"
                     )
                 }
             ],
@@ -192,7 +194,7 @@ def test_v2_run_monitor_and_progress_use_stable_and_execution_ids(monkeypatch, a
             "schema_version": 1,
             "job_id": "researcher-346dab41d3",
             "run_id": "runtime-output-run",
-            "workflow_id": "researcher_v1",
+            "workflow_id": "researcher_v2",
             "status": "running",
             "steps": [
                 {"id": "detect"},

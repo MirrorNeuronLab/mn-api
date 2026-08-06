@@ -25,7 +25,7 @@ HOP_BY_HOP_HEADERS = {
     "upgrade",
 }
 
-INTERFACE_VERSION = 1
+INTERFACE_VERSION = 2
 
 
 def resolve_dist_dir(value: str | None = None, cwd: Path | None = None) -> Path:
@@ -137,9 +137,9 @@ def start() -> None:
 
 def _target_url(path: str, query: str, upstream_api: str) -> str:
     base = upstream_api.rstrip("/")
-    base_without_version = base[:-3] if base.endswith("/v1") else base
-    encoded_path = urllib.parse.quote(path, safe="/:@")
-    target = f"{base_without_version}/{encoded_path}"
+    normalized_path = path[3:] if base.endswith("/v2") and path.startswith("v2/") else path
+    encoded_path = urllib.parse.quote(normalized_path, safe="/:@")
+    target = f"{base}/{encoded_path}"
     return f"{target}?{query}" if query else target
 
 

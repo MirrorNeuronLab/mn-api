@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from mn_api import state
 from mn_sdk.errors import AppError, normalize_exception, sanitize_context
 
-INTERFACE_VERSION = 1
+INTERFACE_VERSION = 2
 
 
 def problem_response(
@@ -178,8 +178,8 @@ def _validation_report_from_prefixed_detail(detail: str, prefix: str) -> dict | 
 def _legacy_report(detail: str, prefix: str) -> dict:
     message = _human_detail(detail, prefix)
     return {
-        "version": 1,
-        "schema_version": "validation.report/v1",
+        "version": 2,
+        "schema_version": "validation.report/v2",
         "ok": False,
         "status": "failed",
         "error_count": 1,

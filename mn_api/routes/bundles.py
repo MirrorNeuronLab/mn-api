@@ -8,7 +8,7 @@ from mn_api.bundles import save_uploaded_bundle
 from mn_api.dependencies import require_auth
 
 
-router = APIRouter(prefix="/api/v1")
+router = APIRouter(prefix="/api/v2")
 
 
 @router.post("/bundles/upload")

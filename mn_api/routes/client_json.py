@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 
 from mn_api.errors import handle_grpc_error
 
-INTERFACE_VERSION = 1
+INTERFACE_VERSION = 2
 
 
 def client_json_response(
@@ -21,7 +21,7 @@ def client_json_response(
     try:
         decoded = json.loads(call())
         if isinstance(decoded, dict) and add_version:
-            decoded.setdefault("version", INTERFACE_VERSION)
+            decoded["version"] = INTERFACE_VERSION
         if not add_version:
             return JSONResponse(content=decoded)
         return decoded

@@ -31,18 +31,18 @@ def test_model_runtime_routes_call_sdk_helpers(monkeypatch, api_client):
         lambda model_id, force=False: calls.append(("remove", model_id, force)) or {"removed": model_id},
     )
 
-    assert api_client.get("/api/v1/models").json()["installed_only"] is True
-    assert api_client.get("/api/v1/models?installed_only=false").json()["installed_only"] is False
-    assert api_client.get("/api/v1/models/catalog").json()["installed_only"] is False
-    assert api_client.get("/api/v1/models/gemma4?compatibility=true").json()["model_id"] == "gemma4"
-    assert api_client.get("/api/v1/models/gemma4/doctor").json()["ok"] is True
-    assert api_client.post("/api/v1/models/gemma4/install", json={"backend": "docker", "context_size": 8192, "force": True}).json()[
+    assert api_client.get("/api/v2/models").json()["installed_only"] is True
+    assert api_client.get("/api/v2/models?installed_only=false").json()["installed_only"] is False
+    assert api_client.get("/api/v2/models/catalog").json()["installed_only"] is False
+    assert api_client.get("/api/v2/models/gemma4?compatibility=true").json()["model_id"] == "gemma4"
+    assert api_client.get("/api/v2/models/gemma4/doctor").json()["ok"] is True
+    assert api_client.post("/api/v2/models/gemma4/install", json={"backend": "docker", "context_size": 8192, "force": True}).json()[
         "status"
     ] == "running"
-    assert api_client.post("/api/v1/models/gemma4/update", json={"force": True}).json()["updated"] == "gemma4"
-    assert api_client.post("/api/v1/models:update", json={"force": True}).json()["updated"] == "all"
-    assert api_client.delete("/api/v1/models/gemma4?force=true").json()["removed"] == "gemma4"
-    assert api_client.post("/api/v1/models/gemma4/remove", json={"force": True}).json()["removed"] == "gemma4"
+    assert api_client.post("/api/v2/models/gemma4/update", json={"force": True}).json()["updated"] == "gemma4"
+    assert api_client.post("/api/v2/models:update", json={"force": True}).json()["updated"] == "all"
+    assert api_client.delete("/api/v2/models/gemma4?force=true").json()["removed"] == "gemma4"
+    assert api_client.post("/api/v2/models/gemma4/remove", json={"force": True}).json()["removed"] == "gemma4"
 
     assert ("show", "gemma4", True) in calls
     assert ("list", True) in calls
@@ -84,14 +84,14 @@ def test_model_remote_and_proxy_routes_sync_gateway_when_requested(monkeypatch, 
         lambda model: {"id": "qwen", "model": model, "api_model": "qwen-api"},
     )
 
-    listed = api_client.get("/api/v1/models/remotes")
+    listed = api_client.get("/api/v2/models/remotes")
     added = api_client.post(
-        "/api/v1/models/remotes",
+        "/api/v2/models/remotes",
         json={"model": "ai/qwen3-coder", "base_url": "http://runtime:12434/v1", "name": "spark", "sync_gateway": True},
     )
-    removed = api_client.delete("/api/v1/models/remotes/spark?sync_gateway=true")
+    removed = api_client.delete("/api/v2/models/remotes/spark?sync_gateway=true")
     proxied = api_client.post(
-        "/api/v1/models/proxies",
+        "/api/v2/models/proxies",
         json={"model_id": "openai/gpt-4.1", "base_url": "http://127.0.0.1:4000/v1", "sync_gateway": True},
     )
 
@@ -119,8 +119,8 @@ def test_model_benchmark_rejects_missing_or_non_docker_models(monkeypatch, api_c
         lambda: {"available": True, "models": {"openai/gpt-4.1"}, "warnings": []},
     )
 
-    missing = api_client.post("/api/v1/models/gemma4/benchmark")
-    non_docker = api_client.post("/api/v1/models/proxy/benchmark")
+    missing = api_client.post("/api/v2/models/gemma4/benchmark")
+    non_docker = api_client.post("/api/v2/models/proxy/benchmark")
 
     assert missing.status_code == 404
     assert "is not installed" in missing.json()["detail"]
@@ -160,7 +160,7 @@ def test_model_benchmark_accepts_internal_alias_when_installed_name_is_equivalen
     )
 
     response = api_client.post(
-        "/api/v1/models/huggingface.co/homerquan/mn-context-engine-model-v-q4_k_m/benchmark",
+        "/api/v2/models/huggingface.co/homerquan/mn-context-engine-model-v-q4_k_m/benchmark",
         json={"prompt": "hello", "max_tokens": 32},
     )
 
@@ -204,7 +204,7 @@ def test_model_benchmark_accepts_hf_domain_variant_when_catalog_uses_huggingface
     )
 
     response = api_client.post(
-        "/api/v1/models/hf.co/jinaai/jina-embeddings-v5-text-small-retrieval%3AQ4_K_M/benchmark",
+        "/api/v2/models/hf.co/jinaai/jina-embeddings-v5-text-small-retrieval%3AQ4_K_M/benchmark",
         json={"prompt": "hello", "max_tokens": 16},
     )
 
@@ -248,7 +248,7 @@ def test_model_benchmark_accepts_latest_alias_when_installed_name_is_equivalent(
     )
 
     response = api_client.post(
-        "/api/v1/models/huggingface.co/homerquan/mn-context-engine-model-v-q4_k_m%3Alatest/benchmark",
+        "/api/v2/models/huggingface.co/homerquan/mn-context-engine-model-v-q4_k_m%3Alatest/benchmark",
         json={"prompt": "hello", "max_tokens": 32},
     )
 

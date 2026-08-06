@@ -130,4 +130,4 @@ def test_legacy_job_control_error_requires_callable_details():
     assert jobs._legacy_job_control_error(SimpleNamespace(details=lambda: "")) is None
     response = jobs._legacy_job_control_error(SimpleNamespace(details=lambda: "job cannot pause"))
     assert response.status_code == 500
-    assert json.loads(response.body) == {"version": 1, "error": "job cannot pause"}
+    assert json.loads(response.body) == {"version": 2, "error": "job cannot pause"}

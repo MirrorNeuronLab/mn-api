@@ -9,9 +9,9 @@ def test_deployment_create_encodes_payloads_and_policy(monkeypatch, api_client, 
     monkeypatch.setattr(state, "client", fake_runtime_client)
 
     response = api_client.post(
-        "/api/v1/deployments",
+        "/api/v2/deployments",
         json={
-            "manifest_json": '{"graph_id":"g","nodes":[]}',
+            "manifest_json": '{"apiVersion":"mn.workflow/v2","graph_id":"g","nodes":[]}',
             "payloads": {"payload.txt": "hello"},
             "key": "prod",
             "wait": True,
@@ -39,7 +39,7 @@ def test_deployment_create_encodes_payloads_and_policy(monkeypatch, api_client, 
 def test_deployment_create_rejects_missing_manifest_before_sdk_call(monkeypatch, api_client, fake_runtime_client):
     monkeypatch.setattr(state, "client", fake_runtime_client)
 
-    response = api_client.post("/api/v1/deployments", json={"key": "prod"})
+    response = api_client.post("/api/v2/deployments", json={"key": "prod"})
 
     assert response.status_code == 422
     assert fake_runtime_client.calls == []
@@ -49,13 +49,13 @@ def test_deployment_action_routes_proxy_runtime_service(monkeypatch, api_client,
     monkeypatch.setattr(state, "client", fake_runtime_client)
 
     cases = [
-        ("get", "/api/v1/deployments", None, "list_deployments"),
-        ("get", "/api/v1/deployments/prod", None, "get_deployment"),
-        ("post", "/api/v1/deployments/prod/promote", {}, "promote_deployment"),
-        ("post", "/api/v1/deployments/prod/rollback", {"version": "v2", "tag": "stable", "reason": "bad"}, "rollback_deployment"),
-        ("post", "/api/v1/deployments/prod/pause", {"reason": "maint"}, "pause_deployment"),
-        ("post", "/api/v1/deployments/prod/resume", {"reason": "done"}, "resume_deployment"),
-        ("post", "/api/v1/deployments/prod/fail", {"reason": "manual"}, "fail_deployment"),
+        ("get", "/api/v2/deployments", None, "list_deployments"),
+        ("get", "/api/v2/deployments/prod", None, "get_deployment"),
+        ("post", "/api/v2/deployments/prod/promote", {}, "promote_deployment"),
+        ("post", "/api/v2/deployments/prod/rollback", {"target_version": "v2", "tag": "stable", "reason": "bad"}, "rollback_deployment"),
+        ("post", "/api/v2/deployments/prod/pause", {"reason": "maint"}, "pause_deployment"),
+        ("post", "/api/v2/deployments/prod/resume", {"reason": "done"}, "resume_deployment"),
+        ("post", "/api/v2/deployments/prod/fail", {"reason": "manual"}, "fail_deployment"),
     ]
 
     for method, path, body, expected_call in cases:
@@ -69,10 +69,10 @@ def test_deployment_bundle_path_uses_uploaded_bundle(monkeypatch, api_client, fa
     monkeypatch.setattr(state, "client", fake_runtime_client)
     monkeypatch.setattr(
         "mn_api.routes.deployments.load_uploaded_bundle",
-        lambda bundle_path, upload_root: ('{"graph_id":"from-bundle"}', {"bundle.txt": b"payload"}),
+        lambda bundle_path, upload_root: ('{"apiVersion":"mn.workflow/v2","graph_id":"from-bundle"}', {"bundle.txt": b"payload"}),
     )
 
-    response = api_client.post("/api/v1/deployments", json={"_bundle_path": "/tmp/bundle.zip", "key": "bundle"})
+    response = api_client.post("/api/v2/deployments", json={"_bundle_path": "/tmp/bundle.zip", "key": "bundle"})
 
     assert response.status_code == 200
     call = fake_runtime_client.calls[0]

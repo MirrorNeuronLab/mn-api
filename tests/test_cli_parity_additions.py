@@ -30,7 +30,7 @@ def test_unfinished_jobs_route_marks_recovery_state(monkeypatch):
 
     monkeypatch.setattr(state, "client", FakeClient())
 
-    response = TestClient(app).get("/api/v1/jobs/unfinished")
+    response = TestClient(app).get("/api/v2/jobs/unfinished")
 
     assert response.status_code == 200
     assert response.json()["data"][0]["recovery_status"] == "needs_resume"
@@ -55,7 +55,7 @@ def test_nodes_route_strips_restart_history(monkeypatch):
 
     monkeypatch.setattr(state, "client", FakeClient())
 
-    response = TestClient(app).get("/api/v1/nodes")
+    response = TestClient(app).get("/api/v2/nodes")
 
     assert response.status_code == 200
     node = response.json()["nodes"][0]
@@ -66,7 +66,7 @@ def test_runtime_health_and_doctor_routes(monkeypatch):
     monkeypatch.setattr(
         "mn_api.routes.system.collect_runtime_status",
         lambda **_kwargs: {
-            "version": 1,
+            "version": 2,
             "overall": "passing",
             "checked_at": "2026-07-06T00:00:00Z",
             "runtime": {},
@@ -82,8 +82,8 @@ def test_runtime_health_and_doctor_routes(monkeypatch):
 
     client = TestClient(app)
 
-    health = client.get("/api/v1/runtime/health")
-    doctor = client.get("/api/v1/runtime/doctor")
+    health = client.get("/api/v2/runtime/health")
+    doctor = client.get("/api/v2/runtime/doctor")
 
     assert health.status_code == 200
     assert health.json()["overall"] == "passing"
@@ -98,7 +98,7 @@ def test_resource_ports_route(monkeypatch):
         lambda: [{"name": "api", "host": "127.0.0.1", "port": "54001"}],
     )
 
-    response = TestClient(app).get("/api/v1/resource/ports")
+    response = TestClient(app).get("/api/v2/resource/ports")
 
     assert response.status_code == 200
     assert response.json()["ports"][0]["name"] == "api"
@@ -118,7 +118,7 @@ def test_service_check_route_uses_bundle_and_sdk_validation(monkeypatch, tmp_pat
 
     monkeypatch.setattr("mn_api.routes.services.run_service_validation", fake_validation)
 
-    response = TestClient(app).post("/api/v1/services:check", json={"path": str(bundle)})
+    response = TestClient(app).post("/api/v2/services:check", json={"path": str(bundle)})
 
     assert response.status_code == 200
     assert response.json()["ok"] is True
@@ -132,12 +132,12 @@ def test_model_remote_and_proxy_routes(monkeypatch, tmp_path):
     client = TestClient(app)
 
     added = client.post(
-        "/api/v1/models/remotes",
+        "/api/v2/models/remotes",
         json={"model": "ai/qwen3-coder", "base_url": "http://192.168.4.173:12434/v1", "name": "spark"},
     )
-    listed = client.get("/api/v1/models/remotes")
-    removed = client.delete("/api/v1/models/remotes/spark")
-    proxied = client.post("/api/v1/models/proxies", json={"model_id": "openai/gpt-4.1", "base_url": "http://127.0.0.1:4000/v1"})
+    listed = client.get("/api/v2/models/remotes")
+    removed = client.delete("/api/v2/models/remotes/spark")
+    proxied = client.post("/api/v2/models/proxies", json={"model_id": "openai/gpt-4.1", "base_url": "http://127.0.0.1:4000/v1"})
 
     assert added.status_code == 200
     assert added.json()["remote"]["name"] == "spark"
@@ -155,10 +155,10 @@ def test_run_list_export_and_compare_routes(tmp_path):
     _write_run(runs_root, "run-b", blueprint_id="bp", status="failed", artifact={"score": 2})
     client = TestClient(app)
 
-    listed = client.get("/api/v1/runs?blueprint_id=bp")
-    exported_json = client.get("/api/v1/runs/run-a/export")
-    exported_markdown = client.get("/api/v1/runs/run-a/export?format=markdown")
-    compared = client.post("/api/v1/runs:compare", json={"run_a": "run-a", "run_b": "run-b"})
+    listed = client.get("/api/v2/runtime-runs?blueprint_id=bp")
+    exported_json = client.get("/api/v2/runtime-runs/run-a/export")
+    exported_markdown = client.get("/api/v2/runtime-runs/run-a/export?format=markdown")
+    compared = client.post("/api/v2/runtime-runs:compare", json={"run_a": "run-a", "run_b": "run-b"})
 
     assert listed.status_code == 200
     assert [row["run_id"] for row in listed.json()["data"]] == ["run-b", "run-a"]
@@ -182,7 +182,7 @@ def test_job_workflow_progress_websocket(monkeypatch):
         lambda job_id: {"job_id": job_id, "status": "running"},
     )
 
-    with TestClient(app).websocket_connect("/api/v1/jobs/job-1/workflow-progress/ws") as websocket:
+    with TestClient(app).websocket_connect("/api/v2/jobs/job-1/workflow-progress/ws") as websocket:
         assert websocket.receive_json() == {"event": "snapshot", "data": {"job_id": "job-1", "status": "running"}}
         assert websocket.receive_json()["event"] == "event"
         assert websocket.receive_json()["event"] == "snapshot"
@@ -204,11 +204,11 @@ def test_run_websockets(monkeypatch, tmp_path):
     )
 
     client = TestClient(app)
-    with client.websocket_connect("/api/v1/runs/ws") as websocket:
+    with client.websocket_connect("/api/v2/runtime-runs/ws") as websocket:
         assert websocket.receive_json() == {"event": "runs", "data": [{"run_id": "run-1"}]}
-    with client.websocket_connect("/api/v1/runs/run-1/stream/ws") as websocket:
+    with client.websocket_connect("/api/v2/runtime-runs/run-1/stream/ws") as websocket:
         assert websocket.receive_json()["id"] == "event-1"
-    with client.websocket_connect("/api/v1/runs/run-1/resources/ws") as websocket:
+    with client.websocket_connect("/api/v2/runtime-runs/run-1/resources/ws") as websocket:
         assert websocket.receive_json() == {"event": "resources", "data": {"run_id": "run-1", "sample_count": 1}}
 
 
@@ -223,9 +223,9 @@ def test_websocket_auth_accepts_query_token(monkeypatch):
 
     client = TestClient(app)
     with pytest.raises(WebSocketDisconnect):
-        with client.websocket_connect("/api/v1/runs/ws"):
+        with client.websocket_connect("/api/v2/runtime-runs/ws"):
             pass
-    with client.websocket_connect("/api/v1/runs/ws?token=secret") as websocket:
+    with client.websocket_connect("/api/v2/runtime-runs/ws?token=secret") as websocket:
         assert websocket.receive_json() == {"event": "runs", "data": []}
 
     monkeypatch.setattr(state, "config", original_config)

@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 from mn_sdk import (
     RuntimeService,
     generate_job_definition_submission_id,
@@ -18,15 +17,16 @@ from mn_api.blueprints import create_blueprint_run_id, find_blueprint, load_blue
 from mn_api.bundles import load_uploaded_bundle
 from mn_api.dependencies import require_auth, require_websocket_auth
 from mn_api.errors import handle_grpc_error
-from mn_api.routes import blueprints as blueprint_routes
 from mn_api.routes import runs as runtime_run_routes
 from mn_api.routes.jobs import (
+    cancel_all_jobs as cancel_all_runtime_runs,
+    cleanup_jobs as cleanup_runtime_runs,
+    get_operation as get_runtime_operation,
+    unfinished_jobs as list_unfinished_runtime_jobs,
     _compact_job_detail,
     _workflow_progress_snapshot_for_job,
 )
 from mn_api.schemas import (
-    BlueprintRunRequest,
-    BlueprintRunV2Request,
     ConfirmDeleteRequest,
     JobScheduleCreateRequest,
     StableJobCreateRequest,
@@ -43,6 +43,17 @@ def _service() -> RuntimeService:
     return RuntimeService(state.client)
 
 
+def _records(payload: object, *keys: str) -> list[dict]:
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if isinstance(payload, dict):
+        for key in keys:
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+    return []
+
+
 def _v2_run_record(run_id: str) -> dict:
     record = _service().get_run(run_id)
     return record if isinstance(record, dict) else json.loads(record)
@@ -53,13 +64,6 @@ def _v2_payload(value):
         return {key: _v2_payload(item) for key, item in value.items()}
     if isinstance(value, list):
         return [_v2_payload(item) for item in value]
-    if isinstance(value, str):
-        rewritten = value.replace("/api/v1/runs/", "/api/v2/runtime-runs/")
-        return re.sub(
-            r"/api/v1/jobs/([^?]+)(\?.*)?$",
-            r"/api/v2/runs/\1/monitor\2",
-            rewritten,
-        )
     return value
 
 
@@ -100,53 +104,6 @@ def _v2_monitor_snapshot(run_id: str) -> dict:
 
 def _sse_event(event: str, payload: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n"
-
-
-@router.post("/blueprints/{blueprint_id}/runs")
-def run_blueprint(
-    blueprint_id: str,
-    request: BlueprintRunV2Request,
-    _auth=Depends(require_auth),
-):
-    launch_request = BlueprintRunRequest(
-        version=2,
-        job_id=request.job_id,
-        run_id=request.run_id,
-        config_overrides=request.config_overrides,
-        force=request.force,
-        progress_id=request.progress_id,
-        fake_llm=request.fake_llm,
-        fake_skills=request.fake_skills,
-    )
-    result = blueprint_routes.run_blueprint(blueprint_id, launch_request, _auth)
-    if isinstance(result, JSONResponse):
-        return result
-    execution_id = str(result.get("run_id") or result.get("id") or "")
-    response = {
-        **result,
-        "version": 2,
-        "execution_id": execution_id or None,
-        "run_id": execution_id or None,
-    }
-    if result.get("progress_id"):
-        response["progress_url"] = (
-            f"/api/v2/blueprints/launch/progress/{result['progress_id']}"
-        )
-    else:
-        response.pop("progress_url", None)
-    return _v2_payload(response)
-
-
-@router.get("/blueprints/launch/progress/{progress_id}")
-def get_blueprint_launch_progress(progress_id: str, _auth=Depends(require_auth)):
-    result = blueprint_routes.launch_progress_snapshot(progress_id)
-    return _v2_payload(
-        {
-            **result,
-            "version": 2,
-            "schema_version": "mn.launch_progress.v2",
-        }
-    )
 
 
 @router.post("/jobs")
@@ -210,6 +167,60 @@ def list_jobs(include_archived: bool = False, _auth=Depends(require_auth)):
         return _service().list_stable_jobs(include_archived=include_archived)
     except Exception as exc:
         return handle_grpc_error(exc)
+
+
+@router.get("/jobs/unfinished")
+def list_unfinished_jobs(_auth=Depends(require_auth)):
+    return list_unfinished_runtime_jobs(_auth)
+
+
+@router.get("/runs")
+def list_all_runs(
+    include_terminal: bool = True,
+    limit: int = Query(200, ge=1, le=1000),
+    _auth=Depends(require_auth),
+):
+    try:
+        service = _service()
+        runs: list[dict] = []
+        for job in _records(service.list_stable_jobs(include_archived=True), "jobs", "data"):
+            job_id = str(job.get("job_id") or "").strip()
+            if not job_id:
+                continue
+            runs.extend(_records(service.list_runs(job_id), "runs", "data"))
+        if not include_terminal:
+            runs = [
+                run
+                for run in runs
+                if str(run.get("status") or "").lower() not in _TERMINAL_RUN_STATUSES
+            ]
+        runs.sort(
+            key=lambda run: str(
+                run.get("updated_at") or run.get("started_at") or run.get("submitted_at") or ""
+            ),
+            reverse=True,
+        )
+        return {"version": 2, "runs": runs[:limit]}
+    except Exception as exc:
+        return handle_grpc_error(exc)
+
+
+@router.post("/runs:cleanup")
+def cleanup_runs(_auth=Depends(require_auth)):
+    result = cleanup_runtime_runs(_auth)
+    return {**result, "version": 2} if isinstance(result, dict) else result
+
+
+@router.post("/runs:cancel-all")
+def cancel_all_runs(_auth=Depends(require_auth)):
+    result = cancel_all_runtime_runs(_auth)
+    return {**result, "version": 2} if isinstance(result, dict) else result
+
+
+@router.get("/operations/{operation_id}")
+def get_operation(operation_id: str, _auth=Depends(require_auth)):
+    result = get_runtime_operation(operation_id, _auth)
+    return {**result, "version": 2} if isinstance(result, dict) else result
 
 
 @router.get("/jobs/{job_id}")

@@ -1269,7 +1269,7 @@ def local_blueprint_from_path(path: str) -> tuple[Path, Dict[str, Any]]:
 
     metadata = as_dict(manifest.get("metadata"))
     identity = as_dict(manifest.get("identity"))
-    workflow_manifest = manifest.get("apiVersion") == "mn.workflow/v1" or manifest.get("kind") == "Workflow" or isinstance(manifest.get("workflow"), dict)
+    workflow_manifest = manifest.get("apiVersion") == "mn.workflow/v2" or manifest.get("kind") == "Workflow" or isinstance(manifest.get("workflow"), dict)
     raw_id = (
         metadata.get("blueprint_id")
         or identity.get("blueprint_id")
@@ -1322,8 +1322,8 @@ def run_mn_blueprint_validate(bundle_root: Path, *, timeout_seconds: int = 120) 
         combined = "\n".join(part for part in [output, error_output] if part).strip()
         if result.returncode == 0:
             report = {
-                "version": 1,
-                "schema_version": "validation.report/v1",
+                "version": 2,
+                "schema_version": "validation.report/v2",
                 "ok": True,
                 "status": "passed",
                 "errors": [],
@@ -1388,8 +1388,8 @@ def parse_validation_json(output: str) -> Dict[str, Any] | None:
 def validation_failure_report(message: str) -> Dict[str, Any]:
     message = message.strip() or "mn blueprint validate failed"
     return {
-        "version": 1,
-        "schema_version": "validation.report/v1",
+        "version": 2,
+        "schema_version": "validation.report/v2",
         "ok": False,
         "status": "failed",
         "error_count": 1,

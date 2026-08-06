@@ -15,7 +15,7 @@ def test_health_reports_dist_dir(tmp_path: Path):
     dist.mkdir()
     (dist / "index.html").write_text("<div id=\"root\"></div>", encoding="utf-8")
 
-    client = TestClient(create_app(dist_dir=dist, api_url="http://api.local/api/v1"))
+    client = TestClient(create_app(dist_dir=dist, api_url="http://api.local/api/v2"))
 
     response = client.get("/health")
 
@@ -23,7 +23,7 @@ def test_health_reports_dist_dir(tmp_path: Path):
     assert response.json() == {
         "status": "ok",
         "component": "web-ui",
-        "api_base_url": "http://api.local/api/v1",
+        "api_base_url": "http://api.local/api/v2",
         "dist_dir": str(dist),
     }
 
@@ -35,7 +35,7 @@ def test_serves_static_files_and_spa_fallback(tmp_path: Path):
     (dist / "index.html").write_text("INDEX", encoding="utf-8")
     (assets / "app.js").write_text("console.log('ok')", encoding="utf-8")
 
-    client = TestClient(create_app(dist_dir=dist, api_url="http://api.local/api/v1"))
+    client = TestClient(create_app(dist_dir=dist, api_url="http://api.local/api/v2"))
 
     assert client.get("/").text == "INDEX"
     assert client.get("/assets/app.js").text == "console.log('ok')"
@@ -53,10 +53,10 @@ def test_proxy_forwards_api_requests(tmp_path: Path):
     try:
         client = TestClient(create_app(dist_dir=dist, api_url=server.base_url))
 
-        response = client.post("/api/v1/health?verbose=true", json={"hello": "world"})
+        response = client.post("/api/v2/health?verbose=true", json={"hello": "world"})
 
         assert response.status_code == 201
-        assert response.json() == {"status": "ok", "path": "/api/v1/health", "query": "verbose=true"}
+        assert response.json() == {"status": "ok", "path": "/api/v2/health", "query": "verbose=true"}
         assert server.last_body == b'{"hello":"world"}'
     finally:
         server.stop()
@@ -72,7 +72,7 @@ def test_proxy_injects_configured_api_token(tmp_path: Path, monkeypatch):
     try:
         client = TestClient(create_app(dist_dir=dist, api_url=server.base_url))
 
-        response = client.post("/api/v1/jobs", json={})
+        response = client.post("/api/v2/jobs", json={})
 
         assert response.status_code == 201
         assert server.last_authorization == "Bearer local-api-token"
@@ -91,7 +91,7 @@ class _ApiServer:
     @property
     def base_url(self) -> str:
         host, port = self.httpd.server_address
-        return f"http://{host}:{port}/api/v1"
+        return f"http://{host}:{port}/api/v2"
 
     def start(self) -> None:
         self.thread.start()

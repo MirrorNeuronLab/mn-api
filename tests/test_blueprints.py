@@ -206,6 +206,7 @@ class TestBlueprintServices(unittest.TestCase):
             (manifest_dir / "manifest.json").write_text(
                 json.dumps(
                     {
+                    "apiVersion": "mn.workflow/v2",
                         "metadata": {
                             "init_config_review": {
                                 "required": True,
@@ -280,12 +281,13 @@ class TestBlueprintServices(unittest.TestCase):
     ):
         mock_install.return_value = {"compatibility": {"backend": "llama.cpp"}}
         mock_installed.return_value = False
-        mock_ledger.return_value = {"version": 1, "models": {}}
+        mock_ledger.return_value = {"version": 2, "models": {}}
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
             bundle = repo / "worker_one"
             bundle.mkdir()
             (bundle / "manifest.json").write_text(json.dumps({
+                    "apiVersion": "mn.workflow/v2",
                 "metadata": {"blueprint_id": "worker_one"},
                 "nodes": [],
                 "edges": [],
@@ -328,7 +330,7 @@ class TestBlueprintServices(unittest.TestCase):
     ):
         mock_install.return_value = {"compatibility": {"backend": "llama.cpp"}}
         mock_installed.return_value = False
-        mock_ledger.return_value = {"version": 1, "models": {}}
+        mock_ledger.return_value = {"version": 2, "models": {}}
         mock_catalog.return_value = {
             "gemma4:e2b": {
                 "id": "gemma4:e2b",
@@ -356,6 +358,7 @@ class TestBlueprintServices(unittest.TestCase):
                 }
             }))
             (bundle / "manifest.json").write_text(json.dumps({
+                    "apiVersion": "mn.workflow/v2",
                 "metadata": {"blueprint_id": "worker_one"},
                 "nodes": [],
                 "edges": [],
@@ -420,6 +423,7 @@ class TestBlueprintServices(unittest.TestCase):
                 )
             )
             (bundle / "manifest.json").write_text(json.dumps({
+                    "apiVersion": "mn.workflow/v2",
                 "metadata": {"blueprint_id": "worker_one"},
                 "nodes": [],
                 "edges": [],
@@ -496,12 +500,13 @@ class TestBlueprintServices(unittest.TestCase):
     ):
         mock_install.side_effect = RuntimeError("pull failed")
         mock_installed.return_value = False
-        mock_ledger.return_value = {"version": 1, "models": {}}
+        mock_ledger.return_value = {"version": 2, "models": {}}
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
             bundle = repo / "worker_one"
             bundle.mkdir()
             (bundle / "manifest.json").write_text(json.dumps({
+                    "apiVersion": "mn.workflow/v2",
                 "metadata": {"blueprint_id": "worker_one"},
                 "nodes": [],
                 "edges": [],
@@ -545,12 +550,13 @@ class TestBlueprintServices(unittest.TestCase):
                 "backend": "llama.cpp",
             }
         }
-        mock_ledger.return_value = {"version": 1, "models": {}}
+        mock_ledger.return_value = {"version": 2, "models": {}}
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
             bundle = repo / "worker_one"
             bundle.mkdir()
             (bundle / "manifest.json").write_text(json.dumps({
+                    "apiVersion": "mn.workflow/v2",
                 "metadata": {"blueprint_id": "worker_one"},
                 "nodes": [],
                 "edges": [],
@@ -600,7 +606,7 @@ class TestBlueprintServices(unittest.TestCase):
                 "aliases": ["nemotron3", "docker.io/docker.io/ai/nemotron3:latest"],
             }
         }
-        mock_ledger.return_value = {"version": 1, "models": {}}
+        mock_ledger.return_value = {"version": 2, "models": {}}
         observed: dict[str, dict] = {}
 
         def gateway_sync(summary):
@@ -612,7 +618,7 @@ class TestBlueprintServices(unittest.TestCase):
             repo = Path(tmpdir)
             remotes_path = repo / "model-remotes.json"
             remotes_path.write_text(json.dumps({
-                "version": 1,
+                "version": 2,
                 "remotes": {
                     "spark": {
                         "name": "spark",
@@ -628,6 +634,7 @@ class TestBlueprintServices(unittest.TestCase):
             bundle = repo / "vc_assistant"
             bundle.mkdir()
             (bundle / "manifest.json").write_text(json.dumps({
+                    "apiVersion": "mn.workflow/v2",
                 "metadata": {"blueprint_id": "vc_assistant"},
                 "nodes": [],
                 "edges": [],
@@ -690,7 +697,7 @@ class TestBlueprintServices(unittest.TestCase):
                 "requirements": {"min_vram_gb": 48, "min_unified_memory_gb": 48},
             },
         }
-        mock_ledger.return_value = {"version": 1, "models": {}}
+        mock_ledger.return_value = {"version": 2, "models": {}}
         resources = {
             "nodes": [
                 {
@@ -738,6 +745,7 @@ class TestBlueprintServices(unittest.TestCase):
                 }
             }))
             (bundle / "manifest.json").write_text(json.dumps({
+                    "apiVersion": "mn.workflow/v2",
                 "metadata": {"blueprint_id": "vc_assistant"},
                 "nodes": [],
                 "edges": [],
@@ -789,7 +797,7 @@ class TestBlueprintServices(unittest.TestCase):
                 "requirements": {"min_vram_gb": 48, "min_unified_memory_gb": 48},
             }
         }
-        mock_ledger.return_value = {"version": 1, "models": {}}
+        mock_ledger.return_value = {"version": 2, "models": {}}
         resources = {
             "nodes": [
                 {
@@ -836,6 +844,7 @@ class TestBlueprintServices(unittest.TestCase):
             config_dir.mkdir(parents=True)
             (config_dir / "default.json").write_text(json.dumps({"llm": {"enabled": True, "model": "medium", "provider": "docker_model_runner"}}))
             (bundle / "manifest.json").write_text(json.dumps({
+                    "apiVersion": "mn.workflow/v2",
                 "metadata": {"blueprint_id": "vc_assistant"}, "nodes": [], "edges": [],
                 "runtime": {"models": {"primary": {"provider": "docker_model_runner", "model": "medium"}}},
             }))
@@ -881,7 +890,8 @@ class TestBlueprintServices(unittest.TestCase):
             repo = Path(tmpdir)
             bundle = repo / "worker_one"
             bundle.mkdir()
-            (bundle / "manifest.json").write_text(json.dumps({"nodes": [], "edges": []}))
+            (bundle / "manifest.json").write_text(json.dumps({
+                    "apiVersion": "mn.workflow/v2","nodes": [], "edges": []}))
             summary = install_blueprint_runtime_models(
                 repo.resolve(), {"id": "worker_one", "path": "worker_one"}
             )
@@ -992,6 +1002,7 @@ class TestBlueprintServices(unittest.TestCase):
             (bundle / "manifest.json").write_text(
                 json.dumps(
                     {
+                    "apiVersion": "mn.workflow/v2",
                         "graph_id": "worker_graph",
                         "nodes": [
                             {
@@ -1015,7 +1026,7 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertEqual(manifest["run_id"], "run-7")
         self.assertEqual(manifest["metadata"]["blueprint_id"], "worker_one")
         self.assertEqual(manifest["metadata"]["blueprint_revision"], "rev-7")
-        env = manifest["nodes"][0]["config"]["environment"]
+        env = manifest["flow"]["nodes"][0]["config"]["environment"]
         injected_config = json.loads(env["MN_BLUEPRINT_CONFIG_JSON"])
         self.assertEqual(injected_config["vl_model"], {"model": "overwrite", "base_url": "http://local"})
         self.assertEqual(env["VL_MODEL_NAME"], "overwrite")
@@ -1036,10 +1047,10 @@ class TestBlueprintServices(unittest.TestCase):
             (bundle / "manifest.json").write_text(
                 json.dumps(
                     {
-                        "apiVersion": "mn.workflow/v1",
+                        "apiVersion": "mn.workflow/v2",
                         "kind": "Workflow",
                         "workflow": {
-                            "workflow_id": "worker_one_v1",
+                            "workflow_id": "worker_one_v2",
                             "steps": [{"id": "review", "run": "review"}],
                         },
                         "agents": {"nodes": [{"node_id": "review", "config": {}}]},
@@ -1093,6 +1104,7 @@ class TestBlueprintServices(unittest.TestCase):
             (bundle / "manifest.json").write_text(
                 json.dumps(
                     {
+                    "apiVersion": "mn.workflow/v2",
                         "graph_id": "worker_graph",
                         "nodes": [
                             {
@@ -1161,6 +1173,7 @@ class TestBlueprintServices(unittest.TestCase):
             (bundle / "manifest.json").write_text(
                 json.dumps(
                     {
+                    "apiVersion": "mn.workflow/v2",
                         "graph_id": "host_worker",
                         "nodes": [
                             {
@@ -1225,7 +1238,7 @@ class TestBlueprintServices(unittest.TestCase):
                 )
 
         manifest = json.loads(manifest_json)
-        python_environment = manifest["nodes"][0]["config"]["python_environment"]
+        python_environment = manifest["flow"]["nodes"][0]["config"]["python_environment"]
         self.assertEqual(
             python_environment["path"],
             "/runtime/shared/blueprint-python-envs/env-1",
@@ -1278,6 +1291,7 @@ class TestBlueprintServices(unittest.TestCase):
             (bundle / "manifest.json").write_text(
                 json.dumps(
                     {
+                    "apiVersion": "mn.workflow/v2",
                         "graph_id": "vc_assistant",
                         "nodes": [
                             {
@@ -1370,6 +1384,7 @@ class TestBlueprintServices(unittest.TestCase):
             (bundle / "manifest.json").write_text(
                 json.dumps(
                     {
+                    "apiVersion": "mn.workflow/v2",
                         "graph_id": "worker_graph",
                         "nodes": [
                             {
@@ -1400,7 +1415,7 @@ class TestBlueprintServices(unittest.TestCase):
                 )
 
         manifest = json.loads(manifest_json)
-        env = manifest["nodes"][0]["config"]["environment"]
+        env = manifest["flow"]["nodes"][0]["config"]["environment"]
         self.assertEqual(env["MN_LLM_PROVIDER"], "litellm")
         self.assertEqual(env["MN_LLM_MODEL"], "docker.io/ai/gemma4:E2B")
         self.assertEqual(env["MN_LLM_API_BASE"], "http://127.0.0.1:4000/v1")
@@ -1438,6 +1453,7 @@ class TestBlueprintServices(unittest.TestCase):
             (bundle / "manifest.json").write_text(
                 json.dumps(
                     {
+                    "apiVersion": "mn.workflow/v2",
                         "graph_id": "tax_worker",
                         "nodes": [
                             {
@@ -1465,7 +1481,7 @@ class TestBlueprintServices(unittest.TestCase):
                 )
 
         manifest = json.loads(manifest_json)
-        env = manifest["nodes"][0]["config"]["environment"]
+        env = manifest["flow"]["nodes"][0]["config"]["environment"]
         injected_config = json.loads(env["MN_BLUEPRINT_CONFIG_JSON"])
         expected_input = "/runtime/shared/submissions"
         self.assertTrue(injected_config["tax_documents"]["folder_path"].startswith(expected_input))
@@ -1511,6 +1527,7 @@ class TestBlueprintServices(unittest.TestCase):
             (sandbox / "Dockerfile").write_text("FROM alpine\n")
             (bundle / "manifest.json").write_text(
                 json.dumps({
+                    "apiVersion": "mn.workflow/v2",
                     "graph_id": "worker_graph",
                     "nodes": [
                         {
@@ -1539,7 +1556,7 @@ class TestBlueprintServices(unittest.TestCase):
                     )
 
         manifest = json.loads(manifest_json)
-        config = manifest["nodes"][0]["config"]
+        config = manifest["flow"]["nodes"][0]["config"]
         self.assertTrue(config["from"].startswith("openshell/sandbox-from:"))
         self.assertEqual(calls[0][:3], ["docker", "build", "-t"])
 
@@ -1554,6 +1571,7 @@ class TestBlueprintServices(unittest.TestCase):
             (bundle / "manifest.json").write_text(
                 json.dumps(
                     {
+                    "apiVersion": "mn.workflow/v2",
                         "nodes": [
                             {
                                 "node_id": "worker",
@@ -1570,7 +1588,7 @@ class TestBlueprintServices(unittest.TestCase):
                 "run-1",
             )
 
-        env = json.loads(manifest_json)["nodes"][0]["config"]["environment"]
+        env = json.loads(manifest_json)["flow"]["nodes"][0]["config"]["environment"]
         injected_config = json.loads(env["MN_BLUEPRINT_CONFIG_JSON"])
         self.assertEqual(injected_config["vl_model"]["model"], "default")
         self.assertNotIn("VL_MODEL_NAME", env)
@@ -1588,7 +1606,8 @@ class TestBlueprintServices(unittest.TestCase):
                     config_dir.mkdir(parents=True)
                     (config_dir / "default.json").write_text(json.dumps({"vl_model": {"model": "default"}}))
                     (config_dir / "overwrite.json").write_text(payload)
-                    (bundle / "manifest.json").write_text(json.dumps({"nodes": []}))
+                    (bundle / "manifest.json").write_text(json.dumps({
+                    "apiVersion": "mn.workflow/v2","nodes": []}))
 
                     with self.assertRaises(HTTPException) as raised:
                         load_blueprint_bundle(
@@ -1626,6 +1645,7 @@ class TestBlueprintServices(unittest.TestCase):
             (bundle / "manifest.json").write_text(
                 json.dumps(
                     {
+                    "apiVersion": "mn.workflow/v2",
                         "nodes": [
                             {
                                 "node_id": "worker",
@@ -1642,7 +1662,7 @@ class TestBlueprintServices(unittest.TestCase):
                 "run-1",
             )
 
-        env = json.loads(manifest_json)["nodes"][0]["config"]["environment"]
+        env = json.loads(manifest_json)["flow"]["nodes"][0]["config"]["environment"]
         self.assertEqual(env["CUSTOM_MODEL"], "keep")
         self.assertNotIn("NEW_MODEL", env)
 
@@ -1883,6 +1903,7 @@ def test_launch_model_policy_is_deferred_without_installing():
         (bundle / "manifest.json").write_text(
             json.dumps(
                 {
+                    "apiVersion": "mn.workflow/v2",
                     "runtime": {
                         "models": {
                             "primary": {

@@ -15,12 +15,17 @@ class TestBundleServices(unittest.TestCase):
             bundle_root = upload_root / "bundle_123"
             payloads = bundle_root / "payloads" / "nested"
             payloads.mkdir(parents=True)
-            (bundle_root / "manifest.json").write_text('{"graph_id": "g"}')
+            (bundle_root / "manifest.json").write_text(
+                '{"apiVersion": "mn.workflow/v2", "graph_id": "g"}'
+            )
             (payloads / "a.txt").write_bytes(b"hello")
 
             manifest_json, payload_bytes = load_uploaded_bundle(str(bundle_root), upload_root)
 
-        self.assertEqual(manifest_json, '{"graph_id": "g"}')
+        self.assertEqual(
+            manifest_json,
+            '{"apiVersion": "mn.workflow/v2", "graph_id": "g"}',
+        )
         self.assertEqual(payload_bytes, {"nested/a.txt": b"hello"})
 
     def test_load_uploaded_bundle_rejects_paths_outside_upload_root(self):
@@ -51,7 +56,7 @@ class TestBundleServices(unittest.TestCase):
             extracted_root = Path(tmpdir)
             nested = extracted_root / "bundle-root"
             nested.mkdir()
-            (nested / "manifest.json").write_text("{}")
+            (nested / "manifest.json").write_text('{"apiVersion": "mn.workflow/v2"}')
 
             self.assertEqual(find_bundle_root(extracted_root), nested)
 

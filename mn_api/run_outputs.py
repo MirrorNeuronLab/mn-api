@@ -23,8 +23,8 @@ def output_refs(run_id: str, run_dir: Path) -> list[dict[str, Any]]:
         decorated = dict(ref)
         decorated.update(
             {
-                "url": f"/api/v1/runs/{quoted_run_id}/outputs/{index}",
-                "reveal_url": f"/api/v1/runs/{quoted_run_id}/outputs/{index}/reveal",
+                "url": f"/api/v2/runtime-runs/{quoted_run_id}/outputs/{index}",
+                "reveal_url": f"/api/v2/runtime-runs/{quoted_run_id}/outputs/{index}/reveal",
             }
         )
         refs.append(decorated)

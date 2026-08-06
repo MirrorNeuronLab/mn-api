@@ -8,7 +8,7 @@ from mn_api.routes.client_json import client_json_response
 
 class TestClientJsonResponse(unittest.TestCase):
     def test_decodes_client_json_payload(self):
-        self.assertEqual(client_json_response(lambda: '{"ok": true}'), {"ok": True, "version": 1})
+        self.assertEqual(client_json_response(lambda: '{"ok": true}'), {"ok": True, "version": 2})
 
     def test_adapts_decode_errors_to_existing_error_response(self):
         response = client_json_response(lambda: "{not-json")

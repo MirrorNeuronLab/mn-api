@@ -12,20 +12,20 @@ from mn_api.errors import app_error_exception_handler, http_exception_handler, u
 from mn_sdk.errors import AppError
 from mn_api.routes import blueprints, bundles, deployments, jobs, jobs_v2, models, realtime, runs, schedules, services, system
 
-INTERFACE_VERSION = 1
+INTERFACE_VERSION = 2
 
 
 class VersionedJSONResponse(JSONResponse):
     def render(self, content: Any) -> bytes:
-        if isinstance(content, dict) and "version" not in content:
-            content = {"version": INTERFACE_VERSION, **content}
+        if isinstance(content, dict):
+            content = {**content, "version": INTERFACE_VERSION}
         return super().render(content)
 
 
 def create_app() -> FastAPI:
     app = FastAPI(
         title="MirrorNeuron API",
-        version="1.0",
+        version="2.0",
         default_response_class=VersionedJSONResponse,
     )
 
@@ -47,8 +47,8 @@ def create_app() -> FastAPI:
     app.include_router(blueprints.router)
     app.include_router(bundles.router)
     app.include_router(deployments.router)
-    app.include_router(jobs.router)
     app.include_router(jobs_v2.router)
+    app.include_router(jobs.router)
     app.include_router(models.router)
     app.include_router(realtime.router)
     app.include_router(schedules.router)

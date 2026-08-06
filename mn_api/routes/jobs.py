@@ -68,7 +68,9 @@ from mn_api.run_store import stream_jsonl_files as _stream_jsonl_files
 from mn_api.schemas import RestoreJobBackupRequest, SubmitJobRequest
 
 
-router = APIRouter(prefix="/api/v1")
+# The route functions in this module are retained as internal projections used
+# by the v2 monitor adapter. This router is intentionally not mounted.
+router = APIRouter(prefix="/api/v2")
 _MAX_COMPACT_STRING = 2000
 _MAX_COMPACT_LIST = 25
 _MAX_STATUS_RUNTIME_EVENTS = 25
@@ -99,7 +101,7 @@ _IMMEDIATE_PROGRESS_EVENTS = {
 }
 
 
-@router.post("/jobs")
+@router.post("/runtime-jobs")
 def submit_job(req: SubmitJobRequest, _auth=Depends(require_auth)):
     try:
         bundle_dir: str | None = None
@@ -262,7 +264,7 @@ def _nested_get(value: dict[str, Any], path: list[str]) -> Any:
     return cursor
 
 
-@router.get("/jobs")
+@router.get("/runtime-jobs")
 def list_jobs(limit: int = 20, include_terminal: bool = True, _auth=Depends(require_auth)):
     try:
         jobs_json = state.client.list_jobs(limit, include_terminal)
@@ -303,7 +305,7 @@ def start_operation(kind: str, options: dict[str, Any] | None = None, _auth=Depe
         return handle_grpc_error(exc)
 
 
-@router.get("/operations/{operation_id}")
+@router.get("/runtime-operations/{operation_id}")
 def get_operation(operation_id: str, _auth=Depends(require_auth)):
     try:
         return json.loads(state.client.get_operation(operation_id))
@@ -339,7 +341,7 @@ def stream_operation_events(
 
 def _start_operation(kind: str, options: dict[str, Any] | None = None) -> dict[str, Any]:
     payload = json.loads(state.client.start_operation(kind, options or {}))
-    payload.setdefault("version", 1)
+    payload.setdefault("version", 2)
     return payload
 
 
@@ -364,7 +366,7 @@ def unfinished_jobs(_auth=Depends(require_auth)):
         return handle_grpc_error(exc)
 
 
-@router.get("/jobs/{job_id}")
+@router.get("/runtime-jobs/{job_id}")
 def get_job(job_id: str, include: str = Query("compact"), _auth=Depends(require_auth)):
     try:
         if include == "full":
@@ -700,7 +702,7 @@ def _compact_job_detail(job_id: str) -> dict[str, Any]:
         "event_count": len(events),
         "recent_event_count": len(recent_events),
         "artifact_count": len(artifacts),
-        "full_detail_url": f"/api/v1/jobs/{urllib.parse.quote(job_id)}?include=full",
+        "full_detail_url": f"/api/v2/runs/{urllib.parse.quote(job_id)}/monitor?include=full",
     }
     if failure:
         summary["failure"] = failure
@@ -869,7 +871,7 @@ def _manifest_from_job_details(details: dict[str, Any], *, run_dir: Path | None 
         "workflow",
     )
     return {
-        "apiVersion": "mn.workflow/v1",
+        "apiVersion": "mn.workflow/v2",
         "kind": "Workflow",
         "id": workflow_id,
         "name": _first_string(
@@ -1004,7 +1006,7 @@ def _public_workflow_manifest_from_job(
     )
     job_type = str(job.get("job_type") or job.get("type") or summary.get("job_type") or summary.get("type") or "")
     return {
-        "apiVersion": "mn.workflow/v1",
+        "apiVersion": "mn.workflow/v2",
         "kind": "Workflow",
         "id": str(job.get("graph_id") or summary.get("graph_id") or workflow_id),
         "name": str(job.get("job_name") or summary.get("job_name") or workflow_id),
@@ -1768,4 +1770,4 @@ def _legacy_job_control_error(exc: Exception) -> JSONResponse | None:
         return None
     if not detail:
         return None
-    return JSONResponse(status_code=500, content={"version": 1, "error": detail})
+    return JSONResponse(status_code=500, content={"version": 2, "error": detail})

@@ -10,7 +10,7 @@ from mn_api.errors import handle_grpc_error
 from mn_api.schemas import DeploymentActionRequest, DeploymentCreateRequest, DeploymentRollbackRequest
 
 
-router = APIRouter(prefix="/api/v1")
+router = APIRouter(prefix="/api/v2")
 
 
 @router.post("/deployments")
@@ -66,7 +66,7 @@ def rollback_deployment(id_or_key: str, req: DeploymentRollbackRequest, _auth=De
     try:
         return RuntimeService(state.client).rollback_deployment(
             id_or_key,
-            version=req.version or "",
+            version=req.target_version or "",
             tag=req.tag,
             reason=req.reason,
         )

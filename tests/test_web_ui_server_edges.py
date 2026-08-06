@@ -20,7 +20,7 @@ def test_proxy_request_returns_upstream_http_errors(monkeypatch, tmp_path):
 
     monkeypatch.setattr("mn_api.web_ui_server.urllib.request.urlopen", raise_http_error)
 
-    response = TestClient(create_app(dist_dir=dist, api_url="http://api.local/api/v1")).get("/api/v1/jobs")
+    response = TestClient(create_app(dist_dir=dist, api_url="http://api.local/api/v2")).get("/api/v2/jobs")
 
     assert response.status_code == 418
     assert response.headers["content-type"] == "application/json"
@@ -35,15 +35,15 @@ def test_proxy_request_returns_safe_gateway_error(monkeypatch, tmp_path):
         lambda request, timeout=30: (_ for _ in ()).throw(RuntimeError("upstream down")),
     )
 
-    response = TestClient(create_app(dist_dir=dist, api_url="http://api.local/api/v1")).get("/api/v1/jobs?limit=1")
+    response = TestClient(create_app(dist_dir=dist, api_url="http://api.local/api/v2")).get("/api/v2/jobs?limit=1")
 
     assert response.status_code == 502
     assert response.json()["component"] == "web-ui-proxy"
-    assert response.json()["target"] == "http://api.local/api/v1/jobs?limit=1"
+    assert response.json()["target"] == "http://api.local/api/v2/jobs?limit=1"
 
 
 def test_proxy_header_and_target_helpers_filter_hop_by_hop_headers():
-    assert _target_url("runs/run:1", "a=b", "http://api.local/api/v1") == "http://api.local/api/runs/run:1?a=b"
+    assert _target_url("runs/run:1", "a=b", "http://api.local/api/v2") == "http://api.local/api/v2/runs/run:1?a=b"
     assert _proxy_headers(
         [("Host", "local"), ("Connection", "close"), ("X-Test", "yes")],
         api_token="secret",

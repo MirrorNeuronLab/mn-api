@@ -18,7 +18,7 @@ from mn_api.schemas import (
 )
 
 
-router = APIRouter(prefix="/api/v1")
+router = APIRouter(prefix="/api/v2")
 
 
 @router.post("/schedules")

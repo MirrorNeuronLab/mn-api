@@ -77,9 +77,9 @@ def test_deployment_routes_use_shared_policy(monkeypatch):
     client = TestClient(app)
 
     response = client.post(
-        "/api/v1/deployments",
+        "/api/v2/deployments",
         json={
-            "manifest_json": '{"graph_id":"g","nodes":[]}',
+                "manifest_json": '{"apiVersion":"mn.workflow/v2","graph_id":"g","nodes":[]}',
             "key": "prod",
             "policy": {"strategy": "canary", "canary": 1, "max_parallel": 2, "auto_promote": True, "auto_revert": True},
         },
@@ -96,7 +96,7 @@ def test_node_drain_route_parses_cli_duration(monkeypatch):
     monkeypatch.setattr(state, "client", fake)
     client = TestClient(app)
 
-    response = client.post("/api/v1/nodes/mirror_neuron@worker/drain", json={"deadline": "10s", "dry_run": True})
+    response = client.post("/api/v2/nodes/mirror_neuron@worker/drain", json={"deadline": "10s", "dry_run": True})
 
     assert response.status_code == 200
     assert response.json()["options"]["deadline_ms"] == 10_000
@@ -117,13 +117,13 @@ def test_job_backup_restore_routes_encode_bundle_bytes(monkeypatch):
     monkeypatch.setattr(state, "client", FakeRuntimeClient())
     client = TestClient(app)
 
-    backup = client.post("/api/v1/jobs/job-1/backup")
+    backup = client.post("/api/v2/jobs/job-1/backup")
     assert backup.status_code == 200
     encoded = backup.json()["bundle_files"]["manifest.json"]
     assert base64.b64decode(encoded) == b'{"graph_id":"g"}'
 
     restore = client.post(
-        "/api/v1/jobs/restore",
+        "/api/v2/jobs/restore",
         json={"backup_json": backup.json()["backup_json"], "bundle_files": {"manifest.json": encoded}, "blueprint_id": "bp"},
     )
     assert restore.status_code == 200

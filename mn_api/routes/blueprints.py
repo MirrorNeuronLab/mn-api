@@ -61,7 +61,7 @@ from mn_api.path_utils import resolve_mn_home
 from mn_api.schemas import BlueprintCleanupRequest, BlueprintLaunchRequest, BlueprintRunRequest, BlueprintUninstallRequest, BlueprintUpdateRequest
 
 
-router = APIRouter(prefix="/api/v1")
+router = APIRouter(prefix="/api/v2")
 PROGRESS_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,220}$")
 TERMINAL_LAUNCH_PROGRESS_STATUSES = {"completed", "failed"}
 CONTEXT_ENGINE_EXPECTATION = (
@@ -173,12 +173,13 @@ def run_blueprint_launch(req: BlueprintLaunchRequest, _auth=Depends(require_auth
     return JSONResponse(
         status_code=202,
         content={
+            "version": 2,
             "status": "launching",
             "run_id": resolved_req.run_id,
             "job_id": None,
             "source": resolved_req.source,
             "progress_id": resolved_req.progress_id,
-            "progress_url": f"/api/v1/blueprints/launch/progress/{resolved_req.progress_id}",
+            "progress_url": f"/api/v2/blueprints/launch/progress/{resolved_req.progress_id}",
         },
     )
 
@@ -252,7 +253,13 @@ def run_blueprint(
         label="Launch",
         detail="The blueprint launch is being submitted to the runtime.",
     )
-    return run_blueprint_record(repo_root, blueprint, resolved_req)
+    result = run_blueprint_record(repo_root, blueprint, resolved_req)
+    execution_id = str(result.get("run_id") or result.get("id") or "")
+    return {
+        **result,
+        "version": 2,
+        "execution_id": execution_id or None,
+    }
 
 
 @router.get("/blueprints/launch/progress/{progress_id}")
@@ -273,9 +280,9 @@ def launch_progress_snapshot(progress_id: str) -> dict[str, Any]:
         for event in events
     )
     response = {
-        "version": 1,
+        "version": 2,
         "progress_id": resolved_progress_id,
-        "schema_version": "mn.launch_progress.v1",
+        "schema_version": "mn.launch_progress.v2",
         "run_id": ids.get("run_id"),
         "job_id": ids.get("job_id"),
         "events": events,
@@ -687,7 +694,7 @@ def archive_blueprint_install(blueprint_id: str, *, storage_dir: Path, dry_run: 
         payload = {}
     if not isinstance(payload, dict):
         payload = {}
-    payload.setdefault("version", 1)
+    payload.setdefault("version", 2)
     payload.setdefault("schema_version", "mn.blueprint.install.v1")
     payload.setdefault("blueprint_id", blueprint_id)
     payload.setdefault("storage_dir", str(storage_dir))
@@ -1058,7 +1065,7 @@ def run_blueprint_record(
             "validation": validation,
             "model_install": model_install,
             "progress_id": progress_id,
-            "progress_url": f"/api/v1/blueprints/launch/progress/{progress_id}" if progress_id else None,
+            "progress_url": f"/api/v2/blueprints/launch/progress/{progress_id}" if progress_id else None,
         }
     except Exception as exc:
         if "submission_id" in locals() and not definition_committed:
@@ -1119,7 +1126,7 @@ def resolve_launch_source(req: BlueprintLaunchRequest) -> dict:
         manifest = json.loads(manifest_json)
         bundle_root = Path(req.bundle_path).expanduser().resolve()
         workflow = manifest.get("workflow") if isinstance(manifest.get("workflow"), dict) else {}
-        workflow_manifest = manifest.get("apiVersion") == "mn.workflow/v1" or manifest.get("kind") == "Workflow" or isinstance(manifest.get("workflow"), dict)
+        workflow_manifest = manifest.get("apiVersion") == "mn.workflow/v2" or manifest.get("kind") == "Workflow" or isinstance(manifest.get("workflow"), dict)
         blueprint_id = sanitize_blueprint_id(
             manifest.get("id")
             or manifest.get("blueprint_id")
@@ -1195,7 +1202,7 @@ def record_launch_progress(
     if not progress_id:
         return
     event: dict[str, Any] = {
-        "version": 1,
+        "version": 2,
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "phase": phase,
         "status": status,
@@ -1267,7 +1274,7 @@ def summarize_launch_progress_phases(events: list[dict[str, Any]]) -> list[dict[
         if not phase:
             continue
         phase_record = {
-            "version": int(event.get("version") or 1),
+            "version": 2,
             "id": phase,
             "label": str(event.get("label") or launch_progress_phase_label(phase)),
             "status": str(event.get("status") or event.get("state") or "running"),
@@ -1623,8 +1630,8 @@ def model_install_problem_response(
             for error in model_install.get("errors") or ["Required runtime model could not be installed."]
         ]
     validation = {
-        "version": 1,
-        "schema_version": "validation.report/v1",
+        "version": 2,
+        "schema_version": "validation.report/v2",
         "ok": False,
         "status": "failed",
         "error_count": len(issues),

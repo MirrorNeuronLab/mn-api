@@ -152,7 +152,7 @@ class TestAPI(unittest.TestCase):
                 "job_id": "job-expanded",
                 "graph_id": "vc_assistant_v1",
                 "workflow_state": {
-                    "workflow_id": "vc_assistant_v1",
+                    "workflow_id": "vc_assistant_v2",
                     "step_order": step_ids,
                     "steps": {step_id: {"id": step_id, "status": "pending"} for step_id in step_ids},
                     "edges": [],
@@ -231,6 +231,7 @@ class TestAPI(unittest.TestCase):
         (blueprint_dir / "manifest.json").write_text(
             json.dumps(
                 {
+                    "apiVersion": "mn.workflow/v2",
                     "graph_id": "worker_one_graph",
                     "nodes": [],
                     "edges": [],
@@ -288,6 +289,7 @@ class TestAPI(unittest.TestCase):
 
     def _hard_gpu_manifest(self):
         return {
+            "apiVersion": "mn.workflow/v2",
             "graph_id": "worker_one_graph",
             "nodes": [],
             "edges": [],
@@ -322,7 +324,7 @@ class TestAPI(unittest.TestCase):
         state.config = original
 
     def test_health(self):
-        response = self.client.get("/api/v1/health")
+        response = self.client.get("/api/v2/health")
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertEqual(body["status"], "ok")
@@ -344,7 +346,7 @@ class TestAPI(unittest.TestCase):
             )
 
             with patch.dict(os.environ, {"HOME": tmp}, clear=True):
-                response = self.client.get("/api/v1/health")
+                response = self.client.get("/api/v2/health")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["runs_root"], str((Path(tmp) / ".mn" / "runs").resolve()))
@@ -360,7 +362,7 @@ class TestAPI(unittest.TestCase):
             )
 
             with patch.dict(os.environ, {"HOME": tmp}, clear=True):
-                response = self.client.get("/api/v1/health")
+                response = self.client.get("/api/v2/health")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["runs_root"], str(runs_root.resolve()))
@@ -378,7 +380,7 @@ class TestAPI(unittest.TestCase):
             "shared_storage": {"host_root": "/tmp/mn-shared", "runtime_root": "/tmp/mn-shared"},
         }
 
-        response = self.client.get("/api/v1/runtime/status")
+        response = self.client.get("/api/v2/runtime/status")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["overall"], "passing")
@@ -406,7 +408,7 @@ class TestAPI(unittest.TestCase):
         )
 
         response = self.client.post(
-            "/api/v1/models/gemma4%3Ae2b/benchmark",
+            "/api/v2/models/gemma4%3Ae2b/benchmark",
             json={"max_tokens": 16},
         )
 
@@ -428,9 +430,9 @@ class TestAPI(unittest.TestCase):
         mock_client.list_services.return_value = json.dumps({"services": [{"name": "example-service"}]})
         mock_client.resolve_service.return_value = json.dumps({"services": [{"name": "example-service"}]})
 
-        list_response = self.client.get("/api/v1/services", params={"tag": "web_ui", "job_id": "job-1"})
+        list_response = self.client.get("/api/v2/services", params={"tag": "web_ui", "job_id": "job-1"})
         resolve_response = self.client.get(
-            "/api/v1/services/example-service/resolve",
+            "/api/v2/services/example-service/resolve",
             params={"tag": "video_watch_assistant", "passing_only": "false"},
         )
 
@@ -716,14 +718,14 @@ class TestAPI(unittest.TestCase):
         state.config = SimpleNamespace(api_token="secret", request_size_limit_bytes=1024 * 1024)
         mock_client.get_system_summary.return_value = '{"nodes": [], "jobs": []}'
         try:
-            response = self.client.get("/api/v1/system/summary")
+            response = self.client.get("/api/v2/system/summary")
             self.assertEqual(response.status_code, 401)
             response = self.client.get(
-                "/api/v1/system/summary",
+                "/api/v2/system/summary",
                 headers={"Authorization": "Bearer secret"},
             )
             self.assertEqual(response.status_code, 200)
-            self.assertEqual(response.json(), {"version": 1, "nodes": [], "jobs": []})
+            self.assertEqual(response.json(), {"version": 2, "nodes": [], "jobs": []})
         finally:
             state.config = original
 
@@ -732,7 +734,7 @@ class TestAPI(unittest.TestCase):
         state.config = SimpleNamespace(api_token="", request_size_limit_bytes=10)
         try:
             response = self.client.post(
-                "/api/v1/jobs",
+                "/api/v2/runtime-jobs",
                 headers={"content-length": "11"},
                 json={"manifest_json": "{}", "payloads": {}},
             )
@@ -743,19 +745,19 @@ class TestAPI(unittest.TestCase):
 
     def test_invalid_content_length_is_rejected(self):
         response = self.client.post(
-            "/api/v1/jobs",
+            "/api/v2/runtime-jobs",
             headers={"content-length": "not-a-number"},
             content=b"{}",
         )
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.json(), {"version": 1, "error": "invalid_content_length"})
+        self.assertEqual(response.json(), {"version": 2, "error": "invalid_content_length"})
 
     @patch("mn_api.state.client")
     def test_list_jobs_success(self, mock_client):
         mock_client.list_jobs.return_value = '{"data": [{"job_id": "job-1"}]}'
-        response = self.client.get("/api/v1/jobs?limit=5&include_terminal=false")
+        response = self.client.get("/api/v2/runtime-jobs?limit=5&include_terminal=false")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"version": 1, "data": [{"job_id": "job-1"}]})
+        self.assertEqual(response.json(), {"version": 2, "data": [{"job_id": "job-1"}]})
         mock_client.list_jobs.assert_called_once_with(5, False)
 
     @patch("mn_api.state.client")
@@ -773,7 +775,7 @@ class TestAPI(unittest.TestCase):
             }
         )
 
-        response = self.client.get("/api/v1/jobs")
+        response = self.client.get("/api/v2/runtime-jobs")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["data"][0]["status"], "paused")
@@ -798,7 +800,7 @@ class TestAPI(unittest.TestCase):
             }
         )
 
-        response = self.client.get("/api/v1/jobs")
+        response = self.client.get("/api/v2/runtime-jobs")
 
         self.assertEqual(response.status_code, 200)
         row = response.json()["data"][0]
@@ -816,7 +818,7 @@ class TestAPI(unittest.TestCase):
             "mn_api.routes.jobs._workflow_progress_snapshot_for_job",
             return_value={"job_id": "job-progress", "status": "completed"},
         ) as mock_progress:
-            response = self.client.get("/api/v1/jobs")
+            response = self.client.get("/api/v2/runtime-jobs")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["data"][0]["status"], "running")
@@ -827,12 +829,12 @@ class TestAPI(unittest.TestCase):
         mock_client.start_operation.return_value = json.dumps(
             {"operation_id": "op-clear", "kind": "clear_jobs", "status": "running"}
         )
-        response = self.client.post("/api/v1/jobs:cleanup")
+        response = self.client.post("/api/v2/jobs:cleanup")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
             response.json(),
             {
-                "version": 1,
+                "version": 2,
                 "operation_id": "op-clear",
                 "kind": "clear_jobs",
                 "status": "running",
@@ -872,12 +874,12 @@ class TestAPI(unittest.TestCase):
                 close_client,
             ),
         ):
-            response = self.client.post("/api/v1/jobs:cleanup")
+            response = self.client.post("/api/v2/jobs:cleanup")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
             response.json(),
-            {"version": 1, "operation_id": "op-clear-retry", "status": "running"},
+            {"version": 2, "operation_id": "op-clear-retry", "status": "running"},
         )
         first_client.start_operation.assert_called_once_with("clear_jobs", {})
         second_client.start_operation.assert_called_once_with("clear_jobs", {})
@@ -886,16 +888,16 @@ class TestAPI(unittest.TestCase):
     @patch("mn_api.state.client")
     def test_get_system_summary_success(self, mock_client):
         mock_client.get_system_summary.return_value = '{"nodes": [], "jobs": []}'
-        response = self.client.get("/api/v1/system/summary")
+        response = self.client.get("/api/v2/system/summary")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"version": 1, "nodes": [], "jobs": []})
+        self.assertEqual(response.json(), {"version": 2, "nodes": [], "jobs": []})
 
     @patch("mn_api.state.client")
     def test_get_resource_success(self, mock_client):
         mock_client.get_resource.return_value = (
             '{"totals": {"cpu_cores": 8}, "limits": {"cpu": 100, "gpu": 100, "memory": 100}}'
         )
-        response = self.client.get("/api/v1/resource")
+        response = self.client.get("/api/v2/resource")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["totals"]["cpu_cores"], 8)
         self.assertEqual(response.json()["totals"]["memory_total_gb"], 0.0)
@@ -926,7 +928,7 @@ class TestAPI(unittest.TestCase):
             }
         )
 
-        response = self.client.get("/api/v1/resource")
+        response = self.client.get("/api/v2/resource")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["combined"]["cpu_cores"], 12)
@@ -958,7 +960,7 @@ class TestAPI(unittest.TestCase):
             }
         )
         response = self.client.put(
-            "/api/v1/resource",
+            "/api/v2/resource",
             json={"cpu": 50, "gpu": 75, "memory": 100},
         )
         self.assertEqual(response.status_code, 200)
@@ -981,7 +983,7 @@ class TestAPI(unittest.TestCase):
         mock_client.add_node.return_value = "connected"
 
         response = self.client.post(
-            "/api/v1/system/cluster/nodes:add",
+            "/api/v2/system/cluster/nodes:add",
             json={"host": "10.0.0.42", "token": "join-token"},
         )
 
@@ -1030,7 +1032,7 @@ class TestAPI(unittest.TestCase):
         mock_client.add_node.return_value = "connected"
 
         response = self.client.post(
-            "/api/v1/system/cluster/nodes:add",
+            "/api/v2/system/cluster/nodes:add",
             json={"host": "10.0.0.42", "token": "join-token"},
         )
 
@@ -1077,7 +1079,7 @@ class TestAPI(unittest.TestCase):
         mock_client.add_node.return_value = "connected"
 
         response = self.client.post(
-            "/api/v1/system/cluster/nodes:add",
+            "/api/v2/system/cluster/nodes:add",
             json={"host": "10.0.0.42", "token": "join-token", "grpc_port": 56051},
         )
 
@@ -1102,7 +1104,7 @@ class TestAPI(unittest.TestCase):
         mock_client.remove_node.return_value = "disconnected"
 
         response = self.client.post(
-            "/api/v1/system/cluster/nodes:remove",
+            "/api/v2/system/cluster/nodes:remove",
             json={"node_name": "mirror_neuron@10.0.0.42"},
         )
 
@@ -1114,7 +1116,7 @@ class TestAPI(unittest.TestCase):
     @patch("mn_api.state.client")
     def test_add_cluster_node_rejects_invalid_host_before_handshake(self, mock_client, mock_remote_client_class):
         response = self.client.post(
-            "/api/v1/system/cluster/nodes:add",
+            "/api/v2/system/cluster/nodes:add",
             json={"host": "http://10.0.0.42", "token": "join-token"},
         )
 
@@ -1127,7 +1129,7 @@ class TestAPI(unittest.TestCase):
     @patch("mn_api.state.client")
     def test_add_cluster_node_rejects_invalid_token_before_handshake(self, mock_client, mock_remote_client_class):
         response = self.client.post(
-            "/api/v1/system/cluster/nodes:add",
+            "/api/v2/system/cluster/nodes:add",
             json={"host": "10.0.0.42", "token": "bad token"},
         )
 
@@ -1140,11 +1142,11 @@ class TestAPI(unittest.TestCase):
     def test_submit_job_success(self, mock_client):
         mock_client.submit_job.return_value = "job-123"
         response = self.client.post(
-            "/api/v1/jobs",
-            json={"manifest_json": '{"graph_id": "g"}', "payloads": {"a.txt": "hello"}},
+            "/api/v2/runtime-jobs",
+            json={"manifest_json": '{"apiVersion": "mn.workflow/v2", "graph_id": "g"}', "payloads": {"a.txt": "hello"}},
         )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"version": 1, "id": "job-123", "job_id": "job-123", "status": "pending"})
+        self.assertEqual(response.json(), {"version": 2, "id": "job-123", "job_id": "job-123", "status": "pending"})
         manifest_json, payloads = mock_client.submit_job.call_args.args
         manifest = json.loads(manifest_json)
         self.assertEqual(manifest["graph_id"], "g")
@@ -1155,7 +1157,7 @@ class TestAPI(unittest.TestCase):
     def test_upload_bundle_and_submit_by_bundle_path(self, mock_client):
         mock_client.submit_job.return_value = "job-zip"
         archive = io.BytesIO()
-        manifest = {"graph_id": "zip_graph", "nodes": [], "edges": []}
+        manifest = {"apiVersion": "mn.workflow/v2", "graph_id": "zip_graph", "nodes": [], "edges": []}
 
         with zipfile.ZipFile(archive, "w") as zip_file:
             zip_file.writestr("manifest.json", json.dumps(manifest))
@@ -1163,7 +1165,7 @@ class TestAPI(unittest.TestCase):
         archive.seek(0)
 
         upload_response = self.client.post(
-            "/api/v1/bundles/upload",
+            "/api/v2/bundles/upload",
             files={"bundle": ("bundle.zip", archive, "application/zip")},
         )
         self.assertEqual(upload_response.status_code, 200)
@@ -1171,12 +1173,12 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(upload_response.json()["manifest"]["graph_id"], "zip_graph")
 
         submit_response = self.client.post(
-            "/api/v1/jobs",
+            "/api/v2/runtime-jobs",
             json={"_bundle_path": bundle_path},
         )
         self.assertEqual(submit_response.status_code, 200)
         self.assertEqual(
-            submit_response.json(), {"version": 1, "id": "job-zip", "job_id": "job-zip", "status": "pending"}
+            submit_response.json(), {"version": 2, "id": "job-zip", "job_id": "job-zip", "status": "pending"}
         )
         manifest_json, payloads = mock_client.submit_job.call_args.args
         submitted_manifest = json.loads(manifest_json)
@@ -1186,7 +1188,7 @@ class TestAPI(unittest.TestCase):
 
     def test_upload_bundle_accepts_single_nested_bundle_root(self):
         archive = io.BytesIO()
-        manifest = {"graph_id": "nested_zip_graph", "nodes": [], "edges": []}
+        manifest = {"apiVersion": "mn.workflow/v2", "graph_id": "nested_zip_graph", "nodes": [], "edges": []}
 
         with zipfile.ZipFile(archive, "w") as zip_file:
             zip_file.writestr("bundle-root/manifest.json", json.dumps(manifest))
@@ -1194,7 +1196,7 @@ class TestAPI(unittest.TestCase):
         archive.seek(0)
 
         response = self.client.post(
-            "/api/v1/bundles/upload",
+            "/api/v2/bundles/upload",
             files={"bundle": ("bundle.zip", archive, "application/zip")},
         )
 
@@ -1210,7 +1212,7 @@ class TestAPI(unittest.TestCase):
         archive.seek(0)
 
         response = self.client.post(
-            "/api/v1/bundles/upload",
+            "/api/v2/bundles/upload",
             files={"bundle": ("bundle.zip", archive, "application/zip")},
         )
         self.assertEqual(response.status_code, 400)
@@ -1223,7 +1225,7 @@ class TestAPI(unittest.TestCase):
         archive.seek(0)
 
         response = self.client.post(
-            "/api/v1/bundles/upload",
+            "/api/v2/bundles/upload",
             files={"bundle": ("bundle.zip", archive, "application/zip")},
         )
         self.assertEqual(response.status_code, 400)
@@ -1264,7 +1266,7 @@ class TestAPI(unittest.TestCase):
             )
 
             with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
-                response = self.client.get("/api/v1/runs/blueprint-run-1/ui?limit=2")
+                response = self.client.get("/api/v2/runtime-runs/blueprint-run-1/ui?limit=2")
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
@@ -1274,7 +1276,7 @@ class TestAPI(unittest.TestCase):
         self.assertEqual([event["type"] for event in body["events"]], ["unparseable_event", "last"])
 
     def test_get_run_ui_rejects_invalid_run_id(self):
-        response = self.client.get("/api/v1/runs/bad$id/ui")
+        response = self.client.get("/api/v2/runtime-runs/bad$id/ui")
         self.assertEqual(response.status_code, 400)
 
     def test_run_observability_endpoints_read_shared_artifacts(self):
@@ -1380,15 +1382,15 @@ class TestAPI(unittest.TestCase):
             )
 
             with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
-                logs = self.client.get("/api/v1/runs/observe-run/logs?level=INFO")
-                timeline = self.client.get("/api/v1/runs/observe-run/timeline")
-                observability_summary = self.client.get("/api/v1/runs/observe-run/observability-summary")
-                human = self.client.get("/api/v1/runs/observe-run/human?status=pending")
+                logs = self.client.get("/api/v2/runtime-runs/observe-run/logs?level=INFO")
+                timeline = self.client.get("/api/v2/runtime-runs/observe-run/timeline")
+                observability_summary = self.client.get("/api/v2/runtime-runs/observe-run/observability-summary")
+                human = self.client.get("/api/v2/runtime-runs/observe-run/human?status=pending")
                 response = self.client.post(
-                    "/api/v1/runs/observe-run/human/hitl-1/response",
+                    "/api/v2/runtime-runs/observe-run/human/hitl-1/response",
                     json={"decision": "approve", "notes": "ok"},
                 )
-                resources = self.client.get("/api/v1/runs/observe-run/resources?window=24000h&bucket=1h")
+                resources = self.client.get("/api/v2/runtime-runs/observe-run/resources?window=24000h&bucket=1h")
 
         self.assertEqual(logs.status_code, 200)
         self.assertEqual(logs.json()["data"][0]["message"], "needs attention")
@@ -1424,11 +1426,11 @@ class TestAPI(unittest.TestCase):
             (run_dir / "packet.pdf").write_bytes(b"%PDF-1.4\n% test pdf\n")
 
             with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
-                result = self.client.get("/api/v1/runs/artifact-run/result")
-                final_artifact = self.client.get("/api/v1/runs/artifact-run/final-artifact")
-                listing = self.client.get("/api/v1/runs/artifact-run/artifacts")
-                markdown = self.client.get("/api/v1/runs/artifact-run/artifacts/report.md")
-                pdf = self.client.get("/api/v1/runs/artifact-run/artifacts/packet.pdf")
+                result = self.client.get("/api/v2/runtime-runs/artifact-run/result")
+                final_artifact = self.client.get("/api/v2/runtime-runs/artifact-run/final-artifact")
+                listing = self.client.get("/api/v2/runtime-runs/artifact-run/artifacts")
+                markdown = self.client.get("/api/v2/runtime-runs/artifact-run/artifacts/report.md")
+                pdf = self.client.get("/api/v2/runtime-runs/artifact-run/artifacts/packet.pdf")
 
         self.assertEqual(result.status_code, 200)
         self.assertEqual(result.json()["value"], 42)
@@ -1449,9 +1451,9 @@ class TestAPI(unittest.TestCase):
             if artifact["artifact_id"] == "observability_summary_json"
         )
         self.assertEqual(summary_ref["content_type"], "application/json")
-        self.assertIn("/api/v1/runs/artifact-run/artifacts/observability_summary.json", summary_ref["url"])
+        self.assertIn("/api/v2/runtime-runs/artifact-run/artifacts/observability_summary.json", summary_ref["url"])
         self.assertIn(
-            "/api/v1/runs/artifact-run/artifacts/observability_summary.json/reveal", summary_ref["reveal_url"]
+            "/api/v2/runtime-runs/artifact-run/artifacts/observability_summary.json/reveal", summary_ref["reveal_url"]
         )
         self.assertEqual(markdown.status_code, 200)
         self.assertIn("# Draft Review Packet", markdown.text)
@@ -1470,7 +1472,7 @@ class TestAPI(unittest.TestCase):
                 patch("mn_api.routes.runs.sys.platform", "darwin"),
                 patch("mn_api.routes.runs.subprocess.Popen") as mock_popen,
             ):
-                response = self.client.post("/api/v1/runs/reveal-run/artifacts/job.json/reveal")
+                response = self.client.post("/api/v2/runtime-runs/reveal-run/artifacts/job.json/reveal")
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
@@ -1506,11 +1508,11 @@ class TestAPI(unittest.TestCase):
                 patch("mn_api.routes.runs.sys.platform", "darwin"),
                 patch("mn_api.routes.runs.subprocess.Popen") as mock_popen,
             ):
-                artifacts = self.client.get("/api/v1/runs/output-run/artifacts")
-                outputs = self.client.get("/api/v1/runs/output-run/outputs")
-                downloaded = self.client.get("/api/v1/runs/output-run/outputs/0")
-                revealed = self.client.post("/api/v1/runs/output-run/outputs/0/reveal")
-                missing = self.client.get("/api/v1/runs/output-run/outputs/99")
+                artifacts = self.client.get("/api/v2/runtime-runs/output-run/artifacts")
+                outputs = self.client.get("/api/v2/runtime-runs/output-run/outputs")
+                downloaded = self.client.get("/api/v2/runtime-runs/output-run/outputs/0")
+                revealed = self.client.post("/api/v2/runtime-runs/output-run/outputs/0/reveal")
+                missing = self.client.get("/api/v2/runtime-runs/output-run/outputs/99")
 
         self.assertEqual(artifacts.status_code, 200)
         artifact_ids = {artifact["artifact_id"] for artifact in artifacts.json()["artifacts"]}
@@ -1526,7 +1528,7 @@ class TestAPI(unittest.TestCase):
         self.assertTrue(output_ref["external"])
         self.assertEqual(output_ref["name"], "output-run-report.md")
         self.assertEqual(outputs.status_code, 200)
-        self.assertEqual(outputs.json()["outputs"][0]["url"], "/api/v1/runs/output-run/outputs/0")
+        self.assertEqual(outputs.json()["outputs"][0]["url"], "/api/v2/runtime-runs/output-run/outputs/0")
         self.assertEqual(downloaded.status_code, 200)
         self.assertIn("# Customer Report", downloaded.text)
         self.assertEqual(revealed.status_code, 200)
@@ -1537,7 +1539,7 @@ class TestAPI(unittest.TestCase):
     @patch("mn_api.state.client")
     def test_submit_by_unknown_bundle_path_is_rejected_before_sdk_call(self, mock_client):
         response = self.client.post(
-            "/api/v1/jobs",
+            "/api/v2/runtime-jobs",
             json={"_bundle_path": str(Path(tempfile.gettempdir()) / "outside-bundle")},
         )
 
@@ -1548,9 +1550,9 @@ class TestAPI(unittest.TestCase):
     @patch("mn_api.state.client")
     def test_cancel_job_success(self, mock_client):
         mock_client.cancel_job.return_value = "cancelled"
-        response = self.client.post("/api/v1/jobs/test_job_123/cancel")
+        response = self.client.post("/api/v2/jobs/test_job_123/cancel")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"version": 1, "status": "cancelled", "job_id": "test_job_123"})
+        self.assertEqual(response.json(), {"version": 2, "status": "cancelled", "job_id": "test_job_123"})
 
     @patch("mn_api.state.client")
     def test_cancel_job_runs_blueprint_post_launch_cleanup(self, mock_client):
@@ -1622,11 +1624,11 @@ class TestAPI(unittest.TestCase):
             )
 
             with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
-                response = self.client.post("/api/v1/jobs/job-cleanup/cancel")
+                response = self.client.post("/api/v2/jobs/job-cleanup/cancel")
                 cleanup_record = json.loads((run_dir / "post_cleanup_seen.json").read_text())
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"version": 1, "status": "cancelled", "job_id": "job-cleanup"})
+        self.assertEqual(response.json(), {"version": 2, "status": "cancelled", "job_id": "job-cleanup"})
         self.assertEqual(cleanup_record["reason"], "job_cancelled")
         self.assertEqual(cleanup_record["run_id"], "run-cancel-cleanup")
         self.assertEqual(cleanup_record["rtsp_port"], "8562")
@@ -1723,7 +1725,7 @@ class TestAPI(unittest.TestCase):
                 return "job test_job_123 was not found"
 
         mock_client.cancel_job.side_effect = MockRpcError()
-        response = self.client.post("/api/v1/jobs/test_job_123/cancel")
+        response = self.client.post("/api/v2/jobs/test_job_123/cancel")
         self.assertEqual(response.status_code, 500)
         payload = response.json()
         self.assertEqual(payload["error"], "MN_EXECUTION_FAILED")
@@ -1735,7 +1737,7 @@ class TestAPI(unittest.TestCase):
     def test_cancel_job_runs_blueprint_cleanup_on_backend_error(self, mock_client, mock_cleanup):
         mock_client.cancel_job.side_effect = Exception("backend unavailable")
 
-        response = self.client.post("/api/v1/jobs/test_job_123/cancel")
+        response = self.client.post("/api/v2/jobs/test_job_123/cancel")
 
         self.assertEqual(response.status_code, 500)
         payload = response.json()
@@ -1747,7 +1749,7 @@ class TestAPI(unittest.TestCase):
     @patch("mn_api.state.client")
     def test_cancel_job_generic_error(self, mock_client):
         mock_client.cancel_job.side_effect = Exception("Some generic error")
-        response = self.client.post("/api/v1/jobs/test_job_123/cancel")
+        response = self.client.post("/api/v2/jobs/test_job_123/cancel")
         self.assertEqual(response.status_code, 500)
         payload = response.json()
         self.assertEqual(payload["error"], "MN_EXECUTION_FAILED")
@@ -1765,8 +1767,8 @@ class TestAPI(unittest.TestCase):
 
         mock_client.submit_job.side_effect = ResourceError()
         response = self.client.post(
-            "/api/v1/jobs",
-            json={"manifest_json": '{"graph_id": "g"}', "payloads": {}},
+            "/api/v2/runtime-jobs",
+            json={"manifest_json": '{"apiVersion": "mn.workflow/v2", "graph_id": "g"}', "payloads": {}},
         )
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json()["error"], "resource_overloaded")
@@ -1774,7 +1776,7 @@ class TestAPI(unittest.TestCase):
     @patch("mn_api.state.client")
     def test_submit_job_input_validation_problem_details(self, mock_client):
         response = self.client.post(
-            "/api/v1/jobs",
+            "/api/v2/runtime-jobs",
             json={
                 "manifest_json": json.dumps(
                     {
@@ -1817,7 +1819,7 @@ class TestAPI(unittest.TestCase):
         )
 
         response = self.client.post(
-            "/api/v1/jobs",
+            "/api/v2/runtime-jobs",
             json={
                 "manifest_json": json.dumps(self._hard_gpu_manifest()),
                 "payloads": {},
@@ -1834,7 +1836,7 @@ class TestAPI(unittest.TestCase):
     @patch("mn_api.state.client")
     def test_submit_job_requirements_error_problem_details(self, mock_client):
         report = {
-            "version": 1,
+            "version": 2,
             "schema_version": "validation.report/v1",
             "ok": False,
             "status": "failed",
@@ -1863,8 +1865,8 @@ class TestAPI(unittest.TestCase):
 
         mock_client.submit_job.side_effect = RequirementsError()
         response = self.client.post(
-            "/api/v1/jobs",
-            json={"manifest_json": '{"graph_id": "g"}', "payloads": {}},
+            "/api/v2/runtime-jobs",
+            json={"manifest_json": '{"apiVersion": "mn.workflow/v2", "graph_id": "g"}', "payloads": {}},
         )
 
         self.assertEqual(response.status_code, 412)
@@ -1876,9 +1878,9 @@ class TestAPI(unittest.TestCase):
     @patch("mn_api.state.client")
     def test_get_job_events_success(self, mock_client):
         mock_client.stream_events.return_value = ['{"id": "e1"}', '{"id": "e2"}']
-        response = self.client.get("/api/v1/jobs/test_job_123/events")
+        response = self.client.get("/api/v2/jobs/test_job_123/events")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"version": 1, "data": [{"id": "e1"}, {"id": "e2"}]})
+        self.assertEqual(response.json(), {"version": 2, "data": [{"id": "e1"}, {"id": "e2"}]})
 
     @patch("mn_api.state.client")
     def test_get_job_workflow_progress_uses_grpc_job_and_events(self, mock_client):
@@ -1891,7 +1893,7 @@ class TestAPI(unittest.TestCase):
                     "manifest": {
                         "id": "workflow-blueprint",
                         "workflow": {
-                            "workflow_id": "workflow-blueprint_v1",
+                            "workflow_id": "workflow-blueprint_v2",
                             "entrypoint": "research",
                             "steps": [{"id": "research", "label": "Research", "run": "research_team"}],
                         },
@@ -1917,11 +1919,11 @@ class TestAPI(unittest.TestCase):
             ),
         ]
 
-        response = self.client.get("/api/v1/jobs/job-progress/workflow-progress")
+        response = self.client.get("/api/v2/jobs/job-progress/workflow-progress")
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
-        self.assertEqual(body["workflow_id"], "workflow-blueprint_v1")
+        self.assertEqual(body["workflow_id"], "workflow-blueprint_v2")
         self.assertEqual(body["agent_count"]["done"], 1)
         self.assertEqual(body["agent_count"]["total"], 1)
         self.assertEqual(body["current_step_id"], "research")
@@ -1948,7 +1950,7 @@ class TestAPI(unittest.TestCase):
                     {
                         "id": "activity-workflow",
                         "workflow": {
-                            "workflow_id": "activity-workflow_v1",
+                            "workflow_id": "activity-workflow_v2",
                             "entrypoint": "research",
                             "steps": [{"id": "research", "label": "Research", "run": "research_team"}],
                         },
@@ -1998,7 +2000,7 @@ class TestAPI(unittest.TestCase):
             ]
 
             with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
-                response = self.client.get("/api/v1/jobs/job-activity/workflow-progress")
+                response = self.client.get("/api/v2/jobs/job-activity/workflow-progress")
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
@@ -2033,7 +2035,7 @@ class TestAPI(unittest.TestCase):
                     {
                         "id": "activity-workflow",
                         "workflow": {
-                            "workflow_id": "activity-workflow_v1",
+                            "workflow_id": "activity-workflow_v2",
                             "entrypoint": "research",
                             "steps": [{"id": "research", "label": "Research", "run": "research_team"}],
                         },
@@ -2107,7 +2109,7 @@ class TestAPI(unittest.TestCase):
             mock_client.stream_events.return_value = []
 
             with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
-                response = self.client.get("/api/v1/jobs/job-activity-categories/workflow-progress")
+                response = self.client.get("/api/v2/jobs/job-activity-categories/workflow-progress")
 
         self.assertEqual(response.status_code, 200)
         activities = response.json()["steps"][0]["recent_events"]
@@ -2162,7 +2164,7 @@ class TestAPI(unittest.TestCase):
             mock_client.stream_events.return_value = [json.dumps(runtime_event)]
 
             with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
-                response = self.client.get("/api/v1/jobs/job-events/events?limit=10")
+                response = self.client.get("/api/v2/jobs/job-events/events?limit=10")
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
@@ -2199,7 +2201,7 @@ class TestAPI(unittest.TestCase):
                         "id": "video_watch_assistant",
                         "type": "service",
                         "workflow": {
-                            "workflow_id": "video_watch_assistant_v1",
+                            "workflow_id": "video_watch_assistant_v2",
                             "entrypoint": "start_video_monitor",
                             "steps": [
                                 {
@@ -2276,11 +2278,11 @@ class TestAPI(unittest.TestCase):
             ]
 
             with patch.dict(os.environ, {"MN_RUNS_ROOT": tmp}):
-                response = self.client.get("/api/v1/jobs/job-progress/workflow-progress")
+                response = self.client.get("/api/v2/jobs/job-progress/workflow-progress")
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
-        self.assertEqual(body["workflow_id"], "video_watch_assistant_v1")
+        self.assertEqual(body["workflow_id"], "video_watch_assistant_v2")
         self.assertEqual(body["trace_id"], "trc_video")
         self.assertEqual(body["observability_summary"]["trace_id"], "trc_video")
         self.assertEqual(body["steps"][0]["id"], "start_video_monitor")
@@ -2305,9 +2307,10 @@ class TestAPI(unittest.TestCase):
             (bundle_root / "manifest.json").write_text(
                 json.dumps(
                     {
+                    "apiVersion": "mn.workflow/v2",
                         "id": "vc_assistant_v1",
                         "workflow": {
-                            "workflow_id": "vc_assistant_v1",
+                            "workflow_id": "vc_assistant_v2",
                             "entrypoint": "collect",
                             "steps": [
                                 {"id": "collect", "label": "Collect", "run": "collector", "emits": "collected", "on": {"collected": "analyze"}},
@@ -2348,7 +2351,7 @@ class TestAPI(unittest.TestCase):
                         "graph_id": "vc_assistant_v1",
                         "status": "running",
                         "workflow_state": {
-                            "workflow_id": "vc_assistant_v1",
+                            "workflow_id": "vc_assistant_v2",
                             "step_order": [
                                 "collect__start",
                                 "collect__public_collector",
@@ -2409,8 +2412,8 @@ class TestAPI(unittest.TestCase):
                 patch("mn_api.routes.jobs.find_blueprint", return_value=(Path(tmp) / "catalog", {"id": "vc_assistant"})),
                 patch("mn_api.routes.jobs.blueprint_bundle_root", return_value=bundle_root),
             ):
-                response = self.client.get("/api/v1/jobs/job-vc/workflow-progress")
-                with self.client.stream("GET", "/api/v1/jobs/job-vc/workflow-progress/stream") as stream_response:
+                response = self.client.get("/api/v2/jobs/job-vc/workflow-progress")
+                with self.client.stream("GET", "/api/v2/jobs/job-vc/workflow-progress/stream") as stream_response:
                     stream_lines = [line for line in stream_response.iter_lines() if line][:2]
 
         self.assertEqual(response.status_code, 200)
@@ -2462,7 +2465,7 @@ class TestAPI(unittest.TestCase):
             ),
         ]
 
-        response = self.client.get("/api/v1/jobs/job-progress/workflow-progress")
+        response = self.client.get("/api/v2/jobs/job-progress/workflow-progress")
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
@@ -2482,7 +2485,7 @@ class TestAPI(unittest.TestCase):
                     "manifest": {
                         "id": "workflow-blueprint",
                         "workflow": {
-                            "workflow_id": "workflow-blueprint_v1",
+                            "workflow_id": "workflow-blueprint_v2",
                             "entrypoint": "research",
                             "steps": [{"id": "research", "label": "Research", "run": "research_team"}],
                         },
@@ -2543,7 +2546,7 @@ class TestAPI(unittest.TestCase):
             ],
         ]
 
-        with self.client.stream("GET", "/api/v1/jobs/job-progress/workflow-progress/stream") as response:
+        with self.client.stream("GET", "/api/v2/jobs/job-progress/workflow-progress/stream") as response:
             body = "".join(response.iter_text())
 
         self.assertEqual(response.status_code, 200)
@@ -2640,7 +2643,7 @@ class TestAPI(unittest.TestCase):
             ]
 
             with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
-                response = self.client.get("/api/v1/jobs/job-large")
+                response = self.client.get("/api/v2/runtime-jobs/job-large")
 
         self.assertEqual(response.status_code, 200)
         self.assertLess(len(response.content), 4 * 1024 * 1024)
@@ -2663,7 +2666,7 @@ class TestAPI(unittest.TestCase):
             artifact for artifact in body["output_files"] if artifact["artifact_id"] == "output_0_report_markdown"
         )
         self.assertEqual(output_ref["source"], "post_launch_output")
-        self.assertEqual(output_ref["url"], "/api/v1/runs/compact-run/outputs/0")
+        self.assertEqual(output_ref["url"], "/api/v2/runtime-runs/compact-run/outputs/0")
 
     @patch("mn_api.state.client")
     def test_get_job_compact_upgrades_legacy_failure_reason(self, mock_client):
@@ -2695,7 +2698,7 @@ class TestAPI(unittest.TestCase):
             ]
 
             with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
-                response = self.client.get("/api/v1/jobs/job-failed")
+                response = self.client.get("/api/v2/runtime-jobs/job-failed")
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
@@ -2758,7 +2761,7 @@ class TestAPI(unittest.TestCase):
             ]
 
             with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
-                response = self.client.get("/api/v1/jobs/job-completed")
+                response = self.client.get("/api/v2/runtime-jobs/job-completed")
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
@@ -2808,7 +2811,7 @@ class TestAPI(unittest.TestCase):
             ]
 
             with patch.dict(os.environ, {"MN_RUNS_ROOT": str(runs_root)}):
-                response = self.client.get("/api/v1/jobs/job-running")
+                response = self.client.get("/api/v2/runtime-jobs/job-running")
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
@@ -2828,7 +2831,7 @@ class TestAPI(unittest.TestCase):
                     "manifest": {
                         "id": "invoice-blueprint",
                         "workflow": {
-                            "workflow_id": "invoice-blueprint_v1",
+                            "workflow_id": "invoice-blueprint_v2",
                             "entrypoint": "extract",
                             "steps": [{"id": "extract", "label": "Extract", "run": "extractor"}],
                         },
@@ -2859,7 +2862,7 @@ class TestAPI(unittest.TestCase):
             json.dumps({"type": "job_completed", "timestamp": "2026-06-04T12:00:02Z"}),
         ]
 
-        response = self.client.get("/api/v1/jobs/job-completed/workflow-progress")
+        response = self.client.get("/api/v2/jobs/job-completed/workflow-progress")
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
@@ -2887,7 +2890,7 @@ class TestAPI(unittest.TestCase):
             ),
         ]
 
-        response = self.client.get("/api/v1/jobs/service-job")
+        response = self.client.get("/api/v2/runtime-jobs/service-job")
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
@@ -2916,7 +2919,7 @@ class TestAPI(unittest.TestCase):
                     )
                 ]
 
-                response = self.client.get(f"/api/v1/jobs/{event_type}-job")
+                response = self.client.get(f"/api/v2/runtime-jobs/{event_type}-job")
 
                 self.assertEqual(response.status_code, 200)
                 body = response.json()
@@ -2929,7 +2932,7 @@ class TestAPI(unittest.TestCase):
             {"job": {"job_id": "job-full", "graph_id": "graph-1", "status": "running"}}
         )
 
-        response = self.client.get("/api/v1/jobs/job-full?include=full")
+        response = self.client.get("/api/v2/runtime-jobs/job-full?include=full")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["job"]["job_id"], "job-full")
@@ -2955,7 +2958,7 @@ class TestAPI(unittest.TestCase):
             "mn_api.routes.jobs.resolve_json_reference",
             return_value={"final_artifact": {"ok": True}},
         ) as resolve:
-            response = self.client.get("/api/v1/jobs/job-1/snapshots/result")
+            response = self.client.get("/api/v2/jobs/job-1/snapshots/result")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["final_artifact"], {"ok": True})
@@ -2989,7 +2992,7 @@ class TestAPI(unittest.TestCase):
             ),
         ]
 
-        response = self.client.get("/api/v1/jobs/job-1/agent-graph")
+        response = self.client.get("/api/v2/jobs/job-1/agent-graph")
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
@@ -3048,7 +3051,7 @@ class TestAPI(unittest.TestCase):
             )
             mock_client.stream_events.return_value = []
 
-            response = self.client.get("/api/v1/jobs/job-1/agent-graph")
+            response = self.client.get("/api/v2/jobs/job-1/agent-graph")
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
@@ -3091,7 +3094,7 @@ class TestAPI(unittest.TestCase):
         )
         mock_client.stream_events.return_value = []
 
-        response = self.client.get("/api/v1/jobs/job-1/agent-graph")
+        response = self.client.get("/api/v2/jobs/job-1/agent-graph")
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
@@ -3127,7 +3130,7 @@ class TestAPI(unittest.TestCase):
             )
         ]
 
-        response = self.client.get("/api/v1/jobs/job-1/agent-graph")
+        response = self.client.get("/api/v2/jobs/job-1/agent-graph")
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
@@ -3154,7 +3157,7 @@ class TestAPI(unittest.TestCase):
         )
         mock_client.stream_events.return_value = []
 
-        response = self.client.get("/api/v1/jobs/job-1/agent-graph")
+        response = self.client.get("/api/v2/jobs/job-1/agent-graph")
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
@@ -3170,14 +3173,14 @@ class TestAPI(unittest.TestCase):
             '{"type": "agent_started"}',
             '{"type": "dead_letter", "agent_id": "slow", "reason": "queue full"}',
         ]
-        response = self.client.get("/api/v1/jobs/test_job_123/dead-letters")
+        response = self.client.get("/api/v2/jobs/test_job_123/dead-letters")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["data"][0]["reason"], "queue full")
         mock_client.stream_events.assert_called_once_with("test_job_123", follow=False, limit=25)
 
     @patch("mn_api.state.client")
     def test_replay_job_dead_letter_reports_not_exposed_without_backend_call(self, mock_client):
-        response = self.client.post("/api/v1/jobs/test_job_123/dead-letters/2/replay")
+        response = self.client.post("/api/v2/jobs/test_job_123/dead-letters/2/replay")
 
         self.assertEqual(response.status_code, 501)
         body = response.json()["detail"]
@@ -3191,21 +3194,21 @@ class TestAPI(unittest.TestCase):
         mock_client.get_system_summary.return_value = (
             '{"nodes": ["n1"], "jobs": [{"status": "running"}, {"status": "failed"}]}'
         )
-        response = self.client.get("/api/v1/metrics")
+        response = self.client.get("/api/v2/metrics")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["jobs"]["by_status"], {"running": 1, "failed": 1})
 
     @patch("mn_api.state.client")
     def test_pause_and_resume_job_success(self, mock_client):
         mock_client.pause_job.return_value = "paused"
-        pause_response = self.client.post("/api/v1/jobs/test_job_123/pause")
+        pause_response = self.client.post("/api/v2/jobs/test_job_123/pause")
         self.assertEqual(pause_response.status_code, 200)
-        self.assertEqual(pause_response.json(), {"version": 1, "status": "paused", "job_id": "test_job_123"})
+        self.assertEqual(pause_response.json(), {"version": 2, "status": "paused", "job_id": "test_job_123"})
 
         mock_client.resume_job.return_value = "running"
-        resume_response = self.client.post("/api/v1/jobs/test_job_123/resume")
+        resume_response = self.client.post("/api/v2/jobs/test_job_123/resume")
         self.assertEqual(resume_response.status_code, 200)
-        self.assertEqual(resume_response.json(), {"version": 1, "status": "running", "job_id": "test_job_123"})
+        self.assertEqual(resume_response.json(), {"version": 2, "status": "running", "job_id": "test_job_123"})
 
     @patch("mn_api.state.client")
     def test_pause_and_resume_job_grpc_errors(self, mock_client):
@@ -3217,14 +3220,14 @@ class TestAPI(unittest.TestCase):
                 return self.detail
 
         mock_client.pause_job.side_effect = MockRpcError("job test_job_123 cannot be paused")
-        pause_response = self.client.post("/api/v1/jobs/test_job_123/pause")
+        pause_response = self.client.post("/api/v2/jobs/test_job_123/pause")
         self.assertEqual(pause_response.status_code, 500)
-        self.assertEqual(pause_response.json(), {"version": 1, "error": "job test_job_123 cannot be paused"})
+        self.assertEqual(pause_response.json(), {"version": 2, "error": "job test_job_123 cannot be paused"})
 
         mock_client.resume_job.side_effect = MockRpcError("job test_job_123 cannot be resumed")
-        resume_response = self.client.post("/api/v1/jobs/test_job_123/resume")
+        resume_response = self.client.post("/api/v2/jobs/test_job_123/resume")
         self.assertEqual(resume_response.status_code, 500)
-        self.assertEqual(resume_response.json(), {"version": 1, "error": "job test_job_123 cannot be resumed"})
+        self.assertEqual(resume_response.json(), {"version": 2, "error": "job test_job_123 cannot be resumed"})
 
     def test_blueprint_list_detail_and_install_success(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -3232,9 +3235,9 @@ class TestAPI(unittest.TestCase):
             self._write_blueprint_repo(repo)
             original = self._set_blueprint_config(repo)
             try:
-                list_response = self.client.get("/api/v1/blueprints")
-                detail_response = self.client.get("/api/v1/blueprints/worker_one")
-                install_response = self.client.post("/api/v1/blueprints/worker_one/install")
+                list_response = self.client.get("/api/v2/blueprints")
+                detail_response = self.client.get("/api/v2/blueprints/worker_one")
+                install_response = self.client.post("/api/v2/blueprints/worker_one/install")
             finally:
                 self._restore_config(original)
 
@@ -3272,8 +3275,8 @@ class TestAPI(unittest.TestCase):
             (repo / "index.json").write_text(json.dumps(index))
             original = self._set_blueprint_config(repo)
             try:
-                finance_response = self.client.get("/api/v1/blueprints?category=finance")
-                business_response = self.client.get("/api/v1/blueprints?category=Business")
+                finance_response = self.client.get("/api/v2/blueprints?category=finance")
+                business_response = self.client.get("/api/v2/blueprints?category=Business")
             finally:
                 self._restore_config(original)
 
@@ -3299,9 +3302,10 @@ class TestAPI(unittest.TestCase):
             (repo / "worker_one" / "manifest.json").write_text(
                 json.dumps(
                     {
+                    "apiVersion": "mn.workflow/v2",
                         "graph_id": "worker_one_graph",
                         "workflow": {
-                            "workflow_id": "worker_one_v1",
+                            "workflow_id": "worker_one_v2",
                             "steps": [
                                 {
                                     "id": "worker",
@@ -3432,6 +3436,7 @@ class TestAPI(unittest.TestCase):
                 (bundle / "manifest.json").write_text(
                     json.dumps(
                         {
+                    "apiVersion": "mn.workflow/v2",
                             "graph_id": "worker_one_graph",
                             "nodes": [{"node_id": "worker", "config": {"environment": {}}}],
                             "edges": [],
@@ -3510,7 +3515,7 @@ class TestAPI(unittest.TestCase):
                 self.assertEqual(response.status_code, 200)
                 manifest_json, payloads = mock_client.create_stable_job.call_args.args
                 manifest = json.loads(manifest_json)
-                env = manifest["nodes"][0]["config"]["environment"]
+                env = manifest["flow"]["nodes"][0]["config"]["environment"]
                 injected_config = json.loads(env["MN_BLUEPRINT_CONFIG_JSON"])
                 staged_folder = injected_config["document_sources"]["folder_path"]
                 submission_root = repo / "shared" / "submissions" / env["MN_STORAGE_SUBMISSION_ID"]
@@ -3591,6 +3596,7 @@ class TestAPI(unittest.TestCase):
             (repo / "worker_one" / "manifest.json").write_text(
                 json.dumps(
                     {
+                    "apiVersion": "mn.workflow/v2",
                         "graph_id": "worker_one_graph",
                         "nodes": [
                             {
@@ -3615,7 +3621,7 @@ class TestAPI(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         manifest_json, _payloads = mock_client.create_stable_job.call_args.args
-        submitted_env = json.loads(manifest_json)["nodes"][0]["config"]["environment"]
+        submitted_env = json.loads(manifest_json)["flow"]["nodes"][0]["config"]["environment"]
         submitted_config = json.loads(submitted_env["MN_BLUEPRINT_CONFIG_JSON"])
         self.assertEqual(submitted_config["vl_model"]["model"], "edited-local-model")
 
@@ -3629,6 +3635,7 @@ class TestAPI(unittest.TestCase):
             (repo / "worker_one" / "manifest.json").write_text(
                 json.dumps(
                     {
+                    "apiVersion": "mn.workflow/v2",
                         "graph_id": "worker_one_graph",
                         "nodes": [
                             {
@@ -3717,7 +3724,7 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(captured_env["MN_BLUEPRINT_BUNDLE_DIR"], str((repo / "worker_one").resolve()))
         self.assertEqual(json.loads(captured_env["MN_BLUEPRINT_CONFIG_JSON"])["identity"]["run_id"], "run-pre-launch")
         submitted_manifest = json.loads(mock_client.create_stable_job.call_args.args[0])
-        submitted_env = submitted_manifest["nodes"][0]["config"]["environment"]
+        submitted_env = submitted_manifest["flow"]["nodes"][0]["config"]["environment"]
         self.assertEqual(submitted_env["VIDEO_SOURCE_URI"], "rtsp://host.openshell.internal:8562/video-watch")
         self.assertEqual(validation_env, "rtsp://host.openshell.internal:8562/video-watch")
         self.assertEqual(process_info["pid"], 6262)
@@ -3729,6 +3736,7 @@ class TestAPI(unittest.TestCase):
             (repo / "worker_one" / "manifest.json").write_text(
                 json.dumps(
                     {
+                    "apiVersion": "mn.workflow/v2",
                         "graph_id": "worker_one_graph",
                         "nodes": [],
                         "edges": [],
@@ -3751,7 +3759,7 @@ class TestAPI(unittest.TestCase):
             (config_dir / "default.json").write_text(json.dumps({"llm": {"api_base": "not-a-url"}}))
             original = self._set_blueprint_config(repo)
             try:
-                response = self.client.post("/api/v1/blueprints/worker_one/validate")
+                response = self.client.post("/api/v2/blueprints/worker_one/validate")
             finally:
                 self._restore_config(original)
 
@@ -3775,7 +3783,7 @@ class TestAPI(unittest.TestCase):
                     return_value={"ok": True, "status": "passed", "issues": [], "errors": []},
                 ):
                     response = self.client.post(
-                        "/api/v1/blueprints/launch/validate",
+                        "/api/v2/blueprints/launch/validate",
                         json={"source": "catalog", "blueprint_id": "worker_one"},
                     )
             finally:
@@ -3883,7 +3891,7 @@ class TestAPI(unittest.TestCase):
                                 "progress_id": "launch-api-test",
                             }
                         )
-                    progress_response = self.client.get("/api/v1/blueprints/launch/progress/launch-api-test")
+                    progress_response = self.client.get("/api/v2/blueprints/launch/progress/launch-api-test")
             finally:
                 self._restore_config(original)
 
@@ -3948,7 +3956,7 @@ class TestAPI(unittest.TestCase):
                                 "progress_id": "launch-context-test",
                             }
                         )
-                    progress_response = self.client.get("/api/v1/blueprints/launch/progress/launch-context-test")
+                    progress_response = self.client.get("/api/v2/blueprints/launch/progress/launch-context-test")
             finally:
                 self._restore_config(original)
 
@@ -3964,9 +3972,9 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(phase_by_id["context_engine"]["status"], "completed")
 
     def test_blueprint_launch_progress_rejects_invalid_progress_id(self):
-        response = self.client.get("/api/v1/blueprints/launch/progress/not/valid")
+        response = self.client.get("/api/v2/blueprints/launch/progress/not/valid")
         self.assertEqual(response.status_code, 404)
-        response = self.client.get("/api/v1/blueprints/launch/progress/bad%20id")
+        response = self.client.get("/api/v2/blueprints/launch/progress/bad%20id")
         self.assertEqual(response.status_code, 400)
 
     @patch("mn_api.state.client")
@@ -4076,6 +4084,7 @@ class TestAPI(unittest.TestCase):
             (bundle_dir / "manifest.json").write_text(
                 json.dumps(
                     {
+                    "apiVersion": "mn.workflow/v2",
                         "graph_id": "local_worker_graph",
                         "job_name": "Local Worker",
                         "nodes": [],
@@ -4257,6 +4266,7 @@ class TestAPI(unittest.TestCase):
             (repo / "worker_one" / "manifest.json").write_text(
                 json.dumps(
                     {
+                    "apiVersion": "mn.workflow/v2",
                         "graph_id": "worker_one_graph",
                         "nodes": [],
                         "edges": [],
@@ -4305,6 +4315,7 @@ class TestAPI(unittest.TestCase):
             (repo / "worker_one" / "manifest.json").write_text(
                 json.dumps(
                     {
+                    "apiVersion": "mn.workflow/v2",
                         "graph_id": "worker_one_graph",
                         "nodes": [],
                         "edges": [],
@@ -4368,7 +4379,7 @@ class TestAPI(unittest.TestCase):
             original = self._set_blueprint_config(repo)
             try:
                 response = self.client.post(
-                    "/api/v1/blueprints/worker_one/runs",
+                    "/api/v2/blueprints/worker_one/runs",
                     json={"run_id": "../bad"},
                 )
             finally:
@@ -4382,7 +4393,7 @@ class TestAPI(unittest.TestCase):
     @patch("mn_api.state.client")
     def test_blueprint_run_rejects_invalid_config_override_format(self, mock_client):
         response = self.client.post(
-            "/api/v1/blueprints/worker_one/runs",
+            "/api/v2/blueprints/worker_one/runs",
             json={"config_overwrite": ["not", "an", "object"]},
         )
 
@@ -4399,7 +4410,7 @@ class TestAPI(unittest.TestCase):
             original = self._set_blueprint_config(repo)
             try:
                 response = self.client.post(
-                    "/api/v1/blueprints/worker_one/runs",
+                    "/api/v2/blueprints/worker_one/runs",
                     json={"run_id": "run-123"},
                 )
             finally:
@@ -4427,7 +4438,7 @@ class TestAPI(unittest.TestCase):
             )
             original = self._set_blueprint_config(repo)
             try:
-                response = self.client.post("/api/v1/blueprints/worker_one/install")
+                response = self.client.post("/api/v2/blueprints/worker_one/install")
             finally:
                 self._restore_config(original)
 
@@ -4440,8 +4451,8 @@ class TestAPI(unittest.TestCase):
             self._write_blueprint_repo(repo)
             original = self._set_blueprint_config(repo)
             try:
-                invalid_response = self.client.get("/api/v1/blueprints/bad$id")
-                missing_response = self.client.get("/api/v1/blueprints/missing_worker")
+                invalid_response = self.client.get("/api/v2/blueprints/bad$id")
+                missing_response = self.client.get("/api/v2/blueprints/missing_worker")
             finally:
                 self._restore_config(original)
 
@@ -4453,7 +4464,7 @@ class TestAPI(unittest.TestCase):
             missing_repo = Path(tmpdir) / "missing"
             original = self._set_blueprint_config(missing_repo)
             try:
-                missing_response = self.client.get("/api/v1/blueprints")
+                missing_response = self.client.get("/api/v2/blueprints")
             finally:
                 self._restore_config(original)
 
@@ -4462,7 +4473,7 @@ class TestAPI(unittest.TestCase):
             (malformed_repo / "index.json").write_text("{not json")
             original = self._set_blueprint_config(malformed_repo)
             try:
-                malformed_response = self.client.get("/api/v1/blueprints")
+                malformed_response = self.client.get("/api/v2/blueprints")
             finally:
                 self._restore_config(original)
 
@@ -4475,13 +4486,13 @@ class TestAPI(unittest.TestCase):
             self._write_blueprint_repo(repo)
             original = self._set_blueprint_config(repo, token="secret")
             try:
-                unauthenticated = self.client.get("/api/v1/blueprints")
+                unauthenticated = self.client.get("/api/v2/blueprints")
                 authenticated = self.client.get(
-                    "/api/v1/blueprints",
+                    "/api/v2/blueprints",
                     headers={"Authorization": "Bearer secret"},
                 )
-                install_unauthenticated = self.client.post("/api/v1/blueprints/worker_one/install")
-                run_unauthenticated = self.client.post("/api/v1/blueprints/worker_one/runs", json={})
+                install_unauthenticated = self.client.post("/api/v2/blueprints/worker_one/install")
+                run_unauthenticated = self.client.post("/api/v2/blueprints/worker_one/runs", json={})
             finally:
                 self._restore_config(original)
 

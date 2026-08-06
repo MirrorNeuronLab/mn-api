@@ -125,7 +125,7 @@ class TestApiConfig(unittest.TestCase):
                 child_env = subprocess_environment()
 
         self.assertEqual(api_config.port, 8010)
-        self.assertEqual(web_config.api_base_url, "http://127.0.0.1:8010/api/v1")
+        self.assertEqual(web_config.api_base_url, "http://127.0.0.1:8010/api/v2")
         self.assertEqual(web_config.api_token, "web-api-token-from-file")
         self.assertEqual(web_config.port, 55180)
         self.assertEqual(child_env["MN_API_PORT"], "8010")

@@ -16,7 +16,7 @@ def test_unfinished_jobs_ignores_malformed_job_lists(monkeypatch, api_client, fa
     fake_runtime_client.jobs_payload = {"data": "not-a-list"}
     monkeypatch.setattr(state, "client", fake_runtime_client)
 
-    response = api_client.get("/api/v1/jobs/unfinished")
+    response = api_client.get("/api/v2/jobs/unfinished")
 
     assert response.status_code == 200
     assert response.json()["data"] == []
@@ -26,8 +26,8 @@ def test_unfinished_jobs_ignores_malformed_job_lists(monkeypatch, api_client, fa
 def test_cleanup_job_aliases_share_runtime_behavior(monkeypatch, api_client, fake_runtime_client):
     monkeypatch.setattr(state, "client", fake_runtime_client)
 
-    colon = api_client.post("/api/v1/jobs:cleanup")
-    path = api_client.post("/api/v1/jobs/cleanup")
+    colon = api_client.post("/api/v2/jobs:cleanup")
+    path = api_client.post("/api/v2/jobs/cleanup")
 
     assert colon.status_code == 200
     assert path.status_code == 200
@@ -40,7 +40,7 @@ def test_cleanup_job_aliases_share_runtime_behavior(monkeypatch, api_client, fak
 def test_cancel_all_job_alias_starts_durable_operation(monkeypatch, api_client, fake_runtime_client):
     monkeypatch.setattr(state, "client", fake_runtime_client)
 
-    response = api_client.post("/api/v1/jobs:cancel-all")
+    response = api_client.post("/api/v2/jobs:cancel-all")
 
     assert response.status_code == 200
     assert response.json()["kind"] == "cancel_all_jobs"
@@ -50,7 +50,7 @@ def test_cancel_all_job_alias_starts_durable_operation(monkeypatch, api_client, 
 def test_cancel_all_jobs_starts_even_when_snapshot_is_empty(monkeypatch, api_client, fake_runtime_client):
     monkeypatch.setattr(state, "client", fake_runtime_client)
 
-    response = api_client.post("/api/v1/jobs/cancel-all")
+    response = api_client.post("/api/v2/jobs/cancel-all")
 
     assert response.status_code == 200
     assert response.json()["operation_id"] == "op-1"
@@ -63,7 +63,7 @@ def test_cancel_all_jobs_reports_runtime_failure(monkeypatch, api_client):
 
     monkeypatch.setattr(state, "client", FailingClient())
 
-    response = api_client.post("/api/v1/jobs:cancel-all")
+    response = api_client.post("/api/v2/jobs:cancel-all")
 
     assert response.status_code == 500
     assert response.json()["error"] == "MN_EXECUTION_FAILED"
@@ -76,12 +76,12 @@ def test_operation_status_and_sse_routes_attach_to_existing_operation(monkeypatc
     )
     monkeypatch.setattr(state, "client", fake_runtime_client)
 
-    status = api_client.get("/api/v1/operations/op-1")
+    status = api_client.get("/api/v2/operations/op-1")
 
     assert status.status_code == 200
     assert status.json()["operation_id"] == "op-1"
 
-    events = api_client.get("/api/v1/operations/op-1/events?after_sequence=3")
+    events = api_client.get("/api/v2/operations/op-1/events?after_sequence=3")
     assert events.status_code == 200
     assert "id: 4" in events.text
     assert "event: item_completed" in events.text
@@ -109,7 +109,7 @@ def test_cleanup_jobs_reports_retry_failure_after_admin_token_error(monkeypatch,
     monkeypatch.setattr(state, "client", first_client)
     monkeypatch.setattr(state, "close_client", lambda: setattr(state, "client", retry_client))
 
-    response = api_client.post("/api/v1/jobs:cleanup")
+    response = api_client.post("/api/v2/jobs:cleanup")
 
     assert response.status_code == 500
     assert response.json()["error"] == "MN_EXECUTION_FAILED"
@@ -122,7 +122,7 @@ def test_cleanup_jobs_reports_non_admin_runtime_failure(monkeypatch, api_client)
 
     monkeypatch.setattr(state, "client", FailingClient())
 
-    response = api_client.post("/api/v1/jobs:cleanup")
+    response = api_client.post("/api/v2/jobs:cleanup")
 
     assert response.status_code == 500
     assert response.json()["error"] == "MN_EXECUTION_FAILED"
@@ -142,7 +142,7 @@ def test_cleanup_jobs_does_not_retry_unrelated_rpc_error(monkeypatch, api_client
 
     monkeypatch.setattr(state, "client", FailingClient())
 
-    response = api_client.post("/api/v1/jobs:cleanup")
+    response = api_client.post("/api/v2/jobs:cleanup")
 
     assert response.status_code == 500
     assert response.json()["error"] == "MN_EXECUTION_FAILED"
@@ -155,7 +155,7 @@ def test_unfinished_jobs_reports_runtime_failure(monkeypatch, api_client):
 
     monkeypatch.setattr(state, "client", FailingClient())
 
-    response = api_client.get("/api/v1/jobs/unfinished")
+    response = api_client.get("/api/v2/jobs/unfinished")
 
     assert response.status_code == 500
     assert response.json()["error"] == "MN_EXECUTION_FAILED"
@@ -168,7 +168,7 @@ def test_list_jobs_reports_runtime_failure(monkeypatch, api_client):
 
     monkeypatch.setattr(state, "client", FailingClient())
 
-    response = api_client.get("/api/v1/jobs")
+    response = api_client.get("/api/v2/runtime-jobs")
 
     assert response.status_code == 500
     assert response.json()["error"] == "MN_EXECUTION_FAILED"
@@ -177,7 +177,7 @@ def test_list_jobs_reports_runtime_failure(monkeypatch, api_client):
 def test_get_job_rejects_unknown_include_value(monkeypatch, api_client):
     monkeypatch.setattr(state, "client", SimpleNamespace())
 
-    response = api_client.get("/api/v1/jobs/job-1?include=details")
+    response = api_client.get("/api/v2/runtime-jobs/job-1?include=details")
 
     assert response.status_code == 400
     assert response.json()["detail"] == "include must be 'compact', 'summary', or 'full'"
@@ -186,14 +186,14 @@ def test_get_job_rejects_unknown_include_value(monkeypatch, api_client):
 def test_get_job_reports_runtime_failure(monkeypatch, api_client):
     monkeypatch.setattr(state, "client", SimpleNamespace(get_job=lambda _job_id: (_ for _ in ()).throw(RuntimeError("runtime unavailable"))))
 
-    response = api_client.get("/api/v1/jobs/job-1?include=full")
+    response = api_client.get("/api/v2/runtime-jobs/job-1?include=full")
 
     assert response.status_code == 500
     assert response.json()["error"] == "MN_EXECUTION_FAILED"
 
 
 def test_get_job_snapshot_rejects_unknown_kind(api_client):
-    response = api_client.get("/api/v1/jobs/job-1/snapshots/unknown")
+    response = api_client.get("/api/v2/jobs/job-1/snapshots/unknown")
 
     assert response.status_code == 404
     assert response.json()["detail"] == "unknown job snapshot"
@@ -202,7 +202,7 @@ def test_get_job_snapshot_rejects_unknown_kind(api_client):
 def test_get_job_snapshot_reports_unavailable_reference(monkeypatch, api_client):
     monkeypatch.setattr(state, "client", SimpleNamespace(get_job=lambda _job_id: json.dumps({"job": {}})))
 
-    response = api_client.get("/api/v1/jobs/job-1/snapshots/result")
+    response = api_client.get("/api/v2/jobs/job-1/snapshots/result")
 
     assert response.status_code == 404
     assert response.json()["detail"] == "result snapshot is unavailable"
@@ -215,7 +215,7 @@ def test_get_job_snapshot_reports_runtime_failure(monkeypatch, api_client):
         SimpleNamespace(get_job=lambda _job_id: (_ for _ in ()).throw(RuntimeError("runtime unavailable"))),
     )
 
-    response = api_client.get("/api/v1/jobs/job-1/snapshots/result")
+    response = api_client.get("/api/v2/jobs/job-1/snapshots/result")
 
     assert response.status_code == 500
     assert response.json()["error"] == "MN_EXECUTION_FAILED"
@@ -241,7 +241,7 @@ def test_get_job_snapshot_maps_staged_artifact_errors(monkeypatch, api_client, e
     monkeypatch.setattr(state, "client", SimpleNamespace(get_job=lambda _job_id: json.dumps({"job": {"result_ref": reference}})))
     monkeypatch.setattr("mn_api.routes.jobs.resolve_json_reference", lambda _reference: (_ for _ in ()).throw(error))
 
-    response = api_client.get("/api/v1/jobs/job-1/snapshots/result")
+    response = api_client.get("/api/v2/jobs/job-1/snapshots/result")
 
     assert response.status_code == status_code
     assert response.json()["detail"]["code"] == error_code
@@ -256,7 +256,7 @@ def test_dead_letters_reports_runtime_failure(monkeypatch, api_client):
 
     monkeypatch.setattr(state, "client", FailingClient())
 
-    response = api_client.get("/api/v1/jobs/job-1/dead-letters")
+    response = api_client.get("/api/v2/jobs/job-1/dead-letters")
 
     assert response.status_code == 500
     assert response.json()["error"] == "MN_EXECUTION_FAILED"
@@ -273,7 +273,7 @@ def test_pause_job_uses_generic_problem_when_details_lookup_fails(monkeypatch, a
 
     monkeypatch.setattr(state, "client", FailingClient())
 
-    response = api_client.post("/api/v1/jobs/job-1/pause")
+    response = api_client.post("/api/v2/jobs/job-1/pause")
 
     assert response.status_code == 500
     assert response.json()["error"] == "MN_EXECUTION_FAILED"
@@ -283,7 +283,7 @@ def test_restore_job_rejects_invalid_base64_before_sdk_call(monkeypatch, api_cli
     monkeypatch.setattr(state, "client", fake_runtime_client)
 
     response = api_client.post(
-        "/api/v1/jobs/restore",
+        "/api/v2/jobs/restore",
         json={"backup_json": "{}", "bundle_files": {"manifest.json": "abc"}, "blueprint_id": "bp"},
     )
 
@@ -305,20 +305,20 @@ def test_pause_resume_legacy_error_shape_is_narrowly_preserved(monkeypatch, api_
     )
     monkeypatch.setattr(state, "client", fake)
 
-    pause = api_client.post("/api/v1/jobs/job-1/pause")
-    resume = api_client.post("/api/v1/jobs/job-1/resume")
+    pause = api_client.post("/api/v2/jobs/job-1/pause")
+    resume = api_client.post("/api/v2/jobs/job-1/resume")
 
     assert pause.status_code == 500
-    assert pause.json() == {"version": 1, "error": "job job-1 cannot be paused"}
+    assert pause.json() == {"version": 2, "error": "job job-1 cannot be paused"}
     assert resume.status_code == 500
-    assert resume.json() == {"version": 1, "error": "job job-1 cannot be resumed"}
+    assert resume.json() == {"version": 2, "error": "job job-1 cannot be resumed"}
 
 
 def test_pause_resume_non_detail_errors_use_problem_contract(monkeypatch, api_client):
     fake = SimpleNamespace(pause_job=lambda job_id: (_ for _ in ()).throw(RuntimeError("boom")))
     monkeypatch.setattr(state, "client", fake)
 
-    response = api_client.post("/api/v1/jobs/job-1/pause")
+    response = api_client.post("/api/v2/jobs/job-1/pause")
 
     assert response.status_code == 500
     assert response.json()["error"] == "MN_EXECUTION_FAILED"
@@ -335,7 +335,7 @@ def test_workflow_progress_websocket_reports_stream_errors(monkeypatch, api_clie
         lambda job_id: {"job_id": job_id, "status": "running"},
     )
 
-    with api_client.websocket_connect("/api/v1/jobs/job-1/workflow-progress/ws") as websocket:
+    with api_client.websocket_connect("/api/v2/jobs/job-1/workflow-progress/ws") as websocket:
         assert websocket.receive_json() == {"event": "snapshot", "data": {"job_id": "job-1", "status": "running"}}
         error = websocket.receive_json()
         assert error == {"event": "error", "data": {"job_id": "job-1", "error": "stream failed"}}

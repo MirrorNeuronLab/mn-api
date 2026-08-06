@@ -22,8 +22,8 @@ def test_blueprint_cleanup_runs_shared_resource_cleanup(monkeypatch, api_client,
         lambda **kwargs: calls.append(kwargs) or {"dry_run": kwargs["dry_run"]},
     )
 
-    dry_run = api_client.post("/api/v1/blueprints:cleanup", json={"dry_run": True})
-    explicit = api_client.post("/api/v1/blueprints:cleanup", json={"blueprint_id": "bp"})
+    dry_run = api_client.post("/api/v2/blueprints:cleanup", json={"dry_run": True})
+    explicit = api_client.post("/api/v2/blueprints:cleanup", json={"blueprint_id": "bp"})
 
     assert dry_run.status_code == 200
     assert dry_run.json()["status"] == "planned"
@@ -44,7 +44,7 @@ def test_blueprint_cleanup_stale_process_scope(monkeypatch, api_client, tmp_path
     )
 
     response = api_client.post(
-        "/api/v1/blueprints:cleanup",
+        "/api/v2/blueprints:cleanup",
         json={"blueprint_id": "bp", "include_files": False, "include_docker": False},
     )
 
@@ -69,7 +69,7 @@ def test_blueprint_update_pulls_storage_and_cleans_removed_blueprints(monkeypatc
         lambda **kwargs: cleanups.append(kwargs) or {"dry_run": kwargs["dry_run"]},
     )
 
-    update = api_client.post("/api/v1/blueprints:update", json={"source": str(storage)})
+    update = api_client.post("/api/v2/blueprints:update", json={"source": str(storage)})
 
     assert update.status_code == 200
     assert update.json()["blueprints_removed"] == ["old-bp"]
@@ -89,7 +89,7 @@ def test_blueprint_uninstall_dry_run_archives_and_plans_cleanup(monkeypatch, api
     )
 
     uninstall = api_client.post(
-        "/api/v1/blueprints:uninstall",
+        "/api/v2/blueprints:uninstall",
         json={"blueprint_id": "bp", "source": str(tmp_path / "storage"), "dry_run": True, "remove_models": True},
     )
 
@@ -113,11 +113,11 @@ def test_blueprint_list_and_health_refresh_local_source_env(monkeypatch, api_cli
     monkeypatch.setenv("MN_ENV", "dev")
     monkeypatch.setenv("MN_BLUEPRINT_SOURCE", "local")
     monkeypatch.setenv("MN_BLUEPRINT_LOCAL", str(catalog_a))
-    first = api_client.get("/api/v1/blueprints")
+    first = api_client.get("/api/v2/blueprints")
 
     monkeypatch.setenv("MN_BLUEPRINT_LOCAL", str(catalog_b))
-    second = api_client.get("/api/v1/blueprints")
-    health = api_client.get("/api/v1/health")
+    second = api_client.get("/api/v2/blueprints")
+    health = api_client.get("/api/v2/health")
 
     assert first.status_code == 200
     assert first.json()["repo_dir"] == str(catalog_a.resolve())
@@ -149,8 +149,8 @@ def test_blueprint_list_and_health_use_persisted_local_source_env(monkeypatch, a
     monkeypatch.delenv("MN_BLUEPRINT_REPO", raising=False)
     monkeypatch.delenv("MN_BLUEPRINT_LOCAL", raising=False)
 
-    blueprints_response = api_client.get("/api/v1/blueprints")
-    health_response = api_client.get("/api/v1/health")
+    blueprints_response = api_client.get("/api/v2/blueprints")
+    health_response = api_client.get("/api/v2/health")
 
     assert blueprints_response.status_code == 200
     assert blueprints_response.json()["repo_dir"] == str(catalog.resolve())
@@ -185,7 +185,7 @@ def test_launch_progress_route_reports_completed(monkeypatch, api_client, tmp_pa
     monkeypatch.setattr("mn_api.routes.blueprints.launch_progress_root", lambda: tmp_path)
     blueprints.record_launch_progress("launch-route", "launch", "failed", "Nope", {"run_id": "run-1"})
 
-    response = api_client.get("/api/v1/blueprints/launch/progress/launch-route")
+    response = api_client.get("/api/v2/blueprints/launch/progress/launch-route")
 
     assert response.status_code == 200
     assert response.json()["completed"] is True
@@ -205,7 +205,7 @@ def test_launch_progress_websocket_streams_events(monkeypatch, api_client, tmp_p
                 return message
         raise AssertionError(f"event version {version} was not received")
 
-    with api_client.websocket_connect("/api/v1/realtime?interval=0.25") as websocket:
+    with api_client.websocket_connect("/api/v2/realtime?interval=0.25") as websocket:
         websocket.send_json(
             {
                 "requestId": "req-1",
@@ -262,13 +262,13 @@ def test_blueprint_run_returns_submitted_job(monkeypatch, api_client, tmp_path):
             "run_id": req.run_id,
             "status": "pending",
             "progress_id": req.progress_id,
-            "progress_url": f"/api/v1/blueprints/launch/progress/{req.progress_id}",
+            "progress_url": f"/api/v2/blueprints/launch/progress/{req.progress_id}",
         }
 
     monkeypatch.setattr("mn_api.routes.blueprints.run_blueprint_record", fake_record)
 
     response = api_client.post(
-        "/api/v1/blueprints/worker_one/runs",
+        "/api/v2/blueprints/worker_one/runs",
         json={"run_id": "run-submitted", "progress_id": "progress-submitted", "force": True},
     )
 
@@ -277,7 +277,7 @@ def test_blueprint_run_returns_submitted_job(monkeypatch, api_client, tmp_path):
     assert body["status"] == "pending"
     assert body["run_id"] == "run-submitted"
     assert body["progress_id"] == "progress-submitted"
-    assert body["progress_url"] == "/api/v1/blueprints/launch/progress/progress-submitted"
+    assert body["progress_url"] == "/api/v2/blueprints/launch/progress/progress-submitted"
     assert body["job_id"] == "job-submitted"
 
 
@@ -354,9 +354,9 @@ def test_blueprint_run_route_submits_after_real_preflight_with_runtime_environme
     (bundle / "manifest.json").write_text(
         json.dumps(
             {
-                "apiVersion": "mn.workflow/v1",
+                "apiVersion": "mn.workflow/v2",
                 "kind": "Workflow",
-                "workflow": {"workflow_id": "vc_assistant_v1"},
+                "workflow": {"workflow_id": "vc_assistant_v2"},
                 "nodes": [
                     {
                         "node_id": "worker",
@@ -440,7 +440,7 @@ def test_blueprint_run_route_submits_after_real_preflight_with_runtime_environme
     )
 
     response = api_client.post(
-        "/api/v1/blueprints/vc_assistant/runs",
+        "/api/v2/blueprints/vc_assistant/runs",
         json={
             "run_id": "vc-route-real",
             "progress_id": "progress-route-real",
@@ -449,17 +449,17 @@ def test_blueprint_run_route_submits_after_real_preflight_with_runtime_environme
             "fake_skills": True,
         },
     )
-    progress = api_client.get("/api/v1/blueprints/launch/progress/progress-route-real")
+    progress = api_client.get("/api/v2/blueprints/launch/progress/progress-route-real")
 
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "pending"
     assert body["run_id"] == "vc-route-real"
     assert body["job_id"] == "job-route-real"
-    assert body["progress_url"] == "/api/v1/blueprints/launch/progress/progress-route-real"
+    assert body["progress_url"] == "/api/v2/blueprints/launch/progress/progress-route-real"
     assert fake_runtime.submissions
     submitted_manifest, payloads, submit_kwargs = fake_runtime.submissions[0]
-    assert submitted_manifest["workflow"]["workflow_id"] == "vc_assistant_v1"
+    assert submitted_manifest["workflow"]["workflow_id"] == "vc_assistant_v2"
     submitted_flow = submitted_manifest.get("flow", submitted_manifest)
     assert submitted_flow["nodes"][0]["node_id"] == "worker"
     worker_config = submitted_flow["nodes"][0]["config"]
@@ -498,7 +498,7 @@ def test_blueprint_run_route_submits_after_real_preflight_with_runtime_environme
     assert progress.json()["job_id"] == "job-route-real"
 
     rerun = api_client.post(
-        "/api/v1/blueprints/vc_assistant/runs",
+        "/api/v2/blueprints/vc_assistant/runs",
         json={
             "job_id": "job-route-real",
             "run_id": "vc-route-rerun",
@@ -517,7 +517,7 @@ def test_blueprint_run_route_submits_after_real_preflight_with_runtime_environme
     )
     assert updated_job_id == "job-route-real"
     assert updated_attrs == {}
-    assert updated_manifest["workflow"]["workflow_id"] == "vc_assistant_v1"
+    assert updated_manifest["workflow"]["workflow_id"] == "vc_assistant_v2"
     assert updated_payloads == {"payload.txt": b"hello"}
 
 
@@ -527,7 +527,7 @@ def test_blueprint_launch_returns_progress_session_immediately(monkeypatch, api_
     monkeypatch.setattr("mn_api.routes.blueprints.start_async_blueprint_launch", lambda req: starts.append(req))
 
     response = api_client.post(
-        "/api/v1/blueprints/launch/runs",
+        "/api/v2/blueprints/launch/runs",
         json={
             "source": "path",
             "path": str(tmp_path / "local_worker"),
@@ -543,7 +543,7 @@ def test_blueprint_launch_returns_progress_session_immediately(monkeypatch, api_
     assert body["status"] == "launching"
     assert body["run_id"] == "local-run"
     assert body["progress_id"] == "local-progress"
-    assert body["progress_url"] == "/api/v1/blueprints/launch/progress/local-progress"
+    assert body["progress_url"] == "/api/v2/blueprints/launch/progress/local-progress"
     assert body["job_id"] is None
     assert starts[0].source == "path"
     assert starts[0].path == str(tmp_path / "local_worker")
@@ -586,6 +586,7 @@ def test_blueprint_launch_route_background_uses_shared_sdk_submission(monkeypatc
     (bundle / "manifest.json").write_text(
         json.dumps(
             {
+                    "apiVersion": "mn.workflow/v2",
                 "graph_id": "worker_graph",
                 "nodes": [{"node_id": "worker", "config": {"environment": {}}}],
                 "edges": [],
@@ -627,7 +628,7 @@ def test_blueprint_launch_route_background_uses_shared_sdk_submission(monkeypatc
     monkeypatch.setattr("mn_api.routes.blueprints.start_async_blueprint_launch", run_now)
 
     response = api_client.post(
-        "/api/v1/blueprints/launch/runs",
+        "/api/v2/blueprints/launch/runs",
         json={
             "source": "catalog",
             "blueprint_id": "worker_one",
@@ -636,7 +637,7 @@ def test_blueprint_launch_route_background_uses_shared_sdk_submission(monkeypatc
             "force": True,
         },
     )
-    progress = api_client.get("/api/v1/blueprints/launch/progress/launch-route-progress")
+    progress = api_client.get("/api/v2/blueprints/launch/progress/launch-route-progress")
 
     assert response.status_code == 202
     assert response.json()["job_id"] is None
@@ -668,7 +669,7 @@ def test_blueprint_run_generates_progress_id(monkeypatch, api_client, tmp_path):
 
     monkeypatch.setattr("mn_api.routes.blueprints.run_blueprint_record", fake_record)
 
-    response = api_client.post("/api/v1/blueprints/worker_one/runs", json={})
+    response = api_client.post("/api/v2/blueprints/worker_one/runs", json={})
 
     assert response.status_code == 200
     body = response.json()
@@ -701,12 +702,12 @@ def test_blueprint_run_progress_polling_reports_success(monkeypatch, api_client,
             "id": "job-async",
             "run_id": req.run_id,
             "progress_id": req.progress_id,
-            "progress_url": f"/api/v1/blueprints/launch/progress/{req.progress_id}",
+            "progress_url": f"/api/v2/blueprints/launch/progress/{req.progress_id}",
         }
 
     monkeypatch.setattr("mn_api.routes.blueprints.run_blueprint_record", fake_record)
 
-    start = api_client.post("/api/v1/blueprints/worker_one/runs", json={"run_id": "run-ok"})
+    start = api_client.post("/api/v2/blueprints/worker_one/runs", json={"run_id": "run-ok"})
     progress = api_client.get(start.json()["progress_url"])
 
     assert start.status_code == 200
@@ -740,12 +741,12 @@ def test_blueprint_run_progress_polling_reports_background_error(monkeypatch, ap
             "job_id": None,
             "run_id": req.run_id,
             "progress_id": req.progress_id,
-            "progress_url": f"/api/v1/blueprints/launch/progress/{req.progress_id}",
+            "progress_url": f"/api/v2/blueprints/launch/progress/{req.progress_id}",
         }
 
     monkeypatch.setattr("mn_api.routes.blueprints.run_blueprint_record", fake_record)
 
-    start = api_client.post("/api/v1/blueprints/worker_one/runs", json={"run_id": "run-error"})
+    start = api_client.post("/api/v2/blueprints/worker_one/runs", json={"run_id": "run-error"})
     progress = api_client.get(start.json()["progress_url"])
 
     assert start.status_code == 200

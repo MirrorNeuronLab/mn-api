@@ -9,9 +9,9 @@ def test_run_export_and_compare_error_paths(api_client, run_writer):
     run_writer(runs_root, "run-a", final_artifact={"score": 1})
     run_writer(runs_root, "run-b", final_artifact={"score": 2})
 
-    unsupported = api_client.get("/api/v1/runs/run-a/export?format=xml")
-    missing_export = api_client.get("/api/v1/runs/missing/export")
-    missing_compare = api_client.post("/api/v1/runs:compare", json={"run_a": "run-a", "run_b": "missing"})
+    unsupported = api_client.get("/api/v2/runtime-runs/run-a/export?format=xml")
+    missing_export = api_client.get("/api/v2/runtime-runs/missing/export")
+    missing_compare = api_client.post("/api/v2/runtime-runs:compare", json={"run_a": "run-a", "run_b": "missing"})
 
     assert unsupported.status_code == 400
     assert unsupported.json()["detail"] == "unsupported export format"
@@ -39,13 +39,13 @@ def test_run_human_routes_call_observability_tools(monkeypatch, api_client, run_
         },
     )
 
-    pending = api_client.get("/api/v1/runs/run-human/human?status=pending")
-    response = api_client.post("/api/v1/runs/run-human/human/req-1/response", json={"answer": "yes"})
-    ack = api_client.post("/api/v1/runs/run-human/human/notice-1/ack", json={"seen": True})
+    pending = api_client.get("/api/v2/runtime-runs/run-human/human?status=pending")
+    response = api_client.post("/api/v2/runtime-runs/run-human/human/req-1/response", json={"answer": "yes"})
+    ack = api_client.post("/api/v2/runtime-runs/run-human/human/notice-1/ack", json={"seen": True})
 
     assert pending.json()["data"] == [{"request_id": "req-1"}]
-    assert response.json() == {"version": 1, "recorded": "req-1"}
-    assert ack.json() == {"version": 1, "acked": "notice-1"}
+    assert response.json() == {"version": 2, "recorded": "req-1"}
+    assert ack.json() == {"version": 2, "acked": "notice-1"}
     assert ("response", "run-human", "req-1", {"answer": "yes"}) in calls
     assert ("ack", "run-human", "notice-1", {"seen": True}) in calls
 
@@ -54,8 +54,8 @@ def test_run_resource_duration_validation(api_client, run_writer):
     runs_root = Path(os.environ["MN_HOME"]) / "runs"
     run_writer(runs_root, "run-resources")
 
-    empty = api_client.get("/api/v1/runs/run-resources/resources?window=&bucket=1h")
-    unsupported = api_client.get("/api/v1/runs/run-resources/resources?window=1w&bucket=1h")
+    empty = api_client.get("/api/v2/runtime-runs/run-resources/resources?window=&bucket=1h")
+    unsupported = api_client.get("/api/v2/runtime-runs/run-resources/resources?window=1w&bucket=1h")
 
     assert empty.status_code == 400
     assert empty.json()["detail"] == "duration cannot be empty"
@@ -73,7 +73,7 @@ def test_run_ui_video_serves_allowed_local_file(api_client, run_writer):
         encoding="utf-8",
     )
 
-    response = api_client.get("/api/v1/runs/run-video/ui/video")
+    response = api_client.get("/api/v2/runtime-runs/run-video/ui/video")
 
     assert response.status_code == 200
     assert response.content == b"video"
@@ -89,7 +89,7 @@ def test_run_ui_video_rejects_file_outside_allowed_roots(api_client, run_writer,
         encoding="utf-8",
     )
 
-    response = api_client.get("/api/v1/runs/run-forbidden-video/ui/video")
+    response = api_client.get("/api/v2/runtime-runs/run-forbidden-video/ui/video")
 
     assert response.status_code == 403
     assert response.json()["detail"] == "video source is outside allowed roots"
@@ -100,7 +100,7 @@ def test_run_artifact_rejects_traversal_before_file_lookup(api_client, run_write
     run_writer(runs_root, "run-artifact")
     (tmp_path / "secret.txt").write_text("secret", encoding="utf-8")
 
-    response = api_client.get("/api/v1/runs/run-artifact/artifacts/%2E%2E/secret.txt")
+    response = api_client.get("/api/v2/runtime-runs/run-artifact/artifacts/%2E%2E/secret.txt")
 
     assert response.status_code in {400, 404}
     if response.status_code == 400:

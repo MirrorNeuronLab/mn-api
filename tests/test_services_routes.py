@@ -10,7 +10,7 @@ from mn_api.routes import services
 
 
 def test_service_check_rejects_missing_path_or_bundle(api_client):
-    response = api_client.post("/api/v1/services/check", json={})
+    response = api_client.post("/api/v2/services/check", json={})
 
     assert response.status_code == 422
     assert response.json()["detail"] == "path or _bundle_path is required"
@@ -26,10 +26,10 @@ def test_service_check_rejects_missing_and_malformed_manifests(api_client, tmp_p
     non_object.mkdir()
     (non_object / "manifest.json").write_text("[]", encoding="utf-8")
 
-    assert api_client.post("/api/v1/services/check", json={"path": str(tmp_path / "nope")}).status_code == 400
-    assert api_client.post("/api/v1/services/check", json={"path": str(missing)}).json()["detail"] == "bundle manifest.json not found"
-    assert api_client.post("/api/v1/services/check", json={"path": str(malformed)}).json()["detail"] == "bundle manifest.json is malformed"
-    assert api_client.post("/api/v1/services/check", json={"path": str(non_object)}).json()["detail"] == "bundle manifest.json must be an object"
+    assert api_client.post("/api/v2/services/check", json={"path": str(tmp_path / "nope")}).status_code == 400
+    assert api_client.post("/api/v2/services/check", json={"path": str(missing)}).json()["detail"] == "bundle manifest.json not found"
+    assert api_client.post("/api/v2/services/check", json={"path": str(malformed)}).json()["detail"] == "bundle manifest.json is malformed"
+    assert api_client.post("/api/v2/services/check", json={"path": str(non_object)}).json()["detail"] == "bundle manifest.json must be an object"
 
 
 def test_service_check_resolver_normalizes_runtime_registry(monkeypatch, api_client, tmp_path):
@@ -50,7 +50,7 @@ def test_service_check_resolver_normalizes_runtime_registry(monkeypatch, api_cli
     monkeypatch.setattr(state, "client", FakeClient())
     monkeypatch.setattr("mn_api.routes.services.run_service_validation", fake_validation)
 
-    response = api_client.post("/api/v1/services/check", json={"path": str(bundle)})
+    response = api_client.post("/api/v2/services/check", json={"path": str(bundle)})
 
     assert response.status_code == 200
     assert observed["resolve"] == ("vector-db", ["rag"], True)

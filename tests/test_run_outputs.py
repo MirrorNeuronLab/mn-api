@@ -77,8 +77,8 @@ class TestRunOutputs(unittest.TestCase):
         self.assertEqual(refs[1]["content_type"], "text/plain; charset=utf-8")
         self.assertEqual(refs[2]["content_type"], "application/json")
         self.assertEqual(refs[3]["content_type"], "application/pdf")
-        self.assertEqual(refs[0]["url"], "/api/v1/runs/run-output/outputs/0")
-        self.assertEqual(refs[0]["reveal_url"], "/api/v1/runs/run-output/outputs/0/reveal")
+        self.assertEqual(refs[0]["url"], "/api/v2/runtime-runs/run-output/outputs/0")
+        self.assertEqual(refs[0]["reveal_url"], "/api/v2/runtime-runs/run-output/outputs/0/reveal")
         self.assertTrue(all(ref["external"] for ref in refs))
 
     def test_output_path_by_index_resolves_valid_indexes_only(self):

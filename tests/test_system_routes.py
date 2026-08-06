@@ -11,7 +11,7 @@ def test_runtime_doctor_marks_probe_exceptions_critical(monkeypatch, api_client)
     monkeypatch.setattr(
         "mn_api.routes.system.collect_runtime_status",
         lambda **_kwargs: {
-            "version": 1,
+            "version": 2,
             "overall": "passing",
             "checked_at": "2026-07-06T00:00:00Z",
             "runtime": {},
@@ -25,7 +25,7 @@ def test_runtime_doctor_marks_probe_exceptions_critical(monkeypatch, api_client)
     monkeypatch.setattr("mn_api.routes.system.docker_status", lambda: (_ for _ in ()).throw(RuntimeError("docker down")))
     monkeypatch.setattr("mn_api.routes.system.litellm_gateway_health", lambda timeout=3.0: {"ok": True})
 
-    response = api_client.get("/api/v1/runtime/doctor")
+    response = api_client.get("/api/v2/runtime/doctor")
 
     assert response.status_code == 200
     body = response.json()
@@ -44,7 +44,7 @@ def test_node_action_routes_proxy_runtime_service(monkeypatch, api_client, fake_
     ]
 
     for action, body, expected_call in cases:
-        response = api_client.post(f"/api/v1/nodes/mirror_neuron@worker/{action}", json=body)
+        response = api_client.post(f"/api/v2/nodes/mirror_neuron@worker/{action}", json=body)
         assert response.status_code == 200, action
         if action in {"reconcile", "drain"}:
             call = fake_runtime_client.calls[-1]
@@ -60,9 +60,9 @@ def test_resource_routes_enrich_and_strip_version(monkeypatch, api_client, fake_
     monkeypatch.setattr(state, "client", fake_runtime_client)
     monkeypatch.setattr("mn_api.routes.system.native_service_ports", lambda: [{"name": "api", "port": "54001"}])
 
-    listed = api_client.get("/api/v1/resource")
-    posted = api_client.post("/api/v1/resource", json={"version": 1, "cpu": 50, "gpu": 25})
-    put = api_client.put("/api/v1/resource", json={"version": 1, "memory": 75})
+    listed = api_client.get("/api/v2/resource")
+    posted = api_client.post("/api/v2/resource", json={"version": 2, "cpu": 50, "gpu": 25})
+    put = api_client.put("/api/v2/resource", json={"version": 2, "memory": 75})
 
     assert listed.status_code == 200
     assert listed.json()["native_ports"] == [{"name": "api", "port": "54001"}]
@@ -117,8 +117,8 @@ def test_runtime_service_error_paths_return_problem_responses(monkeypatch, api_c
 
     monkeypatch.setattr(state, "client", BrokenClient())
 
-    summary = api_client.get("/api/v1/system/summary")
-    resource = api_client.post("/api/v1/resource", json={"cpu": 10})
+    summary = api_client.get("/api/v2/system/summary")
+    resource = api_client.post("/api/v2/resource", json={"cpu": 10})
 
     assert summary.status_code == 500
     assert summary.json()["error"] == "MN_EXECUTION_FAILED"
@@ -145,7 +145,7 @@ def test_native_service_ports_reads_runtime_config(monkeypatch):
                         (),
                         {
                             "grpc_target": "127.0.0.1:55051",
-                            "api_base_url": "http://127.0.0.1:54001/api/v1",
+                            "api_base_url": "http://127.0.0.1:54001/api/v2",
                             "web_ui_url": "http://localhost",
                         },
                     )()
@@ -163,7 +163,7 @@ def test_native_service_ports_reads_runtime_config(monkeypatch):
             "label": "REST API",
             "host": "127.0.0.1",
             "port": "54001",
-            "target": "http://127.0.0.1:54001/api/v1",
+            "target": "http://127.0.0.1:54001/api/v2",
         },
     ]
 

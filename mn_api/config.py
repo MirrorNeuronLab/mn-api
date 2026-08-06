@@ -166,7 +166,7 @@ class WebUiConfig:
         return cls(
             host=config_string("MN_WEB_UI_HOST", source=source, runtime_env=runtime_env, default="localhost"),
             port=config_int("MN_WEB_UI_PORT", source=source, runtime_env=runtime_env, default=55173),
-            api_base_url=(api_base or f"http://{host}:{port}/api/v1").rstrip("/"),
+            api_base_url=(api_base or f"http://{host}:{port}/api/v2").rstrip("/"),
             api_token=api_token,
             dist_dir=dist_dir,
             proxy_timeout_seconds=config_float(

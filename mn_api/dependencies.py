@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse
 from mn_api import state
 from mn_api.config import auth_enabled
 
-INTERFACE_VERSION = 1
+INTERFACE_VERSION = 2
 
 
 async def enforce_request_size(request: Request, call_next):

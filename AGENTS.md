@@ -28,7 +28,7 @@ apply only to `mn-api`.
 
 ## Contract Rules
 
-- Keep public routes under `/api/v1` unless a new interface version is
+- Keep public routes under `/api/v2` unless a new interface version is
   intentionally introduced.
 - Preserve the top-level interface `version` field and established endpoint
   aliases. Contract changes require tests and documentation.

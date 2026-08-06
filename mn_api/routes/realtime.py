@@ -10,7 +10,7 @@ from mn_api.dependencies import require_websocket_auth
 from mn_api.routes import blueprints
 
 
-router = APIRouter(prefix="/api/v1")
+router = APIRouter(prefix="/api/v2")
 
 
 @router.websocket("/realtime")
