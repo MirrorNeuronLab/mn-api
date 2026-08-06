@@ -1025,6 +1025,50 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertEqual(env["MN_LLM_MODEL"], "ollama/test")
         self.assertEqual(payload_bytes, {"nested/input.txt": b"hello"})
 
+    def test_load_blueprint_bundle_uses_shared_sdk_manifest_preparation(self):
+        def fake_prepare_job_submission(manifest, payloads, **_kwargs):
+            return SimpleNamespace(manifest_json=json.dumps(manifest), payloads=payloads)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            bundle = repo / "worker_one"
+            bundle.mkdir()
+            (bundle / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "apiVersion": "mn.workflow/v1",
+                        "kind": "Workflow",
+                        "workflow": {
+                            "workflow_id": "worker_one_v1",
+                            "steps": [{"id": "review", "run": "review"}],
+                        },
+                        "agents": {"nodes": [{"node_id": "review", "config": {}}]},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.object(
+                blueprints_module,
+                "prepare_manifest_submission",
+                wraps=blueprints_module.prepare_manifest_submission,
+            ) as shared_prepare, patch.object(
+                blueprints_module,
+                "prepare_job_submission",
+                side_effect=fake_prepare_job_submission,
+            ):
+                manifest_json, _payloads = load_blueprint_bundle(
+                    repo.resolve(),
+                    {"id": "worker_one", "path": "worker_one"},
+                    "worker_one-346dab41d3",
+                )
+
+        manifest = json.loads(manifest_json)
+        shared_prepare.assert_called_once()
+        self.assertEqual(manifest["flow"]["steps"], manifest["workflow"]["steps"])
+        self.assertEqual([node["node_id"] for node in manifest["flow"]["nodes"]], ["review"])
+        self.assertNotIn("nodes", manifest)
+
     def test_load_blueprint_bundle_prepares_submission_with_runtime_process_environment(self):
         observed = {}
 

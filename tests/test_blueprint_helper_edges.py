@@ -155,10 +155,6 @@ def test_agent_topology_and_openshell_path_helpers(tmp_path):
     manifest = {"agents": {"nodes": [{"node_id": "a"}, "bad"], "edges": [{"from": "a"}], "entrypoints": ["a"]}}
 
     assert blueprints.manifest_agent_nodes(manifest) == [{"node_id": "a"}]
-    blueprints.materialize_agent_topology_for_runtime(manifest)
-    assert manifest["nodes"] == [{"node_id": "a"}, "bad"]
-    assert manifest["edges"] == [{"from": "a"}]
-    assert manifest["entrypoints"] == ["a"]
 
     docker_dir = tmp_path / "payloads" / "image"
     docker_dir.mkdir(parents=True)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from types import ModuleType, SimpleNamespace
 
@@ -671,7 +672,7 @@ def test_blueprint_run_generates_progress_id(monkeypatch, api_client, tmp_path):
 
     assert response.status_code == 200
     body = response.json()
-    assert body["run_id"].startswith("worker_one-")
+    assert re.fullmatch(r"worker_one-[0-9a-f]{10}", body["run_id"])
     assert body["progress_id"].startswith(body["run_id"])
     assert blueprints.validate_progress_id(body["progress_id"]) == body["progress_id"]
     assert requests[0].run_id == body["run_id"]

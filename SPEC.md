@@ -78,6 +78,9 @@ model placement algorithms, blueprint domain behavior, or the browser UI.
   `job_id` is supplied, and returns both identities. Existing jobs receive the
   freshly prepared manifest and payloads through atomic bundle replacement
   before the new run starts.
+- Blueprint launch delegates manifest expansion, config application,
+  dependency localization, environment injection, and topology lowering to the
+  same SDK preparation path consumed by the CLI.
 - Blueprint-specific live controls are served by the owning blueprint service.
   `mn-api` does not translate product action routes into runtime messages.
 - Stable-job creation may resolve a catalog `blueprint_id`; only API-trusted

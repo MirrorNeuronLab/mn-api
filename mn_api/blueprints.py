@@ -139,7 +139,9 @@ from mn_sdk.submission_preparation import (
     localize_agent_dependencies_for_dev,
     localize_skill_dependencies_for_dev,
     lower_manifest_topology_for_runtime_submission,
+    manifest_nodes as sdk_submission_manifest_nodes,
     normalize_host_local_uploads,
+    prepare_manifest_submission,
     refresh_embedded_blueprint_config,
     release_skill_dependency_runtime_environment,
     stage_blueprint_support_payloads_for_manifest,
@@ -1417,7 +1419,6 @@ def load_blueprint_bundle(
 
     bundle_root = validate_blueprint_bundle(repo_root, blueprint)
     manifest_path = bundle_root / "manifest.json"
-    payloads_path = bundle_root / "payloads"
 
     try:
         manifest = json.loads(manifest_path.read_text())
@@ -1426,9 +1427,31 @@ def load_blueprint_bundle(
 
     if not isinstance(manifest, dict):
         raise HTTPException(status_code=500, detail="blueprint manifest.json must be an object")
-    manifest = expand_blueprint_manifest_if_source(bundle_root, manifest)
-    resolve_blueprint_payload_contract(manifest, bundle_root)
+    runs_root = shared_runs_root()
+    preparation_env = string_env_values(env_overrides)
+    preparation_env.setdefault("MN_RUN_ID", run_id)
+    preparation_env["MN_RUNS_ROOT"] = runs_root
+    submission_metadata = {
+        "blueprint_id": blueprint["id"],
+        "blueprint_run_id": run_id,
+        "blueprint_source": str(repo_root),
+    }
+    if blueprint.get("revision"):
+        submission_metadata["blueprint_revision"] = blueprint["revision"]
+
+    shared_preparation = prepare_manifest_submission(
+        bundle_root,
+        manifest,
+        env_overrides=preparation_env,
+        submission_metadata=submission_metadata,
+        config_overrides=config_overrides,
+        runtime_environment=runtime_path_environment(),
+        read_json_object_fn=read_json_object,
+    )
+    manifest = shared_preparation.manifest
+    runtime_env = shared_preparation.runtime_environment
     package_payload_models_for_api(bundle_root, manifest)
+    prepare_openshell_custom_images(bundle_root, manifest)
 
     metadata = manifest.setdefault("metadata", {})
     if not isinstance(metadata, dict):
@@ -1437,19 +1460,6 @@ def load_blueprint_bundle(
     metadata["blueprint_id"] = blueprint["id"]
     metadata["blueprint_run_id"] = run_id
     metadata["run_id"] = run_id
-    mn_cli_metadata = metadata.get("mn_cli")
-    if not isinstance(mn_cli_metadata, dict):
-        mn_cli_metadata = {}
-    mn_cli_metadata.update(
-        {
-            "blueprint_id": blueprint["id"],
-            "blueprint_run_id": run_id,
-            "blueprint_source": str(repo_root),
-        }
-    )
-    if blueprint.get("revision"):
-        mn_cli_metadata["blueprint_revision"] = blueprint["revision"]
-    metadata["mn_cli"] = mn_cli_metadata
     if force:
         metadata["mn_validation"] = {
             "force": True,
@@ -1459,40 +1469,6 @@ def load_blueprint_bundle(
     if blueprint.get("revision"):
         metadata["blueprint_revision"] = blueprint["revision"]
     manifest["run_id"] = run_id
-    ensure_runtime_modules_for_submission(manifest)
-    render_agent_templates_for_submission(manifest, bundle_root=bundle_root)
-    materialize_agent_topology_for_runtime(manifest)
-    prepare_openshell_custom_images(bundle_root, manifest)
-    runs_root = shared_runs_root()
-    config = with_shared_run_store_config(
-        load_blueprint_config(bundle_root, config_overrides=config_overrides),
-        run_id,
-        runs_root,
-    )
-    if config is not None:
-        apply_manifest_config_bindings(manifest, config)
-        ensure_runtime_modules_for_submission(manifest, config)
-        prepare_skill_runtime_for_submission(manifest, config, bundle_dir=bundle_root)
-        ensure_blueprint_support_sdk_build_context_uploads_for_submission(manifest)
-        refresh_embedded_blueprint_config_for_submission(manifest, config)
-    localize_skill_dependencies_for_submission(manifest)
-    localize_agent_dependencies_for_submission(manifest)
-    inject_localized_hostlocal_python_environments(manifest)
-    inject_skill_dependency_python_environments_for_submission(manifest)
-    runtime_env = blueprint_runtime_environment(
-        bundle_root,
-        config=config,
-        config_overrides=config_overrides,
-    )
-    if skill_dependency_package_names_for_submission(manifest):
-        runtime_env = release_skill_dependency_runtime_environment_for_submission(runtime_env)
-    runtime_env.update(string_env_values(env_overrides))
-    runtime_env.setdefault("MN_RUN_ID", run_id)
-    runtime_env["MN_RUNS_ROOT"] = runs_root
-    expand_manifest_model_service_requirements(manifest, config or {}, env=runtime_env)
-    if runtime_env:
-        inject_node_environment(manifest, runtime_env)
-        strip_docker_model_runner_placement_requirements_for_submission(manifest)
 
     placement = None
     placement_env = {**os.environ, **string_env_values(env_overrides)}
@@ -1543,9 +1519,6 @@ def load_blueprint_bundle(
         blob_root=resolve_mn_home() / "blobs",
     )
     stage_blueprint_payloads_for_submission(manifest, payloads, bundle_dir=bundle_root)
-    normalize_host_local_uploads_for_submission(manifest)
-    lower_manifest_topology_for_submission(manifest)
-    reapply_selected_workflow_placement(manifest)
     if progress_callback and any(
         str((node.get("config") or {}).get("runner_module") or "") == "MirrorNeuron.Runner.DockerWorker"
         for node in manifest_agent_nodes(manifest)
@@ -1864,28 +1837,7 @@ def stage_local_input_payloads_for_manifest(
 
 
 def manifest_agent_nodes(manifest: Dict[str, Any]) -> list[Dict[str, Any]]:
-    agents = manifest.get("agents") if isinstance(manifest.get("agents"), dict) else {}
-    agent_nodes = agents.get("nodes") if isinstance(agents.get("nodes"), list) else None
-    if isinstance(agent_nodes, list):
-        return [node for node in agent_nodes if isinstance(node, dict)]
-    root_nodes = manifest.get("nodes")
-    if isinstance(root_nodes, list):
-        return [node for node in root_nodes if isinstance(node, dict)]
-    return []
-
-
-def materialize_agent_topology_for_runtime(manifest: Dict[str, Any]) -> None:
-    if isinstance(manifest.get("nodes"), list):
-        return
-    agents = manifest.get("agents") if isinstance(manifest.get("agents"), dict) else {}
-    agent_nodes = agents.get("nodes") if isinstance(agents.get("nodes"), list) else None
-    if not isinstance(agent_nodes, list) or not agent_nodes:
-        return
-    manifest["nodes"] = agent_nodes
-    agent_edges = agents.get("edges") if isinstance(agents.get("edges"), list) else []
-    manifest["edges"] = agent_edges
-    agent_entrypoints = agents.get("entrypoints") if isinstance(agents.get("entrypoints"), list) else []
-    manifest["entrypoints"] = agent_entrypoints
+    return sdk_submission_manifest_nodes(manifest)
 
 
 def prepare_openshell_custom_images(bundle_root: Path, manifest: Dict[str, Any]) -> None:

@@ -13,6 +13,9 @@ Blueprint launch accepts blueprint-owned source packages or wheels below
 `payloads/skills` and `payloads/agents`, including a bundled agent index. It
 streams large assets to the shared blob store and packages declared
 `payloads/models` sources in Docker Model Runner before launch.
+Manifest expansion, config application, dependency localization, environment
+injection, and topology lowering use the SDK's shared manifest-preparation
+path, the same path used by `mn blueprint run`.
 
 Blueprint launch preserves the `model_install` progress phase for compatibility
 but only validates and reports lazy policies. Automatic DMR preparation occurs
