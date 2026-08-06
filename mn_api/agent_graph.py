@@ -10,133 +10,21 @@ logger = logging.getLogger("mn-api")
 DISPLAY_KEYS = ("alias", "display_name", "label", "name", "role")
 
 
-def build_agent_graph(job_id: str, details: dict[str, Any], events: list[dict[str, Any]]):
+def build_agent_graph(
+    job_id: str,
+    details: dict[str, Any],
+    events: list[dict[str, Any]],
+) -> dict[str, Any]:
     agents = details.get("agents", []) or []
     job = details.get("job", {}) or {}
     manifest = job.get("topology") or load_manifest_for_job(job)
-    agent_by_id: dict[str, dict[str, Any]] = {}
-
-    for agent in agents:
-        agent_id = agent.get("agent_id") or agent.get("node_id")
-        if agent_id:
-            normalized = _graph_agent_defaults(str(agent_id))
-            normalized.update(agent)
-            _normalize_infrastructure_agent(str(agent_id), normalized)
-            agent_by_id[str(agent_id)] = normalized
-
-    for node in _manifest_agent_nodes(manifest):
-        node_id = node.get("node_id") or node.get("agent_id")
-        if node_id:
-            existing = agent_by_id.setdefault(
-                str(node_id),
-                {
-                    "agent_id": str(node_id),
-                    "agent_type": node.get("agent_type") or "unknown",
-                    "type": node.get("type") or "unknown",
-                    "status": "declared",
-                    "assigned_node": "unassigned",
-                    "processed_messages": 0,
-                    "mailbox_depth": 0,
-                },
-            )
-            _copy_display_metadata(existing, node)
-
+    agent_by_id = _collect_graph_agents(agents, manifest)
     edge_counts: dict[tuple[str, str, str], dict[str, Any]] = {}
+    _add_manifest_edges(edge_counts, agent_by_id, manifest)
+    _add_event_edges(edge_counts, agent_by_id, events)
+    _add_declared_outbound_edges(edge_counts, agent_by_id, agents)
 
-    for edge in _manifest_agent_edges(manifest):
-        source = edge.get("from_node")
-        target = edge.get("to_node")
-        message_type = edge.get("message_type") or "*"
-        if not source or not target:
-            continue
-
-        ensure_graph_agent(agent_by_id, source)
-        ensure_graph_agent(agent_by_id, target)
-        key = (source, target, message_type)
-        edge_counts.setdefault(
-            key,
-            {
-                "id": edge.get("edge_id") or f"{source}->{target}:{message_type}",
-                "source": source,
-                "target": target,
-                "message_type": message_type,
-                "count": 0,
-                "last_seen_at": None,
-                "source_event": "manifest",
-            },
-        )
-
-    for event in events:
-        message = event_message_summary(event)
-        if not message:
-            continue
-
-        source = message.get("from")
-        target = message.get("to") or event.get("agent_id")
-        message_type = message.get("type") or event.get("type") or "message"
-
-        if not source or not target:
-            continue
-
-        ensure_graph_agent(agent_by_id, source)
-        ensure_graph_agent(agent_by_id, target)
-        key = (source, target, message_type)
-        existing = edge_counts.setdefault(
-            key,
-            {
-                "id": f"{source}->{target}:{message_type}",
-                "source": source,
-                "target": target,
-                "message_type": message_type,
-                "count": 0,
-                "last_seen_at": None,
-                "source_event": "agent_message_received",
-            },
-        )
-        existing["count"] += 1
-        existing["last_seen_at"] = event.get("timestamp") or existing["last_seen_at"]
-        if existing.get("source_event") == "manifest":
-            existing["source_event"] = "manifest+events"
-
-    for agent in agents:
-        source = agent.get("agent_id") or agent.get("node_id")
-        outbound_edges = (agent.get("metadata") or {}).get("outbound_edges") or []
-        for target in outbound_edges:
-            if not source or not target:
-                continue
-            ensure_graph_agent(agent_by_id, source)
-            ensure_graph_agent(agent_by_id, target)
-            key = (source, target, "*")
-            edge_counts.setdefault(
-                key,
-                {
-                    "id": f"{source}->{target}:*",
-                    "source": source,
-                    "target": target,
-                    "message_type": "*",
-                    "count": 0,
-                    "last_seen_at": None,
-                    "source_event": "outbound_edges",
-                },
-            )
-
-    nodes = []
-    for agent_id, agent in sorted(agent_by_id.items()):
-        node = {
-            "id": agent_id,
-            "label": _graph_agent_label(agent_id, agent),
-            "agent_type": agent.get("agent_type") or "unknown",
-            "type": agent.get("type") or "unknown",
-            "status": agent.get("status") or "unknown",
-            "assigned_node": _graph_assigned_node(agent_id, agent),
-            "processed_messages": agent.get("processed_messages", 0),
-            "mailbox_depth": agent.get("mailbox_depth", 0),
-        }
-        for key in ("alias", "display_name", "role"):
-            if agent.get(key) not in (None, ""):
-                node[key] = str(agent[key])
-        nodes.append(node)
-
+    nodes = _graph_nodes(agent_by_id)
     edges = sorted(edge_counts.values(), key=lambda edge: (edge["source"], edge["target"], edge["message_type"]))
 
     return {
@@ -152,6 +40,148 @@ def build_agent_graph(job_id: str, details: dict[str, Any], events: list[dict[st
             "event_count": len(events),
         },
     }
+
+
+def _collect_graph_agents(
+    agents: list[dict[str, Any]],
+    manifest: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    agent_by_id: dict[str, dict[str, Any]] = {}
+    for agent in agents:
+        agent_id = agent.get("agent_id") or agent.get("node_id")
+        if not agent_id:
+            continue
+        normalized_id = str(agent_id)
+        normalized = _graph_agent_defaults(normalized_id)
+        normalized.update(agent)
+        _normalize_infrastructure_agent(normalized_id, normalized)
+        agent_by_id[normalized_id] = normalized
+
+    for node in _manifest_agent_nodes(manifest):
+        node_id = node.get("node_id") or node.get("agent_id")
+        if not node_id:
+            continue
+        normalized_id = str(node_id)
+        existing = agent_by_id.setdefault(
+            normalized_id,
+            {
+                "agent_id": normalized_id,
+                "agent_type": node.get("agent_type") or "unknown",
+                "type": node.get("type") or "unknown",
+                "status": "declared",
+                "assigned_node": "unassigned",
+                "processed_messages": 0,
+                "mailbox_depth": 0,
+            },
+        )
+        _copy_display_metadata(existing, node)
+    return agent_by_id
+
+
+def _ensure_graph_edge(
+    edge_counts: dict[tuple[str, str, str], dict[str, Any]],
+    agent_by_id: dict[str, dict[str, Any]],
+    source: str,
+    target: str,
+    message_type: str,
+    source_event: str,
+    *,
+    edge_id: str | None = None,
+) -> dict[str, Any]:
+    ensure_graph_agent(agent_by_id, source)
+    ensure_graph_agent(agent_by_id, target)
+    key = (source, target, message_type)
+    return edge_counts.setdefault(
+        key,
+        {
+            "id": edge_id or f"{source}->{target}:{message_type}",
+            "source": source,
+            "target": target,
+            "message_type": message_type,
+            "count": 0,
+            "last_seen_at": None,
+            "source_event": source_event,
+        },
+    )
+
+
+def _add_manifest_edges(
+    edge_counts: dict[tuple[str, str, str], dict[str, Any]],
+    agent_by_id: dict[str, dict[str, Any]],
+    manifest: dict[str, Any],
+) -> None:
+    for edge in _manifest_agent_edges(manifest):
+        source = edge.get("from_node")
+        target = edge.get("to_node")
+        if source and target:
+            _ensure_graph_edge(
+                edge_counts,
+                agent_by_id,
+                source,
+                target,
+                edge.get("message_type") or "*",
+                "manifest",
+                edge_id=edge.get("edge_id"),
+            )
+
+
+def _add_event_edges(
+    edge_counts: dict[tuple[str, str, str], dict[str, Any]],
+    agent_by_id: dict[str, dict[str, Any]],
+    events: list[dict[str, Any]],
+) -> None:
+    for event in events:
+        message = event_message_summary(event)
+        if not message:
+            continue
+        source = message.get("from")
+        target = message.get("to") or event.get("agent_id")
+        if not source or not target:
+            continue
+        existing = _ensure_graph_edge(
+            edge_counts,
+            agent_by_id,
+            source,
+            target,
+            message.get("type") or event.get("type") or "message",
+            "agent_message_received",
+        )
+        existing["count"] += 1
+        existing["last_seen_at"] = event.get("timestamp") or existing["last_seen_at"]
+        if existing.get("source_event") == "manifest":
+            existing["source_event"] = "manifest+events"
+
+
+def _add_declared_outbound_edges(
+    edge_counts: dict[tuple[str, str, str], dict[str, Any]],
+    agent_by_id: dict[str, dict[str, Any]],
+    agents: list[dict[str, Any]],
+) -> None:
+    for agent in agents:
+        source = agent.get("agent_id") or agent.get("node_id")
+        for target in (agent.get("metadata") or {}).get("outbound_edges") or []:
+            if source and target:
+                _ensure_graph_edge(edge_counts, agent_by_id, source, target, "*", "outbound_edges")
+
+
+def _graph_nodes(agent_by_id: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    nodes: list[dict[str, Any]] = []
+    for agent_id, agent in sorted(agent_by_id.items()):
+        node = {
+            "id": agent_id,
+            "label": _graph_agent_label(agent_id, agent),
+            "agent_type": agent.get("agent_type") or "unknown",
+            "type": agent.get("type") or "unknown",
+            "status": agent.get("status") or "unknown",
+            "assigned_node": _graph_assigned_node(agent_id, agent),
+            "processed_messages": agent.get("processed_messages", 0),
+            "mailbox_depth": agent.get("mailbox_depth", 0),
+        }
+        for key in ("alias", "display_name", "role"):
+            if agent.get(key) not in (None, ""):
+                node[key] = str(agent[key])
+        nodes.append(node)
+    return nodes
 
 
 def load_manifest_for_job(job: dict[str, Any]) -> dict[str, Any]:
@@ -221,7 +251,7 @@ def event_message_summary(event: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def ensure_graph_agent(agent_by_id: dict[str, dict[str, Any]], agent_id: str):
+def ensure_graph_agent(agent_by_id: dict[str, dict[str, Any]], agent_id: str) -> None:
     agent_by_id.setdefault(agent_id, _graph_agent_defaults(agent_id))
 
 
