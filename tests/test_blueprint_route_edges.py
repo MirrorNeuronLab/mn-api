@@ -249,6 +249,7 @@ def test_blueprint_run_returns_submitted_job(monkeypatch, api_client, tmp_path):
         assert bp == blueprint
         assert req.run_id == "run-submitted"
         assert req.progress_id == "progress-submitted"
+        assert req.secret_environment["MN_SMTP_PASSWORD"].get_secret_value() == "test-app-password"
         blueprints.record_launch_progress(
             req.progress_id,
             "launch",
@@ -269,7 +270,12 @@ def test_blueprint_run_returns_submitted_job(monkeypatch, api_client, tmp_path):
 
     response = api_client.post(
         "/api/v2/blueprints/worker_one/runs",
-        json={"run_id": "run-submitted", "progress_id": "progress-submitted", "force": True},
+        json={
+            "run_id": "run-submitted",
+            "progress_id": "progress-submitted",
+            "force": True,
+            "secret_environment": {"MN_SMTP_PASSWORD": "test-app-password"},
+        },
     )
 
     assert response.status_code == 200
@@ -364,6 +370,7 @@ def test_blueprint_run_route_submits_after_real_preflight_with_runtime_environme
                             "runner_module": "MirrorNeuron.Runner.HostLocal",
                             "python_environment": {"packages": ["existing-helper==0.1"]},
                             "environment": {},
+                            "pass_env": ["TEST_DECLARED_SECRET"],
                         },
                     }
                 ],
@@ -399,6 +406,7 @@ def test_blueprint_run_route_submits_after_real_preflight_with_runtime_environme
     )
 
     fake_runtime = FakeRuntimeClient()
+    mappings = []
     fake_package = ModuleType("mn_cli")
     fake_package.__path__ = []
     fake_server_cmds = ModuleType("mn_cli.server_cmds")
@@ -426,6 +434,10 @@ def test_blueprint_run_route_submits_after_real_preflight_with_runtime_environme
         ),
     )
     monkeypatch.setattr(state, "client", fake_runtime)
+    monkeypatch.setattr(
+        "mn_api.routes.blueprints.write_blueprint_job_mapping",
+        lambda *args, **kwargs: mappings.append((args, kwargs)),
+    )
     monkeypatch.setattr("mn_api.routes.blueprints.launch_progress_root", lambda: tmp_path / "progress")
     monkeypatch.setattr("mn_api.routes.blueprints.validate_blueprint_hardware_requirements", lambda *_args, **_kwargs: {"ok": True, "status": "passed", "issues": [], "errors": []})
     monkeypatch.setattr("mn_api.blueprints.load_model_catalog", lambda: {})
@@ -447,6 +459,7 @@ def test_blueprint_run_route_submits_after_real_preflight_with_runtime_environme
             "force": True,
             "fake_llm": True,
             "fake_skills": True,
+            "secret_environment": {"TEST_DECLARED_SECRET": "test-secret-value"},
         },
     )
     progress = api_client.get("/api/v2/blueprints/launch/progress/progress-route-real")
@@ -481,10 +494,13 @@ def test_blueprint_run_route_submits_after_real_preflight_with_runtime_environme
     assert worker_env["PYTHONPATH"] == "/runtime/python"
     assert worker_env["MN_BLUEPRINT_FAKE_LLM"] == "1"
     assert worker_env["MN_BLUEPRINT_FAKE_SKILLS"] == "1"
+    assert worker_env["TEST_DECLARED_SECRET"] == "test-secret-value"
     assert "MN_FAKE_LLM" not in worker_env
     assert "MN_FAKE_SKILLS" not in worker_env
     assert "MN_WORKSPACE_ROOT" not in worker_env
     assert "MN_SKILLS_ROOT" not in worker_env
+    assert mappings
+    assert "test-secret-value" not in json.dumps(mappings[0])
     assert submitted_flow["edges"] == []
     assert submitted_manifest["metadata"]["mn_cli"]["blueprint_id"] == "vc_assistant"
     assert submitted_manifest["metadata"]["mn_cli"]["blueprint_run_id"] == "vc-route-real"

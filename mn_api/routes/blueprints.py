@@ -54,6 +54,12 @@ from mn_api.blueprints import (
     write_blueprint_job_mapping,
 )
 from mn_api.bundles import load_uploaded_bundle
+from mn_api.blueprint_secret_environment import (
+    inject_declared_secret_environment,
+    manifest_without_secret_environment,
+    requested_secret_environment,
+    validate_blueprint_secret_environment,
+)
 from mn_api.config import config_value
 from mn_api.dependencies import require_auth
 from mn_api.errors import handle_grpc_error, validation_problem_response
@@ -223,6 +229,7 @@ def run_blueprint_launch_record(req: BlueprintLaunchRequest):
         run_id=req.run_id,
         config_overwrite=req.config_overwrite,
         config_overrides=req.config_overrides,
+        secret_environment=req.secret_environment,
         force=req.force,
         progress_id=progress_id,
         fake_llm=req.fake_llm,
@@ -315,6 +322,7 @@ def resolve_async_blueprint_run_request(blueprint_id: str, req: BlueprintRunRequ
         run_id=run_id,
         config_overwrite=req.config_overwrite,
         config_overrides=req.config_overrides,
+        secret_environment=req.secret_environment,
         force=req.force,
         progress_id=progress_id,
         fake_llm=req.fake_llm,
@@ -332,6 +340,7 @@ def resolve_async_blueprint_launch_request(req: BlueprintLaunchRequest) -> Bluep
         run_id=run_id,
         config_overwrite=req.config_overwrite,
         config_overrides=req.config_overrides,
+        secret_environment=req.secret_environment,
         force=req.force,
         progress_id=progress_id,
         fake_llm=req.fake_llm,
@@ -782,6 +791,9 @@ def run_blueprint_record(
     config_overrides = {}
     if req:
         config_overrides = dict(req.config_overwrite or req.config_overrides or {})
+    secret_environment = requested_secret_environment(req.secret_environment if req else None)
+    bundle_root = validate_blueprint_bundle(repo_root, blueprint)
+    validate_blueprint_secret_environment(read_manifest_for_launch(bundle_root), secret_environment)
     env_overrides = runtime_blueprint_environment_overrides()
     env_overrides.update(fake_mode_environment_overrides(req))
     force = bool(req.force) if req else False
@@ -945,6 +957,7 @@ def run_blueprint_record(
                 expectation=expectation,
             ),
         )
+        manifest_json = inject_declared_secret_environment(manifest_json, secret_environment)
     except HTTPException:
         cleanup_blueprint_run_processes(run_id, reason="manifest_prepare_failed")
         record_launch_progress(
@@ -1030,7 +1043,7 @@ def run_blueprint_record(
             blueprint_revision=blueprint.get("revision") or None,
             blueprint_source=source,
             blueprint_path=str(validate_blueprint_bundle(repo_root, blueprint)),
-            monitor_manifest=json.loads(manifest_json),
+            monitor_manifest=manifest_without_secret_environment(manifest_json, secret_environment),
         )
         current_config = _current_config()
         start_background_event_relay_if_needed(

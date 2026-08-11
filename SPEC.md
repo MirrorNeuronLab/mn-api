@@ -82,6 +82,10 @@ model placement algorithms, blueprint domain behavior, or the browser UI.
 - Blueprint launch delegates manifest expansion, config application,
   dependency localization, environment injection, and topology lowering to the
   same SDK preparation path consumed by the CLI.
+- Blueprint launch accepts a bounded optional `secret_environment` map. Names
+  must be declared by the blueprint through `pass_env`; values are injected
+  only into matching executable workers and are excluded from resolved
+  configuration, API responses, progress events, and public monitor manifests.
 - Blueprint launch persists the SDK's sanitized source-facing monitor manifest
   beside the run identity mapping, matching `mn blueprint run` and preventing
   lowered control nodes from appearing as public workflow steps.

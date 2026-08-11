@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 
 
 class SubmitJobRequest(BaseModel):
@@ -73,6 +73,7 @@ class BlueprintRunRequest(BaseModel):
     run_id: Optional[str] = None
     config_overwrite: Optional[Dict[str, Any]] = None
     config_overrides: Optional[Dict[str, Any]] = None
+    secret_environment: Dict[str, SecretStr] = Field(default_factory=dict)
     force: bool = False
     progress_id: Optional[str] = None
     fake_llm: bool = False

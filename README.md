@@ -20,6 +20,12 @@ After a run starts, the API uses the SDK run-store writer to persist the same
 public monitor manifest as the CLI, keeping generated control nodes and
 internal runtime staff out of the workflow step view.
 
+Blueprint run requests may include `secret_environment`, a bounded map whose
+values are treated as secrets by request validation. Every name must be
+declared by the selected blueprint through `pass_env`; the API injects each
+value only into matching executable workers and omits the values from resolved
+configuration and public monitor manifests.
+
 Blueprint launch preserves the `model_install` progress phase for compatibility
 but only validates and reports lazy policies. Automatic DMR preparation occurs
 inside the submitted job on the first LLM call, or when RAG/OCR skills pass
