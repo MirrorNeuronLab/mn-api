@@ -570,6 +570,22 @@ def defer_blueprint_runtime_models(
     resolve_blueprint_payload_contract(manifest, bundle_root)
     package_payload_models_for_api(bundle_root, manifest)
     config = load_blueprint_config(bundle_root, config_overrides=config_overrides) or {}
+    if blueprint_uses_fake_llm(config):
+        return {
+            "ok": True,
+            "deferred": True,
+            "models": [],
+            "services": [],
+            "endpoints": {},
+            "env": {
+                "MN_BLUEPRINT_FAKE_LLM": "1",
+                "MN_BLUEPRINT_LLM_MODE": "fake",
+                "MN_LLM_PROVIDER": "fake",
+                "MN_LLM_MODEL": "fake-deterministic-blueprint-agent",
+            },
+            "config_overrides": None,
+            "errors": [],
+        }
     catalog = load_model_catalog()
     resource_report = runtime_resource_report()
     models: list[dict[str, Any]] = []
@@ -705,6 +721,15 @@ def deferred_runtime_model_is_feasible(
 def blueprint_requests_default_llm(config: dict[str, Any]) -> bool:
     llm = config.get("llm") if isinstance(config.get("llm"), dict) else {}
     return str(llm.get("model") or "").strip().lower() == "default"
+
+
+def blueprint_uses_fake_llm(config: dict[str, Any]) -> bool:
+    llm = config.get("llm") if isinstance(config.get("llm"), dict) else {}
+    return any(
+        str(llm.get(key) or "").strip().lower()
+        in {"fake", "mock", "stub", "deterministic"}
+        for key in ("mode", "provider")
+    )
 
 
 def sync_runtime_model_gateways_for_api(
@@ -1600,18 +1625,22 @@ def prepare_hostlocal_python_environments_for_submission(
             requirements=requirements,
         )
         selected_node = hostlocal_selected_runtime_node(manifest, node)
+        local_source_versions = hostlocal_local_source_versions(manifest, packages)
+        request = {
+            "node": selected_node,
+            "ensure_hostlocal_python_environment": True,
+            "blueprint_id": blueprint_id,
+            "node_id": node_id,
+            "packages": packages,
+            "requirements_content": requirements_content,
+            "timeout": resolved_timeout,
+            "source": "mn-api",
+        }
+        if local_source_versions:
+            request["local_source_versions"] = local_source_versions
         response = call_prepare_runtime_model(
             runtime_client or hostlocal_runtime_client(selected_node),
-            {
-                "node": selected_node,
-                "ensure_hostlocal_python_environment": True,
-                "blueprint_id": blueprint_id,
-                "node_id": node_id,
-                "packages": packages,
-                "requirements_content": requirements_content,
-                "timeout": resolved_timeout,
-                "source": "mn-api",
-            },
+            request,
             logger=state.logger,
         )
         runtime_path = str(response.get("runtime_path") or "").strip()
@@ -1628,6 +1657,40 @@ def prepare_hostlocal_python_environments_for_submission(
             }
         )
     return prepared
+
+
+def hostlocal_local_source_versions(
+    manifest: dict[str, Any],
+    packages: list[str],
+) -> dict[str, str]:
+    """Return declared versions for local dependency paths in a HostLocal node."""
+
+    metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
+    local = (
+        metadata.get("mn_local_skill_dependencies")
+        if isinstance(metadata.get("mn_local_skill_dependencies"), dict)
+        else {}
+    )
+    sources = local.get("sources") if isinstance(local.get("sources"), list) else []
+    versions_by_path: dict[str, str] = {}
+    for entry in sources:
+        if not isinstance(entry, dict):
+            continue
+        source = str(entry.get("source") or "").strip()
+        version = str(entry.get("version") or "").strip()
+        if not source or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+!-]*", version):
+            continue
+        versions_by_path.setdefault(str(Path(source).expanduser().resolve()), version)
+
+    local_versions: dict[str, str] = {}
+    for package in packages:
+        candidate = Path(package).expanduser()
+        if not candidate.is_absolute():
+            continue
+        version = versions_by_path.get(str(candidate.resolve()))
+        if version:
+            local_versions[package] = version
+    return local_versions
 
 
 def hostlocal_requirements_content(

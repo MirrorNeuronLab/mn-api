@@ -364,7 +364,14 @@ def blueprint_launch_run_id_seed(req: BlueprintLaunchRequest) -> str:
 def fake_mode_environment_overrides(req: BlueprintRunRequest | None) -> dict[str, str]:
     env: dict[str, str] = {}
     if req and req.fake_llm:
-        env["MN_BLUEPRINT_FAKE_LLM"] = "1"
+        env.update(
+            {
+                "MN_BLUEPRINT_FAKE_LLM": "1",
+                "MN_BLUEPRINT_LLM_MODE": "fake",
+                "MN_LLM_PROVIDER": "fake",
+                "MN_LLM_MODEL": "fake-deterministic-blueprint-agent",
+            }
+        )
     if req and req.fake_skills:
         env["MN_BLUEPRINT_FAKE_SKILLS"] = "1"
     return env
@@ -791,6 +798,19 @@ def run_blueprint_record(
     config_overrides = {}
     if req:
         config_overrides = dict(req.config_overwrite or req.config_overrides or {})
+    if req and req.fake_llm:
+        config_overrides = deep_merge(
+            config_overrides,
+            {
+                "llm": {
+                    "mode": "fake",
+                    "provider": "fake",
+                    "model": "fake-deterministic-blueprint-agent",
+                    "runtime_model": None,
+                    "require_live": False,
+                }
+            },
+        )
     secret_environment = requested_secret_environment(req.secret_environment if req else None)
     bundle_root = validate_blueprint_bundle(repo_root, blueprint)
     validate_blueprint_secret_environment(read_manifest_for_launch(bundle_root), secret_environment)

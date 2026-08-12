@@ -1248,7 +1248,30 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertEqual(observed["node_id"], "worker")
         self.assertEqual(observed["packages"], ["fastapi>=0.115"])
         self.assertEqual(observed["requirements_content"], "requests==2.32.0\n")
+        self.assertNotIn("local_source_versions", observed)
         self.assertTrue(observed["ensure_hostlocal_python_environment"])
+
+    def test_hostlocal_local_source_versions_uses_declared_local_dependency_version(self):
+        source = Path("/tmp/local-skill")
+        manifest = {
+            "metadata": {
+                "mn_local_skill_dependencies": {
+                    "sources": [
+                        {
+                            "source": str(source),
+                            "version": "1.2.31",
+                        }
+                    ]
+                }
+            }
+        }
+
+        versions = blueprints_module.hostlocal_local_source_versions(
+            manifest,
+            [str(source), "requests>=2.32"],
+        )
+
+        self.assertEqual(versions, {str(source): "1.2.31"})
 
     def test_load_blueprint_bundle_localizes_declared_agent_dependencies_like_cli(self):
         observed = {}
@@ -1951,3 +1974,42 @@ def test_launch_model_policy_is_deferred_without_installing():
         "gemma4:e2b",
     ]
     assert summary["env"]["MN_RUNTIME_MODEL_MANAGED"] == "1"
+
+
+def test_launch_model_policy_skips_runtime_models_for_fake_llm():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        repo = Path(tmpdir)
+        bundle = repo / "fake_assistant"
+        bundle.mkdir()
+        (bundle / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "apiVersion": "mn.workflow/v2",
+                    "runtime": {
+                        "models": {
+                            "primary": {
+                                "provider": "docker_model_runner",
+                                "model": "default",
+                                "required": True,
+                            }
+                        }
+                    },
+                    "nodes": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        with patch(
+            "mn_api.blueprints.runtime_resource_report",
+            side_effect=AssertionError("fake launches must not inspect Model Runner resources"),
+        ):
+            summary = defer_blueprint_runtime_models(
+                repo,
+                {"id": "fake_assistant", "path": "fake_assistant"},
+                config_overrides={"llm": {"mode": "fake"}},
+            )
+
+    assert summary["ok"] is True
+    assert summary["models"] == []
+    assert summary["env"]["MN_LLM_PROVIDER"] == "fake"
+
