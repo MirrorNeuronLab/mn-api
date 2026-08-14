@@ -121,8 +121,9 @@ All paths below are under `/api/v1`.
 - Run detail: logs, events, resources, human requests, UI, artifacts, outputs,
   snapshots, workflow progress, agent graph, export, and observability all live
   below `/runs/{run_id}`. `runtime_run_id` is diagnostic metadata only.
-- Blueprints and bundles: `GET /blueprints`, installation at
-  `/blueprints/{id}/installation`, validations, catalog refresh/cleanup
+- Blueprints and bundles: `GET /blueprints`, asynchronous additions at
+  `POST /blueprints/{id}/additions`, removals at
+  `POST /blueprints/{id}/removals`, validations, catalog refresh/cleanup
   operations, and multipart `POST /bundles` returning an opaque `bundle_id`.
 - Scheduling: schedules are created below a job, managed through `/schedules`,
   dispatched through `/schedules/{id}/dispatches`, and event emissions use
@@ -147,9 +148,9 @@ field.
 Collections use `items` and `next_page_token`; clients pass `page_size`
 (default 50, maximum 200) and an opaque `page_token`. Persistent resources use
 strong ETags. Mutating or deleting jobs, schedules, deployments, model
-registrations, and blueprint installations requires `If-Match`. Non-idempotent
+registrations, and model installations requires `If-Match`. Non-idempotent
 POSTs accept `Idempotency-Key`, which first-party clients always set for starts,
-dispatches, and administrative work.
+dispatches, blueprint additions/removals, and administrative work.
 
 `POST /api/v1/blueprints/{blueprint_id}/runs` creates an ephemeral stable job
 before starting the first run unless the body supplies an existing `job_id`.
@@ -196,6 +197,14 @@ Bulk cancellation, job cleanup, node reconciliation, and node drain return a
 durable Core operation rather than waiting for every item synchronously. Follow
 `GET /operations/{operation_id}/events/stream` to receive replayable SSE
 updates and reconnect with `Last-Event-ID`.
+
+Blueprint additions and removals return an API-owned operation immediately.
+Poll `GET /operations/{operation_id}` or follow its event stream for the real
+`progress.percent`, `progress.stage`, `progress.label`, and `progress.detail`.
+Terminal failures include a sanitized `error` with a stable `code`, actionable
+`detail` and `hint`, retryability, and bounded prerequisite issues. A successful
+addition writes the same local blueprint record consumed by the runtime tools;
+clients do not need to invoke `mn blueprint add` separately.
 
 All failures use RFC 9457 `application/problem+json` with `type`, `title`,
 `status`, `detail`, `instance`, `code`, and `request_id`; field errors are

@@ -7,7 +7,15 @@ from mn_api import state
 from mn_api.api_models import CleanupCreate, PageResponse, ResourceModel
 from mn_api.contracts import API_PREFIX, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 from mn_api.dependencies import require_auth
-from mn_api.operations import encode_sse, get_operation, known_operations, sse_envelope, start_operation
+from mn_api.operations import (
+    encode_sse,
+    get_operation,
+    is_local_operation,
+    known_operations,
+    sse_envelope,
+    start_operation,
+    stream_local_operation_events,
+)
 from mn_api.pagination import page
 from mn_api.public import decode, idempotent_response, public_value
 
@@ -113,6 +121,18 @@ def stream_operation_events(
         raise HTTPException(status_code=400, detail="Last-Event-ID must be an integer.") from exc
 
     def source():
+        if is_local_operation(operation_id):
+            yield ": heartbeat\n\n"
+            for event in stream_local_operation_events(operation_id, resume_after=resume_after):
+                yield encode_sse(
+                    sse_envelope(
+                        event_id=int(event["sequence"]),
+                        event_type=str(event["type"]),
+                        resource=f"{API_PREFIX}/operations/{operation_id}",
+                        data=event["data"],
+                    )
+                )
+            return
         sequence = 0
         terminal = False
         yield ": heartbeat\n\n"

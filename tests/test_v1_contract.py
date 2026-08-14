@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+from threading import Event
+import time
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
 from mn_api import state
 from mn_api.app import create_app
+from mn_api.blueprint_additions import BlueprintAddError
 from mn_api.contracts import API_CONTRACT
 from mn_api.http_semantics import strong_etag
 from mn_api.pagination import PageTokenRegistry, page
@@ -362,9 +365,14 @@ def _patch_canonical_projections(monkeypatch):
     monkeypatch.setattr(infrastructure, "uploaded_bundle_root", lambda *_args: SimpleNamespace(__truediv__=lambda *_: None))
     monkeypatch.setattr(infrastructure, "run_service_validation", lambda *_args, **_kwargs: {"ok": True})
     monkeypatch.setattr(
+        blueprints,
+        "add_catalog_blueprint",
+        lambda _config, blueprint_id, **_kwargs: {"added": True, "blueprint": {"id": blueprint_id}},
+    )
+    monkeypatch.setattr(
         blueprints.legacy_blueprints,
-        "install_blueprint",
-        lambda blueprint_id, **_kwargs: {"installed": True, "blueprint": {"id": blueprint_id}},
+        "uninstall_blueprints",
+        lambda request, **_kwargs: {"removed": True, "blueprint_id": request.blueprint_id},
     )
     monkeypatch.setattr(
         blueprints,
@@ -400,6 +408,102 @@ def test_blueprint_run_forwards_secret_environment(monkeypatch):
     secret = captured["request"].secret_environment["DECLARED_SECRET"]
     assert secret.get_secret_value() == "secret-value"
     assert "secret-value" not in response.text
+
+
+def _wait_for_operation(client: TestClient, operation_id: str, terminal: set[str] | None = None) -> dict:
+    terminal = terminal or {"completed", "failed"}
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        snapshot = client.get(f"/api/v1/operations/{operation_id}").json()
+        if snapshot.get("status") in terminal:
+            return snapshot
+        time.sleep(0.01)
+    raise AssertionError(f"operation {operation_id} did not reach {sorted(terminal)}")
+
+
+def test_blueprint_addition_exposes_real_progress_result_and_local_sse(monkeypatch):
+    client, _runtime = _client(monkeypatch)
+    started = Event()
+    release = Event()
+
+    def add(_config, blueprint_id, *, report_progress, **_kwargs):
+        report_progress(
+            percent=55,
+            stage="prepare_runtime",
+            label="Prepare runtime prerequisites",
+            detail="Preparing required runtime assets.",
+        )
+        started.set()
+        assert release.wait(2)
+        report_progress(
+            percent=90,
+            stage="record_addition",
+            label="Record blueprint",
+            detail="Recording the added blueprint.",
+        )
+        return {"added": True, "blueprint": {"id": blueprint_id, "added": True}}
+
+    monkeypatch.setattr(blueprints, "add_catalog_blueprint", add)
+    response = client.post(
+        "/api/v1/blueprints/worker-1/additions",
+        headers={"Idempotency-Key": "worker-1-add-progress"},
+        json={},
+    )
+    assert response.status_code == 202
+    operation_id = response.json()["operation_id"]
+    assert started.wait(1)
+
+    running = client.get(f"/api/v1/operations/{operation_id}").json()
+    assert running["kind"] == "add_blueprint"
+    assert running["status"] == "running"
+    assert running["progress"] == {
+        "percent": 55,
+        "stage": "prepare_runtime",
+        "label": "Prepare runtime prerequisites",
+        "detail": "Preparing required runtime assets.",
+    }
+
+    release.set()
+    completed = _wait_for_operation(client, operation_id)
+    assert completed["status"] == "completed"
+    assert completed["progress"]["percent"] == 100
+    assert completed["result"]["blueprint"] == {"id": "worker-1", "added": True}
+
+    stream = client.get(f"/api/v1/operations/{operation_id}/events/stream")
+    assert stream.status_code == 200
+    assert "event: operation.progress" in stream.text
+    assert "event: operation.completed" in stream.text
+
+
+def test_blueprint_addition_exposes_structured_sanitized_failure(monkeypatch):
+    client, _runtime = _client(monkeypatch)
+
+    def fail(_config, _blueprint_id, *, report_progress, **_kwargs):
+        report_progress(
+            percent=50,
+            stage="prepare_runtime",
+            label="Prepare runtime prerequisites",
+            detail="Preparing required runtime assets.",
+        )
+        raise BlueprintAddError(
+            issues=[
+                {
+                    "code": "runtime_model_not_ready",
+                    "message": "model-one could not be prepared for this blueprint.",
+                    "severity": "error",
+                }
+            ]
+        )
+
+    monkeypatch.setattr(blueprints, "add_catalog_blueprint", fail)
+    response = client.post("/api/v1/blueprints/worker-1/additions", json={})
+    operation = _wait_for_operation(client, response.json()["operation_id"])
+
+    assert operation["status"] == "failed"
+    assert operation["error"]["code"] == "MN_BLUEPRINT_ADD_FAILED"
+    assert operation["error"]["retryable"] is True
+    assert operation["error"]["errors"][0]["code"] == "runtime_model_not_ready"
+    assert "traceback" not in json.dumps(operation).lower()
 
 
 def test_canonical_resource_happy_paths(monkeypatch):
@@ -440,16 +544,34 @@ def test_canonical_resource_happy_paths(monkeypatch):
     assert client.post("/api/v1/nodes/node-1/reconciliations", json={}).status_code == 202
     assert client.delete("/api/v1/nodes/node-1").status_code == 204
 
-    installation = client.get("/api/v1/blueprints/worker-1/installation")
-    conditional = {"If-Match": installation.headers["etag"], "Idempotency-Key": "install-1"}
-    assert client.put("/api/v1/blueprints/worker-1/installation", headers=conditional, json={}).status_code == 202
+    addition = client.post(
+        "/api/v1/blueprints/worker-1/additions",
+        headers={"Idempotency-Key": "add-1"},
+        json={},
+    )
+    assert addition.status_code == 202
+    assert addition.headers["location"].startswith("/api/v1/operations/op-local-")
+    assert client.get("/api/v1/blueprints/worker-1/installation").status_code == 404
+    assert client.delete("/api/v1/blueprints/worker-1/installation").status_code == 404
+    removal = client.post(
+        "/api/v1/blueprints/worker-1/removals",
+        headers={"Idempotency-Key": "remove-1"},
+        json={"keep_resources": True},
+    )
+    assert removal.status_code == 202
+    removed = _wait_for_operation(client, removal.json()["operation_id"])
+    assert removed["result"] == {"removed": True, "blueprint_id": "worker-1"}
     assert client.post("/api/v1/blueprints/worker-1/validations", json={}).status_code == 201
     assert client.post(
         "/api/v1/blueprints/worker-1/runs",
         headers={"Idempotency-Key": "blueprint-run-1"},
         json={},
     ).status_code == 202
-    assert client.post("/api/v1/blueprint-catalog-refreshes", headers={"Idempotency-Key": "refresh-1"}).status_code == 202
+    refresh = client.post("/api/v1/blueprint-catalog-refreshes", headers={"Idempotency-Key": "refresh-1"})
+    assert refresh.status_code == 202
+    refresh_operation_id = refresh.json()["operation_id"]
+    refresh_stream = client.get(f"/api/v1/operations/{refresh_operation_id}/events/stream")
+    assert "event: operation.completed" in refresh_stream.text
     assert client.post("/api/v1/blueprint-cleanups", headers={"Idempotency-Key": "cleanup-1"}, json={}).status_code == 202
 
     created = client.post("/api/v1/jobs", json={"bundle_id": "bundle-1"})

@@ -127,8 +127,15 @@ class BlueprintValidation(StrictModel):
     config_overrides: dict[str, Any] = Field(default_factory=dict)
 
 
-class BlueprintInstallation(StrictModel):
+class BlueprintAdd(StrictModel):
     force: bool = False
+
+
+class BlueprintRemove(StrictModel):
+    keep_resources: bool = False
+    keep_models: bool = False
+    remove_models: bool = False
+    dry_run: bool = False
 
 
 class DesiredStateUpdate(StrictModel):

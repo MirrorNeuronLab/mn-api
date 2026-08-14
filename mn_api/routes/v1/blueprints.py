@@ -4,22 +4,23 @@ from fastapi import APIRouter, Depends, Header, Query, status
 
 from mn_api import state
 from mn_api.api_models import (
-    BlueprintInstallation,
+    BlueprintAdd,
+    BlueprintRemove,
     BlueprintRunCreate,
     BlueprintValidation,
     CleanupCreate,
     PageResponse,
     ResourceModel,
 )
+from mn_api.blueprint_additions import add_catalog_blueprint, blueprint_public_projection
 from mn_api.blueprints import filter_blueprints_by_category, find_blueprint, load_blueprint_catalog, refresh_blueprint_catalog
 from mn_api.contracts import API_PREFIX, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 from mn_api.dependencies import require_auth
-from mn_api.http_semantics import require_if_match
-from mn_api.operations import complete_local_operation, start_operation
+from mn_api.operations import complete_local_operation, start_local_operation, start_operation
 from mn_api.pagination import page
-from mn_api.public import idempotent_response, public_value, resource_response
+from mn_api.public import idempotent_response, public_value
 from mn_api.routes import blueprints as legacy_blueprints
-from mn_api.schemas import BlueprintRunRequest
+from mn_api.schemas import BlueprintRunRequest, BlueprintUninstallRequest
 
 
 router = APIRouter(prefix=API_PREFIX)
@@ -37,7 +38,7 @@ def list_blueprints(
     principal: str = Depends(require_auth),
 ):
     _repo_root, blueprints = load_blueprint_catalog(_config())
-    items = [public_value(item) for item in filter_blueprints_by_category(blueprints, category)]
+    items = [blueprint_public_projection(item) for item in filter_blueprints_by_category(blueprints, category)]
     return page(
         items,
         route=f"{API_PREFIX}/blueprints",
@@ -54,87 +55,78 @@ def list_blueprints(
 @router.get("/blueprints/{blueprint_id}", operation_id="get_blueprint", tags=["blueprints"], response_model=ResourceModel)
 def get_blueprint(blueprint_id: str, _principal=Depends(require_auth)):
     _repo_root, blueprint = find_blueprint(_config(), blueprint_id)
-    return public_value(blueprint)
+    return blueprint_public_projection(blueprint)
 
 
-def _installation(blueprint_id: str) -> dict:
-    _repo_root, blueprint = find_blueprint(_config(), blueprint_id)
-    installation = blueprint.get("installation") if isinstance(blueprint, dict) else None
-    if isinstance(installation, dict):
-        return {"blueprint_id": blueprint_id, **public_value(installation)}
-    installed = bool(blueprint.get("installed")) if isinstance(blueprint, dict) else False
-    return {"blueprint_id": blueprint_id, "status": "installed" if installed else "not_installed"}
-
-
-@router.get(
-    "/blueprints/{blueprint_id}/installation",
-    operation_id="get_blueprint_installation",
-    tags=["blueprints"],
-    response_model=ResourceModel,
-)
-def get_blueprint_installation(blueprint_id: str, _principal=Depends(require_auth)):
-    return resource_response(_installation(blueprint_id), etag=True)
-
-
-@router.put(
-    "/blueprints/{blueprint_id}/installation",
+@router.post(
+    "/blueprints/{blueprint_id}/additions",
     status_code=status.HTTP_202_ACCEPTED,
-    operation_id="replace_blueprint_installation",
+    operation_id="create_blueprint_addition",
     tags=["blueprints"],
     response_model=ResourceModel,
 )
-def replace_blueprint_installation(
+def create_blueprint_addition(
     blueprint_id: str,
-    request: BlueprintInstallation,
-    if_match: str | None = Header(default=None, alias="If-Match"),
+    request: BlueprintAdd | None = None,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", max_length=255),
     principal: str = Depends(require_auth),
 ):
-    require_if_match(if_match, _installation(blueprint_id))
+    payload = request or BlueprintAdd()
 
-    def install():
-        result = legacy_blueprints.install_blueprint(
-            blueprint_id,
-            force=request.force,
-            _auth=principal,
-        )
-        return complete_local_operation(
-            "install_blueprint",
-            {"blueprint_id": blueprint_id, "force": request.force},
-            result=result,
+    def add():
+        return start_local_operation(
+            "add_blueprint",
+            {"blueprint_id": blueprint_id, "force": payload.force},
+            lambda report: add_catalog_blueprint(
+                _config(),
+                blueprint_id,
+                force=payload.force,
+                report_progress=report,
+            ),
         )
 
     return idempotent_response(
         principal=principal,
-        route=f"{API_PREFIX}/blueprints/{blueprint_id}/installation",
+        route=f"{API_PREFIX}/blueprints/{blueprint_id}/additions",
         key=idempotency_key,
-        body=request.model_dump(),
-        call=install,
+        body=payload.model_dump(),
+        call=add,
         status_code=status.HTTP_202_ACCEPTED,
         location=lambda result: f"{API_PREFIX}/operations/{result.get('operation_id') or result.get('id')}",
     )
 
 
-@router.delete(
-    "/blueprints/{blueprint_id}/installation",
+@router.post(
+    "/blueprints/{blueprint_id}/removals",
     status_code=status.HTTP_202_ACCEPTED,
-    operation_id="delete_blueprint_installation",
+    operation_id="create_blueprint_removal",
     tags=["blueprints"],
     response_model=ResourceModel,
 )
-def delete_blueprint_installation(
+def create_blueprint_removal(
     blueprint_id: str,
-    if_match: str | None = Header(default=None, alias="If-Match"),
+    request: BlueprintRemove | None = None,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", max_length=255),
     principal: str = Depends(require_auth),
 ):
-    require_if_match(if_match, _installation(blueprint_id))
+    payload = request or BlueprintRemove()
+
+    def remove(report):
+        report(percent=20, stage="resolve_blueprint", label="Resolve blueprint", detail="Locating the added blueprint record.")
+        report(percent=55, stage="remove_resources", label="Remove resources", detail="Removing blueprint-owned runtime resources.")
+        result = legacy_blueprints.uninstall_blueprints(
+            BlueprintUninstallRequest(blueprint_id=blueprint_id, **payload.model_dump()),
+            _auth=principal,
+        )
+        report(percent=90, stage="record_removal", label="Record removal", detail="Finalizing the blueprint removal.")
+        return result
+
     return idempotent_response(
         principal=principal,
-        route=f"{API_PREFIX}/blueprints/{blueprint_id}/installation",
+        route=f"{API_PREFIX}/blueprints/{blueprint_id}/removals",
         key=idempotency_key,
-        body={},
-        call=lambda: start_operation("uninstall_blueprint", {"blueprint_id": blueprint_id}),
+        body=payload.model_dump(),
+        call=lambda: start_local_operation("remove_blueprint", {"blueprint_id": blueprint_id, **payload.model_dump()}, remove),
         status_code=status.HTTP_202_ACCEPTED,
         location=lambda result: f"{API_PREFIX}/operations/{result.get('operation_id') or result.get('id')}",
     )

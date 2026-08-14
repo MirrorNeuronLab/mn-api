@@ -69,6 +69,16 @@ model placement algorithms, blueprint domain behavior, or the browser UI.
   `reconcile_node`, and `drain_node`). Their item events are replayable by
   sequence cursor. `cancellation_pending` is accepted durable work, while
   explicit item failures remain operation failures.
+- Blueprint lifecycle terminology matches the CLI: clients create asynchronous
+  additions with `POST /blueprints/{blueprint_id}/additions` and removals with
+  `POST /blueprints/{blueprint_id}/removals`. The removed blueprint
+  `installation` resource is not mounted.
+- Blueprint additions are API-owned local operations. Their snapshots and SSE
+  events expose monotonic percent, stage, label, and detail fields; terminal
+  failures expose sanitized stable codes, retryability, hints, and bounded
+  prerequisite issues. A successful addition records the blueprint locally so
+  another client-side CLI step is neither required nor permitted as part of the
+  HTTP workflow.
 - `job_id` is stable and owns configuration, schedules, and shared data;
   `run_id` is the execution/control identity. Starting or dispatching a job
   creates a fresh run, while retry/recovery attempts retain their run ID.
