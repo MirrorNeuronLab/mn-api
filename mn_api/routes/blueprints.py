@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from mn_sdk import (
     cleanup_job_definition_resources,
@@ -67,7 +67,6 @@ from mn_api.path_utils import resolve_mn_home
 from mn_api.schemas import BlueprintCleanupRequest, BlueprintLaunchRequest, BlueprintRunRequest, BlueprintUninstallRequest, BlueprintUpdateRequest
 
 
-router = APIRouter(prefix="/api/v2")
 PROGRESS_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,220}$")
 TERMINAL_LAUNCH_PROGRESS_STATUSES = {"completed", "failed"}
 CONTEXT_ENGINE_EXPECTATION = (
@@ -87,7 +86,6 @@ def _current_config():
     return state.refresh_config_from_env()
 
 
-@router.get("/blueprints")
 def list_blueprints(
     category: str | None = Query(
         default=None,
@@ -101,13 +99,11 @@ def list_blueprints(
     return {"repo_dir": str(repo_root), "blueprints": filtered_blueprints, "categories": categories}
 
 
-@router.get("/blueprints/{blueprint_id}")
 def get_blueprint(blueprint_id: str, _auth=Depends(require_auth)):
     _repo_root, blueprint = find_blueprint(_current_config(), blueprint_id)
     return {"blueprint": blueprint}
 
 
-@router.post("/blueprints/{blueprint_id}/install")
 def install_blueprint(
     blueprint_id: str,
     force: bool = Query(False, description="Force model install when hardware compatibility checks fail."),
@@ -128,7 +124,6 @@ def install_blueprint(
     return {"installed": True, "blueprint": blueprint, "model_install": model_install}
 
 
-@router.post("/blueprints/launch/validate")
 def validate_blueprint_launch(req: BlueprintLaunchRequest, _auth=Depends(require_auth)):
     launch = resolve_launch_source(req)
     state.close_client()
@@ -144,7 +139,6 @@ def validate_blueprint_launch(req: BlueprintLaunchRequest, _auth=Depends(require
     return response
 
 
-@router.post("/blueprints/{blueprint_id}/validate")
 def validate_blueprint(
     blueprint_id: str,
     req: BlueprintRunRequest | None = None,
@@ -163,7 +157,6 @@ def validate_blueprint(
     return {"blueprint": blueprint, "validation": result}
 
 
-@router.post("/blueprints/launch/runs")
 def run_blueprint_launch(req: BlueprintLaunchRequest, _auth=Depends(require_auth)):
     resolved_req = resolve_async_blueprint_launch_request(req)
     record_launch_progress(
@@ -185,7 +178,7 @@ def run_blueprint_launch(req: BlueprintLaunchRequest, _auth=Depends(require_auth
             "job_id": None,
             "source": resolved_req.source,
             "progress_id": resolved_req.progress_id,
-            "progress_url": f"/api/v2/blueprints/launch/progress/{resolved_req.progress_id}",
+            "progress_url": None,
         },
     )
 
@@ -224,7 +217,6 @@ def run_blueprint_launch_record(req: BlueprintLaunchRequest):
         detail="The blueprint source and manifest were found.",
     )
     run_req = BlueprintRunRequest(
-        version=req.version,
         job_id=req.job_id,
         run_id=req.run_id,
         config_overwrite=req.config_overwrite,
@@ -243,7 +235,6 @@ def run_blueprint_launch_record(req: BlueprintLaunchRequest):
     )
 
 
-@router.post("/blueprints/{blueprint_id}/runs")
 def run_blueprint(
     blueprint_id: str,
     req: BlueprintRunRequest | None = None,
@@ -269,7 +260,6 @@ def run_blueprint(
     }
 
 
-@router.get("/blueprints/launch/progress/{progress_id}")
 def get_launch_progress(progress_id: str, _auth=Depends(require_auth)):
     return launch_progress_snapshot(progress_id)
 
@@ -317,7 +307,6 @@ def resolve_async_blueprint_run_request(blueprint_id: str, req: BlueprintRunRequ
     validate_run_id(run_id)
     progress_id = validate_progress_id(req.progress_id) or create_blueprint_progress_id(run_id)
     return BlueprintRunRequest(
-        version=req.version,
         job_id=req.job_id,
         run_id=run_id,
         config_overwrite=req.config_overwrite,
@@ -335,7 +324,6 @@ def resolve_async_blueprint_launch_request(req: BlueprintLaunchRequest) -> Bluep
     validate_run_id(run_id)
     progress_id = validate_progress_id(req.progress_id) or create_blueprint_progress_id(run_id)
     return BlueprintLaunchRequest(
-        version=req.version,
         job_id=req.job_id,
         run_id=run_id,
         config_overwrite=req.config_overwrite,
@@ -528,7 +516,6 @@ def launch_progress_error(events: list[dict[str, Any]]) -> str | None:
     return None
 
 
-@router.post("/blueprints:cleanup")
 def cleanup_blueprints(req: BlueprintCleanupRequest, _auth=Depends(require_auth)):
     explicit_ids = {req.blueprint_id} if req.blueprint_id else set()
     active_ids = set()
@@ -568,7 +555,6 @@ def cleanup_blueprints(req: BlueprintCleanupRequest, _auth=Depends(require_auth)
     }
 
 
-@router.post("/blueprints:update")
 def update_blueprints(req: BlueprintUpdateRequest, _auth=Depends(require_auth)):
     storage_dir = resolve_blueprint_storage(req.source)
     if not storage_dir.exists():
@@ -612,7 +598,6 @@ def update_blueprints(req: BlueprintUpdateRequest, _auth=Depends(require_auth)):
     }
 
 
-@router.post("/blueprints:uninstall")
 def uninstall_blueprints(req: BlueprintUninstallRequest, _auth=Depends(require_auth)):
     if req.keep_models and req.remove_models:
         raise HTTPException(status_code=400, detail="Use only one of keep_models or remove_models.")
@@ -1098,7 +1083,7 @@ def run_blueprint_record(
             "validation": validation,
             "model_install": model_install,
             "progress_id": progress_id,
-            "progress_url": f"/api/v2/blueprints/launch/progress/{progress_id}" if progress_id else None,
+            "progress_url": None,
         }
     except Exception as exc:
         if "submission_id" in locals() and not definition_committed:

@@ -5,13 +5,11 @@ from typing import Any, Mapping
 
 import grpc
 from fastapi import HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from mn_api import state
 from mn_sdk.errors import AppError, normalize_exception, sanitize_context
-
-INTERFACE_VERSION = 2
-
 
 def problem_response(
     *,
@@ -21,27 +19,31 @@ def problem_response(
     detail: str,
     validation: dict | None = None,
     extra: dict | None = None,
+    instance: str | None = None,
+    request_id: str | None = None,
+    headers: Mapping[str, str] | None = None,
 ):
     content = {
-        "version": INTERFACE_VERSION,
-        "type": f"https://mirrorneuron.local/problems/{error}",
+        "type": f"https://mirrorneuron.io/problems/{error}",
         "title": title,
         "status": status_code,
         "detail": detail,
-        "error": error,
+        "instance": instance or "",
+        "code": error,
+        "request_id": request_id or "",
     }
     if validation is not None:
-        content["validation"] = validation
-        content["errors"] = validation.get("issues") or [
+        content["errors"] = (validation.get("issues") or [
             {"code": error, "message": message, "severity": "error"}
             for message in validation.get("errors", [])
-        ]
+        ])[:100]
     if extra:
         content.update(extra)
     return JSONResponse(
         status_code=status_code,
         content=content,
         media_type="application/problem+json",
+        headers=dict(headers or {}),
     )
 
 
@@ -67,14 +69,14 @@ def validation_problem_response(
 def app_error_response(app_error: AppError, *, request: Request | None = None, context: Mapping[str, Any] | None = None):
     request_id = _request_id(request)
     extra = {"hint": app_error.hint} if app_error.hint else {}
-    if request_id:
-        extra["request_id"] = request_id
     return problem_response(
         status_code=app_error.http_status,
         error=app_error.code,
         title=_title_from_code(app_error.code),
         detail=app_error.user_message,
         extra=extra,
+        instance=request.url.path if request is not None else None,
+        request_id=request_id,
     )
 
 
@@ -94,18 +96,39 @@ async def app_error_exception_handler(request: Request, exc: AppError):
 
 
 async def http_exception_handler(request: Request, exc: HTTPException):
-    if exc.status_code < 500 or exc.detail:
-        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail}, headers=exc.headers)
-    app_error = AppError(
-        "MN_EXECUTION_FAILED",
-        "Execution failed. Run again with --debug for more details.",
-        internal_message=str(exc.detail),
-        hint="Check the API logs for more details.",
-        http_status=exc.status_code,
-        cause=exc,
+    code, title = _http_problem_identity(exc.status_code)
+    detail = exc.detail if isinstance(exc.detail, str) else title
+    return problem_response(
+        status_code=exc.status_code,
+        error=code,
+        title=title,
+        detail=detail,
+        instance=request.url.path,
+        request_id=_request_id(request),
+        headers=exc.headers,
     )
-    _log_exception(exc, app_error, _request_context(request))
-    return app_error_response(app_error, request=request)
+
+
+async def request_validation_exception_handler(request: Request, exc: RequestValidationError):
+    errors = []
+    for issue in exc.errors()[:100]:
+        location = [str(part) for part in issue.get("loc", ()) if part not in {"body", "query", "path"}]
+        errors.append(
+            {
+                "field": ".".join(location),
+                "code": str(issue.get("type") or "invalid"),
+                "message": str(issue.get("msg") or "Invalid value."),
+            }
+        )
+    return problem_response(
+        status_code=422,
+        error="validation_failed",
+        title="Request validation failed",
+        detail="One or more request fields are invalid.",
+        validation={"issues": errors},
+        instance=request.url.path,
+        request_id=_request_id(request),
+    )
 
 
 async def unexpected_exception_handler(request: Request, exc: Exception):
@@ -121,10 +144,15 @@ def _legacy_validation_response(error: Exception):
             return JSONResponse(
                 status_code=503,
                 content={
-                    "version": INTERFACE_VERSION,
-                    "error": "resource_overloaded",
+                    "type": "https://mirrorneuron.io/problems/resource_overloaded",
+                    "title": "Resource overloaded",
+                    "status": 503,
                     "detail": detail,
+                    "instance": "",
+                    "code": "resource_overloaded",
+                    "request_id": "",
                 },
+                media_type="application/problem+json",
             )
     if isinstance(error, grpc.RpcError) and error.code() == grpc.StatusCode.FAILED_PRECONDITION:
         detail = str(error.details())
@@ -178,7 +206,6 @@ def _validation_report_from_prefixed_detail(detail: str, prefix: str) -> dict | 
 def _legacy_report(detail: str, prefix: str) -> dict:
     message = _human_detail(detail, prefix)
     return {
-        "version": 2,
         "schema_version": "validation.report/v2",
         "ok": False,
         "status": "failed",
@@ -214,7 +241,31 @@ def _title_from_code(code: str) -> str:
 def _request_id(request: Request | None) -> str:
     if request is None:
         return ""
-    return request.headers.get("x-request-id") or request.headers.get("x-correlation-id") or ""
+    return str(
+        getattr(request.state, "request_id", "")
+        or request.headers.get("x-request-id")
+        or request.headers.get("x-correlation-id")
+        or ""
+    )
+
+
+def _http_problem_identity(status_code: int) -> tuple[str, str]:
+    return {
+        400: ("bad_request", "Bad request"),
+        401: ("authentication_required", "Authentication required"),
+        403: ("permission_denied", "Permission denied"),
+        404: ("not_found", "Resource not found"),
+        405: ("method_not_allowed", "Method not allowed"),
+        409: ("conflict", "Request conflict"),
+        412: ("precondition_failed", "Precondition failed"),
+        413: ("request_too_large", "Request too large"),
+        422: ("validation_failed", "Request validation failed"),
+        428: ("precondition_required", "Precondition required"),
+        429: ("rate_limited", "Too many requests"),
+        502: ("upstream_failure", "Upstream service failed"),
+        503: ("service_unavailable", "Service unavailable"),
+        500: ("internal_error", "Internal server error"),
+    }.get(status_code, ("request_failed", "Request failed"))
 
 
 def _request_context(request: Request) -> dict[str, Any]:

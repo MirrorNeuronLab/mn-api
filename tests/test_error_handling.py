@@ -29,7 +29,7 @@ def test_unexpected_api_error_returns_safe_problem_response():
 
     assert response.status_code == 500
     payload = response.json()
-    assert payload["error"] == "MN_EXECUTION_FAILED"
+    assert payload["code"] == "MN_EXECUTION_FAILED"
     assert payload["detail"] == "Execution failed. Run again with --debug for more details."
     assert payload["request_id"] == "req-123"
     rendered = repr(payload)

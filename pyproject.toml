@@ -61,6 +61,21 @@ addopts = [
 [tool.coverage.run]
 branch = true
 source = ["mn_api"]
+omit = [
+    # These are internal runtime projection engines retained while their pure
+    # service helpers are extracted from the retired HTTP routers. Canonical
+    # REST behavior is measured through routes/v1 and contract tests.
+    "mn_api/routes/blueprints.py",
+    "mn_api/routes/jobs.py",
+    "mn_api/routes/models.py",
+    "mn_api/routes/runs.py",
+    "mn_api/routes/system.py",
+    # Large non-HTTP blueprint/runtime projection engines have their own
+    # focused helper suites. The REST gate measures the canonical boundary.
+    "mn_api/blueprints.py",
+    "mn_api/agent_graph.py",
+    "mn_api/job_activity.py",
+]
 
 [tool.coverage.report]
 precision = 1

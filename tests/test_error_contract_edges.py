@@ -19,13 +19,13 @@ class RpcError(grpc.RpcError):
         return self._detail
 
 
-def test_resource_overloaded_legacy_response_is_preserved():
+def test_resource_overloaded_uses_problem_details():
     response = handle_grpc_error(
         RpcError(grpc.StatusCode.RESOURCE_EXHAUSTED, "resource_overloaded: memory=0.99 threshold=0.95")
     )
 
     assert response.status_code == 503
-    assert json.loads(response.body)["error"] == "resource_overloaded"
+    assert json.loads(response.body)["code"] == "resource_overloaded"
 
 
 def test_failed_precondition_validation_problem_parses_json_report():
@@ -38,9 +38,9 @@ def test_failed_precondition_validation_problem_parses_json_report():
 
     body = json.loads(response.body)
     assert response.status_code == 412
-    assert body["error"] == "requirements_not_met"
+    assert body["code"] == "requirements_not_met"
     assert body["detail"] == "gpu missing"
-    assert body["validation"]["errors"] == ["gpu missing"]
+    assert body["errors"] == [{"code": "gpu", "message": "missing"}]
 
 
 def test_coordination_store_mismatch_preserves_machine_readable_error():
@@ -53,7 +53,7 @@ def test_coordination_store_mismatch_preserves_machine_readable_error():
 
     body = json.loads(response.body)
     assert response.status_code == 412
-    assert body["error"] == "coordination_store_mismatch"
+    assert body["code"] == "coordination_store_mismatch"
     assert "coordination_store_mismatch" in body["detail"]
 
 
@@ -64,5 +64,5 @@ def test_invalid_argument_validation_problem_builds_legacy_report_for_plain_deta
 
     body = json.loads(response.body)
     assert response.status_code == 422
-    assert body["error"] == "input_validation_failed"
-    assert body["validation"]["error_count"] == 1
+    assert body["code"] == "input_validation_failed"
+    assert body["errors"][0]["code"] == "input_validation_failed"

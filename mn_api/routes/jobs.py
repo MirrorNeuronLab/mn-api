@@ -7,13 +7,12 @@ import threading
 import time
 import urllib.parse
 import base64
-import asyncio
 from collections import Counter, deque
 from pathlib import Path
 from typing import Any
 
 import grpc
-from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import Depends, HTTPException, Query
 from fastapi.responses import JSONResponse, StreamingResponse
 from mn_sdk import (
     BlueprintWorkflowProgress,
@@ -53,7 +52,7 @@ from mn_api.blueprints import (
     runtime_resource_report,
 )
 from mn_api.bundles import load_uploaded_bundle
-from mn_api.dependencies import require_auth, require_websocket_auth
+from mn_api.dependencies import require_auth
 from mn_api.errors import handle_grpc_error, validation_problem_response
 from mn_api.job_activity import compact_event as _compact_event
 from mn_api.job_activity import compact_value as _compact_value
@@ -70,7 +69,6 @@ from mn_api.schemas import RestoreJobBackupRequest, SubmitJobRequest
 
 # The route functions in this module are retained as internal projections used
 # by the v2 monitor adapter. This router is intentionally not mounted.
-router = APIRouter(prefix="/api/v2")
 _MAX_COMPACT_STRING = 2000
 _MAX_COMPACT_LIST = 25
 _MAX_STATUS_RUNTIME_EVENTS = 25
@@ -101,7 +99,6 @@ _IMMEDIATE_PROGRESS_EVENTS = {
 }
 
 
-@router.post("/runtime-jobs")
 def submit_job(req: SubmitJobRequest, _auth=Depends(require_auth)):
     try:
         bundle_dir: str | None = None
@@ -264,7 +261,6 @@ def _nested_get(value: dict[str, Any], path: list[str]) -> Any:
     return cursor
 
 
-@router.get("/runtime-jobs")
 def list_jobs(limit: int = 20, include_terminal: bool = True, _auth=Depends(require_auth)):
     try:
         jobs_json = state.client.list_jobs(limit, include_terminal)
@@ -273,8 +269,6 @@ def list_jobs(limit: int = 20, include_terminal: bool = True, _auth=Depends(requ
         return handle_grpc_error(exc)
 
 
-@router.post("/jobs:cleanup", operation_id="cleanup_jobs_colon_alias")
-@router.post("/jobs/cleanup", operation_id="cleanup_jobs_path_alias")
 def cleanup_jobs(_auth=Depends(require_auth)):
     try:
         return _start_operation("clear_jobs")
@@ -288,8 +282,6 @@ def cleanup_jobs(_auth=Depends(require_auth)):
         return handle_grpc_error(exc)
 
 
-@router.post("/jobs:cancel-all", operation_id="cancel_all_jobs_colon_alias")
-@router.post("/jobs/cancel-all", operation_id="cancel_all_jobs_path_alias")
 def cancel_all_jobs(_auth=Depends(require_auth)):
     try:
         return _start_operation("cancel_all_jobs")
@@ -297,7 +289,6 @@ def cancel_all_jobs(_auth=Depends(require_auth)):
         return handle_grpc_error(exc)
 
 
-@router.post("/operations/{kind}")
 def start_operation(kind: str, options: dict[str, Any] | None = None, _auth=Depends(require_auth)):
     try:
         return _start_operation(kind, options or {})
@@ -305,7 +296,6 @@ def start_operation(kind: str, options: dict[str, Any] | None = None, _auth=Depe
         return handle_grpc_error(exc)
 
 
-@router.get("/runtime-operations/{operation_id}")
 def get_operation(operation_id: str, _auth=Depends(require_auth)):
     try:
         return json.loads(state.client.get_operation(operation_id))
@@ -313,7 +303,6 @@ def get_operation(operation_id: str, _auth=Depends(require_auth)):
         return handle_grpc_error(exc)
 
 
-@router.get("/operations/{operation_id}/events")
 def stream_operation_events(
     operation_id: str,
     after_sequence: int = 0,
@@ -353,7 +342,6 @@ def _is_clear_jobs_admin_token_error(exc: Exception) -> bool:
     return "MN_GRPC_ADMIN_TOKEN" in str(exc.details())
 
 
-@router.get("/jobs/unfinished")
 def unfinished_jobs(_auth=Depends(require_auth)):
     try:
         jobs_json = state.client.list_jobs(500, False)
@@ -366,7 +354,6 @@ def unfinished_jobs(_auth=Depends(require_auth)):
         return handle_grpc_error(exc)
 
 
-@router.get("/runtime-jobs/{job_id}")
 def get_job(job_id: str, include: str = Query("compact"), _auth=Depends(require_auth)):
     try:
         if include == "full":
@@ -381,7 +368,6 @@ def get_job(job_id: str, include: str = Query("compact"), _auth=Depends(require_
         return handle_grpc_error(exc)
 
 
-@router.get("/jobs/{job_id}/snapshots/{snapshot_kind}")
 def get_job_snapshot(job_id: str, snapshot_kind: str, _auth=Depends(require_auth)):
     reference_fields = {
         "result": "result_ref",
@@ -702,7 +688,7 @@ def _compact_job_detail(job_id: str) -> dict[str, Any]:
         "event_count": len(events),
         "recent_event_count": len(recent_events),
         "artifact_count": len(artifacts),
-        "full_detail_url": f"/api/v2/runs/{urllib.parse.quote(job_id)}/monitor?include=full",
+        "full_detail_url": f"/api/v1/runs/{urllib.parse.quote(job_id)}/monitor",
     }
     if failure:
         summary["failure"] = failure
@@ -1401,7 +1387,6 @@ def _decode_event_payload(payload: str | None) -> dict[str, Any]:
     return decoded if isinstance(decoded, dict) else {"type": "event", "payload": decoded}
 
 
-@router.get("/jobs/{job_id}/agent-graph")
 def get_job_agent_graph(job_id: str, _auth=Depends(require_auth)):
     try:
         details = _full_job_detail(job_id)
@@ -1417,7 +1402,6 @@ def get_job_agent_graph(job_id: str, _auth=Depends(require_auth)):
         return handle_grpc_error(exc)
 
 
-@router.get("/jobs/{job_id}/events")
 def get_job_events(
     job_id: str,
     include: str = Query("full"),
@@ -1445,7 +1429,6 @@ def get_job_events(
         return handle_grpc_error(exc)
 
 
-@router.get("/jobs/{job_id}/workflow-progress")
 def get_job_workflow_progress(job_id: str, _auth=Depends(require_auth)):
     try:
         return _workflow_progress_snapshot_for_job(job_id)
@@ -1453,7 +1436,6 @@ def get_job_workflow_progress(job_id: str, _auth=Depends(require_auth)):
         return handle_grpc_error(exc)
 
 
-@router.get("/jobs/{job_id}/workflow-progress/stream")
 def stream_job_workflow_progress(
     job_id: str,
     interval: float = Query(1.0, ge=0.25, le=30.0),
@@ -1606,77 +1588,6 @@ def stream_job_workflow_progress(
     return StreamingResponse(event_source(), media_type="text/event-stream")
 
 
-@router.websocket("/jobs/{job_id}/workflow-progress/ws")
-async def websocket_job_workflow_progress(
-    websocket: WebSocket,
-    job_id: str,
-    interval: float = Query(1.0, ge=0.25, le=30.0),
-):
-    await require_websocket_auth(websocket)
-    await websocket.accept()
-    stop = threading.Event()
-    try:
-        await websocket.send_json({"event": "snapshot", "data": _workflow_progress_snapshot_for_job(job_id)})
-        event_queue: queue.Queue[tuple[str, str | None]] = queue.Queue()
-
-        def pump_events() -> None:
-            try:
-                for event_json in state.client.stream_events(
-                    job_id,
-                    follow=True,
-                    timeout=None,
-                    heartbeat_interval_ms=max(int(interval * 1000), 250),
-                ):
-                    if stop.is_set():
-                        break
-                    event_queue.put(("event", event_json))
-            except Exception as exc:
-                event_queue.put(("error", str(exc)))
-            finally:
-                event_queue.put(("done", None))
-
-        threading.Thread(target=pump_events, daemon=True).start()
-        heartbeat_seconds = max(float(interval), 5.0)
-        last_heartbeat = time.monotonic()
-        while True:
-            try:
-                kind, payload = event_queue.get_nowait()
-            except queue.Empty:
-                now = time.monotonic()
-                if now - last_heartbeat >= heartbeat_seconds:
-                    await websocket.send_json({"event": "heartbeat", "data": {"job_id": job_id}})
-                    last_heartbeat = now
-                await asyncio.sleep(min(max(float(interval), 0.25), 1.0))
-                continue
-
-            if kind == "done":
-                await websocket.close(code=1000)
-                break
-            if kind == "error":
-                await websocket.send_json(
-                    {"event": "error", "data": {"job_id": job_id, "error": payload or "event stream failed"}}
-                )
-                await websocket.close(code=1011)
-                break
-
-            event = _decode_event_payload(payload)
-            event_type = str(event.get("type") or "")
-            if event_type == "stream_heartbeat":
-                await websocket.send_json({"event": "heartbeat", "data": {"job_id": job_id}})
-                last_heartbeat = time.monotonic()
-                continue
-            await websocket.send_json({"event": "event", "data": event})
-            await websocket.send_json({"event": "snapshot", "data": _workflow_progress_snapshot_for_job(job_id)})
-            if event_type in _TERMINAL_EVENT_TYPES:
-                await websocket.close(code=1000)
-                break
-    except WebSocketDisconnect:
-        pass
-    finally:
-        stop.set()
-
-
-@router.get("/jobs/{job_id}/dead-letters")
 def get_job_dead_letters(job_id: str, _auth=Depends(require_auth)):
     try:
         return RuntimeService(state.client).dead_letters(job_id)
@@ -1684,7 +1595,6 @@ def get_job_dead_letters(job_id: str, _auth=Depends(require_auth)):
         return handle_grpc_error(exc)
 
 
-@router.post("/jobs/{job_id}/dead-letters/{index}/replay")
 def replay_job_dead_letter(job_id: str, index: int, _auth=Depends(require_auth)):
     raise HTTPException(
         status_code=501,
@@ -1697,7 +1607,6 @@ def replay_job_dead_letter(job_id: str, index: int, _auth=Depends(require_auth))
     )
 
 
-@router.post("/jobs/{job_id}/cancel")
 def cancel_job(job_id: str, _auth=Depends(require_auth)):
     try:
         result = RuntimeService(state.client).cancel_job(job_id)
@@ -1708,7 +1617,6 @@ def cancel_job(job_id: str, _auth=Depends(require_auth)):
         return handle_grpc_error(exc)
 
 
-@router.post("/jobs/{job_id}/backup")
 def export_job_backup(job_id: str, _auth=Depends(require_auth)):
     try:
         backup_json, bundle_files = state.client.export_job_backup(job_id)
@@ -1722,7 +1630,6 @@ def export_job_backup(job_id: str, _auth=Depends(require_auth)):
         return handle_grpc_error(exc)
 
 
-@router.post("/jobs/restore")
 def restore_job_backup(req: RestoreJobBackupRequest, _auth=Depends(require_auth)):
     try:
         bundle_files = {path: base64.b64decode(content.encode("ascii")) for path, content in req.bundle_files.items()}
@@ -1738,7 +1645,6 @@ def restore_job_backup(req: RestoreJobBackupRequest, _auth=Depends(require_auth)
         return handle_grpc_error(exc)
 
 
-@router.post("/jobs/{job_id}/pause")
 def pause_job(job_id: str, _auth=Depends(require_auth)):
     try:
         return RuntimeService(state.client).pause_job(job_id)
@@ -1749,7 +1655,6 @@ def pause_job(job_id: str, _auth=Depends(require_auth)):
         return handle_grpc_error(exc)
 
 
-@router.post("/jobs/{job_id}/resume")
 def resume_job(job_id: str, _auth=Depends(require_auth)):
     try:
         return RuntimeService(state.client).resume_job(job_id)

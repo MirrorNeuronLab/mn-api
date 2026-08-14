@@ -25,9 +25,6 @@ HOP_BY_HOP_HEADERS = {
     "upgrade",
 }
 
-INTERFACE_VERSION = 2
-
-
 def resolve_dist_dir(value: str | None = None, cwd: Path | None = None) -> Path:
     if value:
         return Path(value).expanduser().resolve()
@@ -106,10 +103,21 @@ async def proxy_request(path: str, request: Request, upstream_api: str) -> Respo
             status_code=exc.code,
             headers=_response_headers(exc.headers.items()),
         )
-    except Exception as exc:
+    except Exception:
         return JSONResponse(
-            {"version": INTERFACE_VERSION, "status": "error", "component": "web-ui-proxy", "detail": str(exc), "target": target_url},
+            {
+                "type": "https://mirrorneuron.io/problems/upstream_failure",
+                "title": "Upstream service failed",
+                "status": 502,
+                "detail": "The MirrorNeuron API could not be reached.",
+                "instance": request.url.path,
+                "code": "upstream_failure",
+                "request_id": request.headers.get("x-request-id", ""),
+                "component": "web-ui-proxy",
+                "target": target_url,
+            },
             status_code=502,
+            media_type="application/problem+json",
         )
 
     status_code = int(getattr(upstream_response, "status", upstream_response.getcode()))
@@ -137,7 +145,7 @@ def start() -> None:
 
 def _target_url(path: str, query: str, upstream_api: str) -> str:
     base = upstream_api.rstrip("/")
-    normalized_path = path[3:] if base.endswith("/v2") and path.startswith("v2/") else path
+    normalized_path = path[3:] if base.endswith("/v1") and path.startswith("v1/") else path
     encoded_path = urllib.parse.quote(normalized_path, safe="/:@")
     target = f"{base}/{encoded_path}"
     return f"{target}?{query}" if query else target

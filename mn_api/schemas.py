@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, Optional
 
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel as PydanticBaseModel, ConfigDict, Field, SecretStr
+
+
+class BaseModel(PydanticBaseModel):
+    model_config = ConfigDict(extra="forbid")
 
 
 class SubmitJobRequest(BaseModel):
-    version: Literal[2] = 2
     manifest_json: Optional[str] = None
     payloads: Optional[Dict[str, str]] = Field(default_factory=dict)
     bundle_path: Optional[str] = Field(default=None, alias="_bundle_path")
@@ -14,7 +17,6 @@ class SubmitJobRequest(BaseModel):
 
 
 class StableJobCreateRequest(BaseModel):
-    version: Literal[2] = 2
     blueprint_id: Optional[str] = None
     manifest_json: Optional[str] = None
     payloads: Optional[Dict[str, str]] = Field(default_factory=dict)
@@ -25,20 +27,17 @@ class StableJobCreateRequest(BaseModel):
 
 
 class StableJobUpdateRequest(BaseModel):
-    version: Literal[2] = 2
     attrs: Dict[str, Any] = Field(default_factory=dict)
     manifest_json: Optional[str] = None
     payloads: Optional[Dict[str, str]] = Field(default_factory=dict)
 
 
 class StartRunRequest(BaseModel):
-    version: Literal[2] = 2
     run_id: Optional[str] = None
     inputs: Dict[str, Any] = Field(default_factory=dict)
 
 
 class BlueprintRunV2Request(BaseModel):
-    version: Literal[2] = 2
     job_id: Optional[str] = None
     run_id: Optional[str] = None
     config_overrides: Dict[str, Any] = Field(default_factory=dict)
@@ -49,18 +48,15 @@ class BlueprintRunV2Request(BaseModel):
 
 
 class ConfirmDeleteRequest(BaseModel):
-    version: Literal[2] = 2
     confirmed: bool = False
 
 
 class JobScheduleCreateRequest(BaseModel):
-    version: Literal[2] = 2
     schedule: Dict[str, Any] = Field(default_factory=dict)
     source: Dict[str, Any] = Field(default_factory=dict)
 
 
 class RestoreJobBackupRequest(BaseModel):
-    version: Literal[2] = 2
     backup_json: str
     bundle_files: Dict[str, str] = Field(default_factory=dict)
     blueprint_id: str = ""
@@ -68,7 +64,6 @@ class RestoreJobBackupRequest(BaseModel):
 
 
 class BlueprintRunRequest(BaseModel):
-    version: Literal[2] = 2
     job_id: Optional[str] = None
     run_id: Optional[str] = None
     config_overwrite: Optional[Dict[str, Any]] = None
@@ -88,7 +83,6 @@ class BlueprintLaunchRequest(BlueprintRunRequest):
 
 
 class ResourceSetRequest(BaseModel):
-    version: Literal[2] = 2
     cpu: Optional[int] = None
     gpu: Optional[int] = None
     memory: Optional[int] = None
@@ -96,19 +90,16 @@ class ResourceSetRequest(BaseModel):
 
 
 class ClusterNodeAddRequest(BaseModel):
-    version: Literal[2] = 2
     host: str
     token: str
     grpc_port: Optional[int] = None
 
 
 class ClusterNodeRemoveRequest(BaseModel):
-    version: Literal[2] = 2
     node_name: str
 
 
 class NodeActionRequest(BaseModel):
-    version: Literal[2] = 2
     reason: str = ""
 
 
@@ -133,7 +124,6 @@ class NodeMaintenanceRequest(NodeActionRequest):
 
 
 class CreateScheduleRequest(BaseModel):
-    version: Literal[2] = 2
     manifest_json: Optional[str] = None
     payloads: Optional[Dict[str, str]] = Field(default_factory=dict)
     bundle_path: Optional[str] = Field(default=None, alias="_bundle_path")
@@ -142,26 +132,22 @@ class CreateScheduleRequest(BaseModel):
 
 
 class ScheduleUpdateRequest(BaseModel):
-    version: Literal[2] = 2
     attrs: Dict[str, Any] = Field(default_factory=dict)
     reason: str = ""
 
 
 class DispatchScheduleRequest(BaseModel):
-    version: Literal[2] = 2
     payload: Dict[str, Any] = Field(default_factory=dict)
     reason: str = "manual"
 
 
 class EmitEventRequest(BaseModel):
-    version: Literal[2] = 2
     event_type: str
     payload: Dict[str, Any] = Field(default_factory=dict)
     source: str = "api"
 
 
 class DeploymentPolicyRequest(BaseModel):
-    version: Literal[2] = 2
     strategy: str = "rolling"
     canary: int = 0
     max_parallel: int = 1
@@ -170,7 +156,6 @@ class DeploymentPolicyRequest(BaseModel):
 
 
 class DeploymentCreateRequest(BaseModel):
-    version: Literal[2] = 2
     manifest_json: Optional[str] = None
     payloads: Optional[Dict[str, str]] = Field(default_factory=dict)
     bundle_path: Optional[str] = Field(default=None, alias="_bundle_path")
@@ -180,7 +165,6 @@ class DeploymentCreateRequest(BaseModel):
 
 
 class DeploymentActionRequest(BaseModel):
-    version: Literal[2] = 2
     reason: str = ""
 
 
@@ -190,32 +174,27 @@ class DeploymentRollbackRequest(DeploymentActionRequest):
 
 
 class ModelInstallRequest(BaseModel):
-    version: Literal[2] = 2
     backend: str = "auto"
     context_size: Optional[int] = None
     force: bool = False
 
 
 class ModelUpdateRequest(BaseModel):
-    version: Literal[2] = 2
     all: bool = False
     force: bool = False
 
 
 class ModelRemoveRequest(BaseModel):
-    version: Literal[2] = 2
     force: bool = False
 
 
 class ServiceCheckRequest(BaseModel):
-    version: Literal[2] = 2
     bundle_path: Optional[str] = Field(default=None, alias="_bundle_path")
     path: Optional[str] = None
     config_overrides: Optional[Dict[str, Any]] = None
 
 
 class ModelRemoteRequest(BaseModel):
-    version: Literal[2] = 2
     model: str
     base_url: str
     name: Optional[str] = None
@@ -226,7 +205,6 @@ class ModelRemoteRequest(BaseModel):
 
 
 class ModelProxyRequest(BaseModel):
-    version: Literal[2] = 2
     model_id: str
     source_model: Optional[str] = None
     base_url: str = "http://127.0.0.1:4000/v1"
@@ -243,13 +221,11 @@ class ModelProxyRequest(BaseModel):
 
 
 class RunCompareRequest(BaseModel):
-    version: Literal[2] = 2
     run_a: str
     run_b: str
 
 
 class BlueprintCleanupRequest(BaseModel):
-    version: Literal[2] = 2
     blueprint_id: Optional[str] = None
     source: Optional[str] = None
     python_envs_dir: Optional[str] = None
@@ -263,12 +239,10 @@ class BlueprintCleanupRequest(BaseModel):
 
 
 class BlueprintUpdateRequest(BaseModel):
-    version: Literal[2] = 2
     source: Optional[str] = None
 
 
 class BlueprintUninstallRequest(BaseModel):
-    version: Literal[2] = 2
     blueprint_id: Optional[str] = None
     source: Optional[str] = None
     keep_resources: bool = False

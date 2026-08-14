@@ -44,10 +44,7 @@ python3.11 -m venv .venv
 .venv/bin/python -m pytest -q
 ```
 
-For OtterDesk consumer compatibility checks covering async blueprint launch,
-REST launch progress, and `WS /realtime` launch-progress events, see the
-MirrorNeuron API Compatibility Tests section in
-`../otterdesk-desktop-app/README.md`.
+OtterDesk and the Web UI consume the same canonical REST and SSE contract.
 
 Start the local API:
 
@@ -110,55 +107,52 @@ safe to commit.
 
 ## Endpoint Summary
 
-All paths below are under `/api/v2`.
+All paths below are under `/api/v1`.
 
-- Health/runtime: `GET /health`, `GET /runtime/status`, `GET /system/summary`, `GET /metrics`
-- Jobs: `POST /jobs`, `GET /jobs`, `GET /jobs/{job_id}`, `POST /jobs/{job_id}/cancel`, `POST /jobs/{job_id}/pause`, `POST /jobs/{job_id}/resume`, `POST /jobs/cleanup`, `POST /jobs/cancel-all`
-- Durable operations: `POST /operations/{kind}`, `GET /operations/{operation_id}`, `GET /operations/{operation_id}/events` (SSE, resumable with `after_sequence`)
-- Job recovery: `GET /jobs/{job_id}/dead-letters`, `POST /jobs/{job_id}/backup`, `POST /jobs/restore`
-- Schedules/events: `POST /schedules`, `POST /schedules/periodic`, `POST /schedules/delayed`, `GET /schedules`, `PATCH /schedules/{schedule_id}`, `POST /schedules/{schedule_id}/dispatch`, `POST /events`, `GET /events`
-- Triggers: `POST /triggers`, `GET /triggers`, `DELETE /triggers/{schedule_id}`
-- Deployments: `POST /deployments`, `GET /deployments`, `GET /deployments/{id_or_key}`, `POST /deployments/{id_or_key}/promote`, `POST /deployments/{id_or_key}/rollback`, `POST /deployments/{id_or_key}/pause`, `POST /deployments/{id_or_key}/resume`, `POST /deployments/{id_or_key}/fail`
-- Nodes/resources: `GET /resource`, `POST /resource`, `POST /nodes/{node_name}/reconcile`, `POST /nodes/{node_name}/drain`, `POST /nodes/{node_name}/undrain`, `POST /nodes/{node_name}/maintenance`
-- Services: `GET /services`, `GET /services/{name}/resolve`
-- Models: `GET /models`, `GET /models/catalog`, `GET /models/{model_id}`, `POST /models/{model_id}/install`, `POST /models/{model_id}/update`, `DELETE /models/{model_id}`, `GET /models/{model_id}/doctor`, `POST /models/{model_id}/benchmark`
-- Blueprints/runs/bundles: `GET /blueprints`, async `POST /blueprints/{blueprint_id}/runs`, async `POST /blueprints/launch/runs`, `GET /blueprints/launch/progress/{progress_id}`, `WS /realtime` topic `launch_progress:{progress_id}`, `POST /bundles/upload`, plus `/runs/{run_id}/...` artifact, UI, event, log, human-response, and observability routes. Blueprint-specific live controls are served by the owning blueprint service.
+- Capability: unauthenticated `GET /health` returns
+  `api_contract: "mirrorneuron.rest.v1"`.
+- Jobs: `GET/POST /jobs`, `GET/PATCH/DELETE /jobs/{job_id}`,
+  `PUT /jobs/{job_id}/bundle`, and `POST /jobs/{job_id}/data-resets`.
+- Runs: `POST/GET /jobs/{job_id}/runs`,
+  `POST /blueprints/{blueprint_id}/runs`, `GET /runs`, and
+  `GET/PATCH/DELETE /runs/{run_id}`.
+- Run detail: logs, events, resources, human requests, UI, artifacts, outputs,
+  snapshots, workflow progress, agent graph, export, and observability all live
+  below `/runs/{run_id}`. `runtime_run_id` is diagnostic metadata only.
+- Blueprints and bundles: `GET /blueprints`, installation at
+  `/blueprints/{id}/installation`, validations, catalog refresh/cleanup
+  operations, and multipart `POST /bundles` returning an opaque `bundle_id`.
+- Scheduling: schedules are created below a job, managed through `/schedules`,
+  dispatched through `/schedules/{id}/dispatches`, and event emissions use
+  `/trigger-events`.
+- Infrastructure: `/nodes`, `/deployments`, `/models`, `/model-remotes`,
+  `/model-proxies`, `/services/{name}/resolution`, and `/service-checks`.
+- Administrative work: `/operations` and `/operations/{id}`.
+- Streams: authenticated, resumable SSE at
+  `/runs/{run_id}/events/stream` and
+  `/operations/{operation_id}/events/stream`.
 
 Workflow-progress snapshots expose source-facing `edges` and `layers`. When
 Core reports a lowered runtime graph, the API projects dependencies through
 internal start/end/fork/join nodes so desktop clients can render parallel
 branches without reading runtime bundle-cache files.
 
-Stable jobs use `/api/v2`:
+`job_id` is a persistent configuration and data owner; `run_id` is one
+execution. Every manual or scheduled start creates a new Run. There is no
+compatibility facade, redirect, host-path request field, or JSON `version`
+field.
 
-- Definitions: `POST /jobs`, `GET /jobs`, `GET/PATCH /jobs/{job_id}`
-- Lifecycle: `POST /jobs/{job_id}/archive`, `POST /jobs/{job_id}/data:reset`, confirmed `DELETE /jobs/{job_id}`
-- Blueprint launch: `POST /blueprints/{blueprint_id}/runs`, `GET /blueprints/launch/progress/{progress_id}`
-- Runs: `POST/GET /jobs/{job_id}/runs`, `GET /runs/{run_id}`, `GET /runs/{run_id}/monitor`, `GET /runs/{run_id}/workflow-progress`, `GET /runs/{run_id}/workflow-progress/stream`, `WS /runs/{run_id}/workflow-progress/ws`, `POST /runs/{run_id}/{pause|resume|cancel}`, confirmed `DELETE /runs/{run_id}`
-- Runtime output: `/runtime-runs/{runtime_run_id}/...` for logs, events, resources, human interaction, UI, artifacts, outputs, and observability summaries
-- Scheduling: `POST /jobs/{job_id}/schedules`
+Collections use `items` and `next_page_token`; clients pass `page_size`
+(default 50, maximum 200) and an opaque `page_token`. Persistent resources use
+strong ETags. Mutating or deleting jobs, schedules, deployments, model
+registrations, and blueprint installations requires `If-Match`. Non-idempotent
+POSTs accept `Idempotency-Key`, which first-party clients always set for starts,
+dispatches, and administrative work.
 
-Job launch, status, control, and workflow progress are v2-only consumer
-contracts. The three identities remain explicit: stable `job_id`, execution
-`run_id`/`execution_id`, and internal `runtime_run_id`.
-
-`POST /api/v2/jobs` accepts either `manifest_json`/`payloads`, a previously
-uploaded `_bundle_path`, or a catalog `blueprint_id`. Catalog creation is the
-preferred application integration: the API resolves and packages its trusted
-blueprint source, so clients never submit arbitrary host filesystem paths.
-`PATCH /api/v2/jobs/{job_id}` may include `manifest_json` and `payloads` to
-atomically replace an inactive job's executable bundle while requiring the
-same graph and blueprint identity.
-
-In v2, `job_id` is a persistent configuration/data owner and `run_id` is one
-execution. Every manual or scheduled start creates a new run; retries do not.
-The v1 `/jobs/{old_job_id}` routes remain an execution-oriented compatibility
-facade and therefore receive a run identity.
-
-`POST /api/v2/blueprints/{blueprint_id}/runs` creates an ephemeral stable job
+`POST /api/v1/blueprints/{blueprint_id}/runs` creates an ephemeral stable job
 before starting the first run unless the body supplies an existing `job_id`.
-Responses return both identities. Run cleanup never deletes the stable job's
-shared data.
+Responses return a pending Run immediately. Run cleanup never deletes the
+stable job's shared data.
 When an existing `job_id` is supplied, the API installs the freshly prepared
 bundle before starting the run; job data, schedules, and prior run history are
 preserved.
@@ -179,16 +173,16 @@ Reusable SDK modules added for client parity include resource normalization,
 duration parsing, schedule payload builders, deployment policy creation,
 runtime service operations, model runtime management, and shared exceptions.
 
-## Durable group operations
+## Operations and errors
 
 Bulk cancellation, job cleanup, node reconciliation, and node drain return a
 durable Core operation rather than waiting for every item synchronously. Follow
-`GET /operations/{operation_id}/events` to receive replayable SSE updates in
-completion order and reconnect with the last event ID as `after_sequence`.
+`GET /operations/{operation_id}/events/stream` to receive replayable SSE
+updates and reconnect with `Last-Event-ID`.
 
-For an unreachable job owner, `cancellation_pending` means cancellation was
-accepted, fenced, and queued for cleanup when that node rejoins; it is not an
-item failure.
+All failures use RFC 9457 `application/problem+json` with `type`, `title`,
+`status`, `detail`, `instance`, `code`, and `request_id`; field errors are
+bounded in `errors`.
 
 ## Details
 

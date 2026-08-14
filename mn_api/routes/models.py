@@ -7,7 +7,7 @@ import urllib.error
 import urllib.request
 from typing import Any, Callable
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import Body, Depends, HTTPException
 
 from mn_api import state
 from mn_api.dependencies import require_auth
@@ -42,10 +42,8 @@ from mn_sdk import (
 )
 
 
-router = APIRouter(prefix="/api/v2")
 
 
-@router.get("/models")
 def list_models(installed_only: bool = True, _auth=Depends(require_auth)):
     """List runtime models using the same SDK service as the CLI."""
     try:
@@ -54,7 +52,6 @@ def list_models(installed_only: bool = True, _auth=Depends(require_auth)):
         return handle_grpc_error(exc)
 
 
-@router.get("/models/catalog")
 def list_model_catalog(_auth=Depends(require_auth)):
     try:
         return list_runtime_models(installed_only=False)
@@ -62,7 +59,6 @@ def list_model_catalog(_auth=Depends(require_auth)):
         return handle_grpc_error(exc)
 
 
-@router.get("/models/remotes")
 def list_remote_models(_auth=Depends(require_auth)):
     try:
         ledger = load_model_remotes()
@@ -72,7 +68,6 @@ def list_remote_models(_auth=Depends(require_auth)):
         return handle_grpc_error(exc)
 
 
-@router.post("/models/remotes")
 def add_remote_model(req: ModelRemoteRequest, _auth=Depends(require_auth)):
     try:
         remote = _upsert_remote_from_request(req)
@@ -82,7 +77,6 @@ def add_remote_model(req: ModelRemoteRequest, _auth=Depends(require_auth)):
         return handle_grpc_error(exc)
 
 
-@router.delete("/models/remotes/{name}")
 def delete_remote_model(name: str, sync_gateway: bool = False, _auth=Depends(require_auth)):
     try:
         removed = remove_model_remote(name)
@@ -95,7 +89,6 @@ def delete_remote_model(name: str, sync_gateway: bool = False, _auth=Depends(req
         return handle_grpc_error(exc)
 
 
-@router.post("/models/proxies")
 def add_proxy_model(req: ModelProxyRequest, _auth=Depends(require_auth)):
     try:
         proxy = upsert_model_proxy(
@@ -118,7 +111,6 @@ def add_proxy_model(req: ModelProxyRequest, _auth=Depends(require_auth)):
         return handle_grpc_error(exc)
 
 
-@router.get("/models/{model_id:path}/doctor")
 def doctor_model(model_id: str, _auth=Depends(require_auth)):
     try:
         return doctor_runtime_model(model_id)
@@ -126,7 +118,6 @@ def doctor_model(model_id: str, _auth=Depends(require_auth)):
         return handle_grpc_error(exc)
 
 
-@router.get("/models/{model_id:path}")
 def show_model(
     model_id: str,
     compatibility: bool = False,
@@ -138,7 +129,6 @@ def show_model(
         return handle_grpc_error(exc)
 
 
-@router.post("/models/{model_id:path}/install")
 def install_model(model_id: str, req: ModelInstallRequest | None = None, _auth=Depends(require_auth)):
     request = req or ModelInstallRequest()
     try:
@@ -153,7 +143,6 @@ def install_model(model_id: str, req: ModelInstallRequest | None = None, _auth=D
         return handle_grpc_error(exc)
 
 
-@router.post("/models/{model_id:path}/update")
 def update_model(model_id: str, req: ModelUpdateRequest | None = None, _auth=Depends(require_auth)):
     request = req or ModelUpdateRequest()
     try:
@@ -162,7 +151,6 @@ def update_model(model_id: str, req: ModelUpdateRequest | None = None, _auth=Dep
         return handle_grpc_error(exc)
 
 
-@router.post("/models:update")
 def update_models(req: ModelUpdateRequest | None = None, _auth=Depends(require_auth)):
     request = req or ModelUpdateRequest(all=True)
     try:
@@ -171,7 +159,6 @@ def update_models(req: ModelUpdateRequest | None = None, _auth=Depends(require_a
         return handle_grpc_error(exc)
 
 
-@router.delete("/models/{model_id:path}")
 def remove_model(model_id: str, force: bool = False, _auth=Depends(require_auth)):
     try:
         return remove_runtime_model(model_id, force=force)
@@ -179,7 +166,6 @@ def remove_model(model_id: str, force: bool = False, _auth=Depends(require_auth)
         return handle_grpc_error(exc)
 
 
-@router.post("/models/{model_id:path}/remove")
 def remove_model_post(model_id: str, req: ModelRemoveRequest | None = None, _auth=Depends(require_auth)):
     request = req or ModelRemoveRequest()
     try:
@@ -188,7 +174,6 @@ def remove_model_post(model_id: str, req: ModelRemoveRequest | None = None, _aut
         return handle_grpc_error(exc)
 
 
-@router.post("/models/{model_id:path}/benchmark")
 def benchmark_model(
     model_id: str,
     payload: dict[str, Any] | None = Body(default=None),

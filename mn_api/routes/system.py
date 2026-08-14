@@ -5,7 +5,7 @@ import re
 import socket
 from typing import Any, Callable
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import Depends, HTTPException
 import grpc
 from mn_sdk import (
     Client,
@@ -20,8 +20,8 @@ from mn_sdk import (
 )
 
 from mn_api import state
-from mn_api.blueprints import shared_runs_root
 from mn_api.config import auth_enabled
+from mn_api.contracts import API_CONTRACT
 from mn_api.dependencies import require_auth
 from mn_api.errors import handle_grpc_error
 from mn_api.schemas import (
@@ -35,27 +35,19 @@ from mn_api.schemas import (
 )
 
 
-router = APIRouter(prefix="/api/v2")
 
 DEFAULT_NODE_ADD_GRPC_PORTS = (55051, 50051)
 
 
-@router.get("/health")
 def health():
     config = state.refresh_config_from_env()
     return {
         "status": "ok",
+        "api_contract": API_CONTRACT,
         "auth": "enabled" if auth_enabled(config) else "disabled",
-        "env": getattr(config, "env", ""),
-        "blueprint_source": getattr(config, "blueprint_source", ""),
-        "blueprint_repo": getattr(config, "blueprint_repo", ""),
-        "blueprint_local": getattr(config, "blueprint_local", ""),
-        "active_blueprint_location": getattr(config, "active_blueprint_location", ""),
-        "runs_root": shared_runs_root(),
     }
 
 
-@router.get("/runtime/status")
 def runtime_status(timeout: float = 3.0, _auth=Depends(require_auth)):
     return collect_runtime_status(
         config=RuntimeConfig.from_env(),
@@ -65,12 +57,10 @@ def runtime_status(timeout: float = 3.0, _auth=Depends(require_auth)):
     )
 
 
-@router.get("/runtime/health")
 def runtime_health(timeout: float = 3.0, _auth=Depends(require_auth)):
     return health_report_from_status(runtime_status(timeout=timeout, _auth=_auth))
 
 
-@router.get("/runtime/doctor")
 def runtime_doctor(timeout: float = 3.0, _auth=Depends(require_auth)):
     status = runtime_status(timeout=timeout, _auth=_auth)
     foundation = [
@@ -80,7 +70,6 @@ def runtime_doctor(timeout: float = 3.0, _auth=Depends(require_auth)):
     components = list(status.get("components") or []) + foundation
     overall = _overall_status(components)
     return {
-        "version": 2,
         "overall": overall,
         "checked_at": status.get("checked_at"),
         "runtime": status.get("runtime") or {},
@@ -93,15 +82,13 @@ def runtime_doctor(timeout: float = 3.0, _auth=Depends(require_auth)):
     }
 
 
-@router.get("/system/summary")
 def get_system_summary(_auth=Depends(require_auth)):
     try:
-        return {**RuntimeService(state.client).system_summary(), "version": 2}
+        return RuntimeService(state.client).system_summary()
     except Exception as exc:
         return handle_grpc_error(exc)
 
 
-@router.get("/nodes")
 def get_nodes(_auth=Depends(require_auth)):
     summary = get_system_summary(_auth=_auth)
     if isinstance(summary, dict):
@@ -109,7 +96,6 @@ def get_nodes(_auth=Depends(require_auth)):
     return summary
 
 
-@router.get("/metrics")
 def get_metrics(_auth=Depends(require_auth)):
     try:
         return RuntimeService(state.client).metrics()
@@ -117,7 +103,6 @@ def get_metrics(_auth=Depends(require_auth)):
         return handle_grpc_error(exc)
 
 
-@router.get("/resource")
 def get_resource(_auth=Depends(require_auth)):
     try:
         resource = RuntimeService(state.client).get_resource()
@@ -131,27 +116,21 @@ def get_resource(_auth=Depends(require_auth)):
         return handle_grpc_error(exc)
 
 
-@router.get("/resource/ports")
 def get_resource_ports(_auth=Depends(require_auth)):
     return {"ports": native_service_ports()}
 
 
-@router.post("/resource")
-@router.put("/resource")
 def set_resource(req: ResourceSetRequest, _auth=Depends(require_auth)):
     try:
         if hasattr(req, "model_dump"):
             payload = req.model_dump(exclude_none=True)
         else:
             payload = req.dict(exclude_none=True)
-        payload.pop("version", None)
         return RuntimeService(state.client).set_resource(payload)
     except Exception as exc:
         return handle_grpc_error(exc)
 
 
-@router.post("/system/cluster/nodes:add")
-@router.post("/system/cluster/nodes:join")
 def add_cluster_node(req: ClusterNodeAddRequest, _auth=Depends(require_auth)):
     try:
         host = normalize_node_host(req.host)
@@ -179,8 +158,6 @@ def add_cluster_node(req: ClusterNodeAddRequest, _auth=Depends(require_auth)):
         return handle_grpc_error(exc)
 
 
-@router.post("/system/cluster/nodes:remove")
-@router.post("/system/cluster/nodes:leave")
 def remove_cluster_node(req: ClusterNodeRemoveRequest, _auth=Depends(require_auth)):
     try:
         node_name = normalize_node_name(req.node_name)
@@ -197,7 +174,6 @@ def remove_cluster_node(req: ClusterNodeRemoveRequest, _auth=Depends(require_aut
         return handle_grpc_error(exc)
 
 
-@router.post("/nodes/{node_name}/reconcile")
 def reconcile_node(node_name: str, req: NodeReconcileRequest | None = None, _auth=Depends(require_auth)):
     request = req or NodeReconcileRequest()
     try:
@@ -212,7 +188,6 @@ def reconcile_node(node_name: str, req: NodeReconcileRequest | None = None, _aut
         return handle_grpc_error(exc)
 
 
-@router.post("/nodes/{node_name}/drain")
 def drain_node(node_name: str, req: NodeDrainRequest | None = None, _auth=Depends(require_auth)):
     request = req or NodeDrainRequest()
     try:
@@ -232,7 +207,6 @@ def drain_node(node_name: str, req: NodeDrainRequest | None = None, _auth=Depend
         return handle_grpc_error(exc)
 
 
-@router.post("/nodes/{node_name}/undrain")
 def undrain_node(node_name: str, req: NodeUndrainRequest | None = None, _auth=Depends(require_auth)):
     request = req or NodeUndrainRequest()
     try:
@@ -247,7 +221,6 @@ def undrain_node(node_name: str, req: NodeUndrainRequest | None = None, _auth=De
         return handle_grpc_error(exc)
 
 
-@router.post("/nodes/{node_name}/maintenance")
 def set_node_maintenance(node_name: str, req: NodeMaintenanceRequest | None = None, _auth=Depends(require_auth)):
     request = req or NodeMaintenanceRequest()
     try:

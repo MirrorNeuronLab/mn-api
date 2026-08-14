@@ -15,7 +15,7 @@ apply only to `mn-api`.
 ## Repository Map
 
 - `mn_api/app.py`: application factory, middleware, exception handlers, routers.
-- `mn_api/routes/`: versioned HTTP, SSE, and WebSocket endpoints.
+- `mn_api/routes/v1/`: canonical REST resources and authenticated SSE endpoints.
 - `mn_api/schemas.py`: API request and response models.
 - `mn_api/dependencies.py`: authentication and request-size enforcement.
 - `mn_api/errors.py`: problem responses and SDK/gRPC error translation.
@@ -28,13 +28,13 @@ apply only to `mn-api`.
 
 ## Contract Rules
 
-- Keep public routes under `/api/v2` unless a new interface version is
+- Keep public routes under `/api/v1` unless a new interface version is
   intentionally introduced.
-- Preserve the top-level interface `version` field and established endpoint
-  aliases. Contract changes require tests and documentation.
+- Use explicit response models and omit redundant top-level interface version
+  fields. Contract changes require tests and documentation.
 - Return structured, sanitized errors. Use the helpers in `mn_api.errors`; do
   not expose tracebacks, credentials, raw subprocess output, or internal paths.
-- Enforce bearer authentication consistently for HTTP and WebSocket routes when
+- Enforce bearer authentication consistently for HTTP and SSE routes when
   `MN_API_TOKEN` is configured.
 - Treat request bodies, query values, artifact paths, manifest data, and
   upstream SDK/gRPC responses as untrusted.
@@ -49,9 +49,9 @@ apply only to `mn-api`.
 
 - Update the closest request/response model and route test with every behavior
   change.
-- For error changes, cover HTTP status, media type, error code, sanitization,
-  and any compatibility alias.
-- For WebSocket/SSE changes, cover authentication, disconnect/termination, and
+- For error changes, cover HTTP status, Problem Details media type, error code,
+  and sanitization.
+- For SSE changes, cover authentication, replay, disconnect/termination, and
   stable event shapes.
 - For config changes, update `config_schema.py`, `.env.example`, `README.md`,
   tests, and `SPEC.md` when the public contract changes.

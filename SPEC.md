@@ -3,7 +3,7 @@
 ## Purpose
 
 `mn-api` is the HTTP gateway for the local MirrorNeuron runtime. It translates
-HTTP, Server-Sent Events, and WebSocket interactions into calls to the
+HTTP and Server-Sent Event interactions into calls to the
 MirrorNeuron Python SDK and returns browser- and desktop-consumable responses.
 The package installs the `mn-api` service and the `mn-web-ui-server` static/proxy
 service.
@@ -30,13 +30,13 @@ preparation.
 
 The API owns:
 
-- the FastAPI application and `/api/v2` route surface;
-- the `/api/v2` HTTP adaptation for stable-job definitions and one-to-many
+- the FastAPI application and `/api/v1` route surface;
+- the `/api/v1` HTTP adaptation for stable-job definitions and one-to-many
   execution runs;
 - HTTP request parsing, schema validation, authentication, and request limits;
 - JSON/problem response shapes and transport-level status mapping;
-- run/job progress over polling, SSE, and WebSockets;
-- versioned durable group-operation start, status, and resumable SSE event
+- run/job progress over snapshots and authenticated, resumable SSE;
+- durable group-operation start, status, and resumable SSE event
   adaptation;
 - API-side launch coordination, artifact access, and process cleanup helpers;
 - API and Web UI server configuration; and
@@ -47,16 +47,14 @@ model placement algorithms, blueprint domain behavior, or the browser UI.
 
 ## Interface Contract
 
-- Runtime-wide application routes remain rooted at `/api/v2`; blueprint job
-  launch, stable job/run lifecycle, monitor snapshots, public progress, and
-  runtime-run artifacts are rooted at `/api/v2`.
-- Ordinary mapping responses receive top-level `version: 1` when a route did
-  not already provide a version.
+- Every REST path is rooted at `/api/v1`. `/api/v2`, historical aliases,
+  runtime-run paths, and WebSocket routes are not mounted.
+- `GET /api/v1/health` advertises `api_contract: "mirrorneuron.rest.v1"`.
+- REST requests and responses do not contain a transport `version` field.
 - The surface includes runtime/system health, blueprints, bundles, jobs, runs,
   schedules/events, deployments, models, services, resources, artifacts, and
   realtime progress.
-- Established colon and path aliases are compatibility contracts where both are
-  registered, such as `services:check` and `services/check`.
+- Collection responses contain `items` and an opaque `next_page_token`.
 - Streaming endpoints must terminate on completion, error, timeout, or client
   disconnect and must not leak background tasks.
 - Workflow-progress polling and streams expose public step dependencies. Hidden
@@ -66,15 +64,14 @@ model placement algorithms, blueprint domain behavior, or the browser UI.
   `reconcile_node`, and `drain_node`). Their item events are replayable by
   sequence cursor. `cancellation_pending` is accepted durable work, while
   explicit item failures remain operation failures.
-- In v2, `job_id` is stable and owns configuration, schedules, and shared data;
+- `job_id` is stable and owns configuration, schedules, and shared data;
   `run_id` is the execution/control identity. Starting or dispatching a job
   creates a fresh run, while retry/recovery attempts retain their run ID.
 - Archive retains shared data. Data reset and permanent job deletion are
   explicit operations; confirmed deletion is rejected while runs are active.
   Individual run deletion never deletes job data.
-- Job consumers must not fall back to the v1 execution-oriented job routes.
-  Stable `job_id`, execution `run_id`/`execution_id`, and internal
-  `runtime_run_id` are separate v2 identities.
+- Stable `job_id`, execution `run_id`/`execution_id`, and internal diagnostic
+  `runtime_run_id` are separate identities. Clients use only `run_id` in URLs.
 - Blueprint launch creates a stable job plus its first run unless an existing
   `job_id` is supplied, and returns both identities. Existing jobs receive the
   freshly prepared manifest and payloads through atomic bundle replacement
@@ -96,18 +93,17 @@ model placement algorithms, blueprint domain behavior, or the browser UI.
   Caller-provided arbitrary host paths are rejected.
 
 The route definitions and generated OpenAPI document are authoritative for
-exact fields and paths. `tests/test_api_contract.py` and route-specific tests
-protect consumer-visible behavior.
-`PATCH /api/v2/jobs/{job_id}` accepts optional `manifest_json` and `payloads`
-for replacement of an inactive job's executable bundle; omitting
-`manifest_json` retains the configuration-only update behavior.
+exact fields and paths. `tests/test_v1_contract.py` protects consumer-visible
+behavior. Executable replacement uses `PUT /jobs/{job_id}/bundle` with an
+opaque `bundle_id`.
 
 ## Errors
 
-Validation and application failures use structured responses with stable error
-codes. Problem responses use `application/problem+json` and contain version,
-type, title, status, detail, and error fields, with validation issues when
-applicable. SDK and gRPC failures are normalized before reaching clients.
+Validation and application failures use RFC 9457 Problem Details with stable
+error codes. Responses use `application/problem+json` and contain `type`,
+`title`, `status`, `detail`, `instance`, `code`, and `request_id`, with bounded
+field issues in `errors`. SDK and gRPC failures are normalized before reaching
+clients.
 
 Client responses and logs must not expose secrets, authorization values, raw
 payloads, tracebacks, or unsanitized internal context. Request and correlation
@@ -115,9 +111,9 @@ IDs may be returned for diagnosis.
 
 ## Security and Configuration
 
-- `MN_API_TOKEN` enables bearer authentication. Protected HTTP routes accept
-  the Authorization header; protected WebSockets accept that header or the
-  supported token query parameter.
+- `MN_API_TOKEN` enables bearer authentication. Protected HTTP and SSE routes
+  accept the Authorization header. Credentials are never accepted in URL query
+  parameters.
 - `MN_API_REQUEST_SIZE_LIMIT_BYTES` bounds declared request body size.
 - CORS is disabled unless origins are explicitly configured.
 - Artifact and bundle paths must remain within their permitted roots.
@@ -139,10 +135,9 @@ require live Core, Redis, Docker, OpenShell, or network access.
 ## Compatibility
 
 Changes to paths, methods, required fields, response/event shapes, status codes,
-error codes, authentication, or default behavior are public contract changes.
-They require focused contract tests, consumer-impact review, and documentation.
-Additive optional fields are acceptable only when existing clients remain
-valid. A deliberately incompatible surface must use a new interface version.
+error codes, authentication, or default behavior require focused contract
+tests, consumer review, and documentation. This release is an intentional
+clean break with no compatibility facade.
 
 ## Verification
 

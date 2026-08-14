@@ -20,7 +20,7 @@ class TestBundleServices(unittest.TestCase):
             )
             (payloads / "a.txt").write_bytes(b"hello")
 
-            manifest_json, payload_bytes = load_uploaded_bundle(str(bundle_root), upload_root)
+            manifest_json, payload_bytes = load_uploaded_bundle("bundle_123", upload_root)
 
         self.assertEqual(
             manifest_json,
@@ -38,7 +38,7 @@ class TestBundleServices(unittest.TestCase):
                 load_uploaded_bundle(str(outside), upload_root)
 
         self.assertEqual(raised.exception.status_code, 400)
-        self.assertEqual(raised.exception.detail, "unknown uploaded bundle")
+        self.assertEqual(raised.exception.detail, "Invalid bundle_id.")
 
     def test_safe_extract_path_rejects_absolute_and_parent_paths(self):
         with tempfile.TemporaryDirectory() as tmpdir:
