@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 from fastapi.responses import StreamingResponse
-from mn_sdk import RuntimeService, generate_job_definition_submission_id, generate_stable_job_id
+from mn_sdk import RuntimeConfig, RuntimeService, generate_job_definition_submission_id, generate_stable_job_id
+from mn_sdk.staged_artifacts import (
+    ArtifactIntegrityError,
+    ArtifactNotReadyError,
+    StagedArtifactError,
+    is_staged_artifact_ref,
+    resolve_json_reference,
+)
 
 from mn_api import state
 from mn_api.agent_graph import build_agent_graph
@@ -103,6 +111,12 @@ def _runtime_output_id(run_id: str) -> str:
         value = run.get(key)
         if value:
             return str(value)
+    for ref_key in ("result_ref", "workflow_state_ref"):
+        reference = run.get(ref_key)
+        if isinstance(reference, dict):
+            value = reference.get("run_id") or reference.get("runtime_run_id")
+            if value:
+                return str(value)
     try:
         snapshot = runtime_job_routes._workflow_progress_snapshot_for_job(run_id)
         value = snapshot.get("run_id") if isinstance(snapshot, dict) else None
@@ -111,6 +125,22 @@ def _runtime_output_id(run_id: str) -> str:
     except Exception:
         pass
     return run_id
+
+
+def _resolve_run_result_reference(run_id: str) -> Any | None:
+    run = _service().get_run(run_id)
+    reference = run.get("result_ref")
+    if not is_staged_artifact_ref(reference):
+        result = run.get("result")
+        reference = result.get("result_ref") if isinstance(result, dict) else None
+    if not is_staged_artifact_ref(reference):
+        return None
+    resolution_env = dict(os.environ)
+    resolution_env.setdefault(
+        "MN_HOST_SHARED_STORAGE_ROOT",
+        RuntimeConfig.from_env().shared_storage_root,
+    )
+    return resolve_json_reference(reference, env=resolution_env)
 
 
 def _run_public(value: Any, *, run_id: str, runtime_run_id: str | None = None) -> Any:
@@ -447,7 +477,15 @@ def create_job_schedule(job_id: str, request: ScheduleCreate, response: Response
 @router.get("/runs/{run_id}/monitor", operation_id="get_run_monitor", tags=["runs"], response_model=ResourceModel)
 def get_run_monitor(run_id: str, _principal=Depends(require_auth)):
     runtime_id = _runtime_output_id(run_id)
-    detail = runtime_job_routes._compact_job_detail(runtime_id)
+    detail = dict(runtime_job_routes._compact_job_detail(runtime_id))
+    canonical_run = _service().get_run(run_id)
+    canonical_status = str(canonical_run.get("status") or "").strip().lower()
+    if canonical_status:
+        detail["status"] = canonical_status
+        for key in ("job", "summary"):
+            projection = detail.get(key)
+            if isinstance(projection, dict):
+                detail[key] = {**projection, "status": canonical_status}
     return _run_public(detail, run_id=run_id, runtime_run_id=runtime_id)
 
 
@@ -697,7 +735,32 @@ def get_run_ui_video(run_id: str, principal=Depends(require_auth)):
 )
 def get_run_final_artifact(run_id: str, principal=Depends(require_auth)):
     runtime_id = _runtime_output_id(run_id)
-    return _run_public(runtime_run_routes.get_run_final_artifact(runtime_id, principal), run_id=run_id, runtime_run_id=runtime_id)
+    try:
+        value = runtime_run_routes.get_run_final_artifact(runtime_id, principal)
+    except HTTPException as exc:
+        if exc.status_code != status.HTTP_404_NOT_FOUND:
+            raise
+        try:
+            value = _resolve_run_result_reference(run_id)
+        except ArtifactNotReadyError as resolve_exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": "artifact_not_ready", "retryable": True, "message": str(resolve_exc)},
+                headers={"Retry-After": "1"},
+            ) from resolve_exc
+        except ArtifactIntegrityError as resolve_exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={"code": "artifact_integrity_error", "message": str(resolve_exc)},
+            ) from resolve_exc
+        except StagedArtifactError as resolve_exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={"code": "artifact_resolution_error", "message": str(resolve_exc)},
+            ) from resolve_exc
+        if value is None:
+            raise exc
+    return _run_public(value, run_id=run_id, runtime_run_id=runtime_id)
 
 
 @router.get("/runs/{run_id}/artifacts", operation_id="list_run_artifacts", tags=["runs"], response_model=PageResponse)

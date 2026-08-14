@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from types import SimpleNamespace
 
@@ -467,6 +468,103 @@ def test_canonical_resource_happy_paths(monkeypatch):
     assert client.patch("/api/v1/runs/run-1", json={"desired_state": "running"}).status_code == 200
     assert client.patch("/api/v1/runs/run-1", json={"desired_state": "cancelled"}).status_code == 200
     assert client.delete("/api/v1/runs/run-1").status_code == 204
+
+
+def test_run_artifact_projection_uses_runtime_id_from_result_reference(monkeypatch):
+    client, runtime = _client(monkeypatch)
+    _patch_canonical_projections(monkeypatch)
+    runtime.get_run = lambda run_id: json.dumps(
+        {
+            "job_id": "job-1",
+            "run_id": run_id,
+            "status": "completed",
+            "result_ref": {"run_id": "runtime-from-result-ref"},
+        }
+    )
+    projected_ids: list[str] = []
+    monkeypatch.setattr(
+        jobs.runtime_run_routes,
+        "get_run_final_artifact",
+        lambda run_id, *_args: projected_ids.append(run_id) or {"artifact_id": "final"},
+    )
+
+    response = client.get("/api/v1/runs/run-1/artifacts/final")
+
+    assert response.status_code == 200
+    assert projected_ids == ["runtime-from-result-ref"]
+
+
+def test_run_artifact_projection_resolves_staged_result_reference(monkeypatch, tmp_path):
+    client, runtime = _client(monkeypatch)
+    _patch_canonical_projections(monkeypatch)
+    artifact = {"conversation_reply": {"reply": "Referenced result"}}
+    encoded = json.dumps(artifact).encode()
+    digest = hashlib.sha256(encoded).hexdigest()
+    relative_path = f"outputs/runs/runtime-from-result-ref/artifacts/{digest[:2]}/{digest}.json"
+    shared_root = tmp_path / "shared"
+    artifact_path = shared_root / "submissions" / "submission-1" / relative_path
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_bytes(encoded)
+    monkeypatch.setenv("MN_HOST_SHARED_STORAGE_ROOT", str(shared_root))
+    reference = {
+        "version": "mn.staged_artifact/v1",
+        "storage": "syncthing",
+        "submission_id": "submission-1",
+        "relative_path": relative_path,
+        "sha256": digest,
+        "size_bytes": len(encoded),
+        "run_id": "runtime-from-result-ref",
+    }
+    runtime.get_run = lambda run_id: json.dumps(
+        {
+            "job_id": "job-1",
+            "run_id": run_id,
+            "status": "completed",
+            "result_ref": reference,
+        }
+    )
+    monkeypatch.setattr(
+        jobs.runtime_run_routes,
+        "get_run_final_artifact",
+        lambda *_args: (_ for _ in ()).throw(
+            jobs.HTTPException(status_code=404, detail="final artifact not found")
+        ),
+    )
+
+    response = client.get("/api/v1/runs/run-1/artifacts/final")
+
+    assert response.status_code == 200
+    assert response.json()["conversation_reply"] == artifact["conversation_reply"]
+    assert response.json()["run_id"] == "run-1"
+    assert response.json()["runtime_run_id"] == "runtime-from-result-ref"
+
+
+def test_run_monitor_overlays_canonical_terminal_status(monkeypatch):
+    client, runtime = _client(monkeypatch)
+    _patch_canonical_projections(monkeypatch)
+    runtime.get_run = lambda run_id: json.dumps(
+        {
+            "job_id": "job-1",
+            "run_id": run_id,
+            "status": "completed",
+            "runtime_run_id": "runtime-1",
+        }
+    )
+    monkeypatch.setattr(
+        jobs.runtime_job_routes,
+        "_compact_job_detail",
+        lambda _run_id: {
+            "job": {"job_id": "runtime-1", "status": "unknown"},
+            "summary": {"status": "unknown"},
+        },
+    )
+
+    response = client.get("/api/v1/runs/run-1/monitor")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "completed"
+    assert response.json()["job"]["status"] == "completed"
+    assert response.json()["summary"]["status"] == "completed"
 
 
 def test_canonical_run_detail_operation_schedule_and_infrastructure(monkeypatch):
