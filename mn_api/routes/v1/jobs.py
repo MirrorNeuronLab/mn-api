@@ -176,6 +176,7 @@ def create_job(
             resolved_configuration=request.resolved_configuration,
             storage=request.storage,
             idempotency_key=idempotency_key or "",
+            prepared=True,
         )
 
     body = request.model_dump()

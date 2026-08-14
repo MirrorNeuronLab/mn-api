@@ -8,40 +8,43 @@ import urllib.request
 from typing import Any, Callable
 
 from fastapi import Body, Depends, HTTPException
-
-from mn_api import state
-from mn_api.dependencies import require_auth
-from mn_api.errors import handle_grpc_error
-from mn_api.schemas import ModelInstallRequest, ModelProxyRequest, ModelRemoteRequest, ModelRemoveRequest, ModelUpdateRequest
 from mn_sdk import (
     DOCKER_MODEL_RUNNER_HOST_API_BASE,
-    default_model_proxies_path,
-    default_model_remotes_path,
+    add_registered_models,
+    default_model_registry_path,
     dmr_api_list_models,
     docker_api_model_name,
     docker_cli_path_environment,
     docker_model_match_keys,
     docker_model_name,
-    load_model_catalog,
-    load_model_remotes,
-    merge_catalog_and_installed_models,
-    remove_litellm_gateway_route,
-    remove_model_remote,
-    resolve_model_entry,
-    sync_litellm_gateway,
-    upsert_model_proxy,
-    upsert_model_remote,
-)
-from mn_sdk import (
     doctor_runtime_model,
+    get_registered_model,
     install_runtime_model,
     list_runtime_models,
+    load_model_catalog,
+    merge_catalog_and_installed_models,
+    provider_registration,
+    registered_model_records,
+    remove_litellm_gateway_route,
+    remove_registered_model,
     remove_runtime_model,
+    replace_registered_model,
+    resolve_model_entry,
     show_runtime_model,
+    sync_litellm_gateway,
     update_runtime_model,
 )
 
-
+from mn_api import state
+from mn_api.dependencies import require_auth
+from mn_api.errors import handle_grpc_error
+from mn_api.schemas import (
+    ModelInstallRequest,
+    ModelProxyRequest,
+    ModelRemoteRequest,
+    ModelRemoveRequest,
+    ModelUpdateRequest,
+)
 
 
 def list_models(installed_only: bool = True, _auth=Depends(require_auth)):
@@ -61,52 +64,60 @@ def list_model_catalog(_auth=Depends(require_auth)):
 
 def list_remote_models(_auth=Depends(require_auth)):
     try:
-        ledger = load_model_remotes()
-        remotes = list((ledger.get("remotes") or {}).values())
-        return {"remotes": remotes, "path": str(default_model_remotes_path())}
+        remotes = [_remote_projection(record) for record in registered_model_records() if record.get("source") == "rest_remote"]
+        return {"remotes": remotes, "path": str(default_model_registry_path())}
     except Exception as exc:
         return handle_grpc_error(exc)
 
 
 def add_remote_model(req: ModelRemoteRequest, _auth=Depends(require_auth)):
     try:
-        remote = _upsert_remote_from_request(req)
+        remote_name = req.name or str(req.model).replace("/", "-").replace(":", "-")
+        record = provider_registration(
+            remote_name,
+            source_model=req.api_model or req.model,
+            api_model=req.api_model or req.model,
+            api_base=req.base_url,
+            api_key=req.api_key,
+            selected_node=req.node,
+            source="rest_remote",
+        )
+        registered = _upsert_registry_record(record)
+        remote = _remote_projection(registered)
         gateway = sync_litellm_gateway(restart=True) if req.sync_gateway else None
-        return {"remote": remote, "path": str(default_model_remotes_path()), "gateway": gateway}
+        return {"remote": remote, "path": str(default_model_registry_path()), "gateway": gateway}
     except Exception as exc:
         return handle_grpc_error(exc)
 
 
 def delete_remote_model(name: str, sync_gateway: bool = False, _auth=Depends(require_auth)):
     try:
-        removed = remove_model_remote(name)
+        removed, _path = remove_registered_model(name)
+        removed = _remote_projection(removed) if removed else None
         remove_litellm_gateway_route(name)
         if removed:
             remove_litellm_gateway_route(str(removed.get("model") or ""))
         gateway = sync_litellm_gateway(restart=True) if sync_gateway else None
-        return {"removed": removed, "path": str(default_model_remotes_path()), "gateway": gateway}
+        return {"removed": removed, "path": str(default_model_registry_path()), "gateway": gateway}
     except Exception as exc:
         return handle_grpc_error(exc)
 
 
 def add_proxy_model(req: ModelProxyRequest, _auth=Depends(require_auth)):
     try:
-        proxy = upsert_model_proxy(
+        record = provider_registration(
             req.model_id,
             source_model=req.source_model,
-            base_url=req.base_url,
+            api_base=req.base_url,
             api_model=req.api_model,
-            display_name=req.display_name,
+            name=req.display_name,
             api_key=req.api_key,
-            config_path=req.config_path,
-            litellm_config_path=req.litellm_config_path,
-            container_name=req.container_name,
-            image=req.image,
-            port=req.port,
-            host=req.host,
+            source="rest_proxy",
         )
+        record["rest_options"] = _proxy_rest_options(req)
+        proxy = _proxy_projection(_upsert_registry_record(record))
         gateway = sync_litellm_gateway(restart=True) if req.sync_gateway else None
-        return {"proxy": proxy, "path": str(default_model_proxies_path()), "gateway": gateway}
+        return {"proxy": proxy, "path": str(default_model_registry_path()), "gateway": gateway}
     except Exception as exc:
         return handle_grpc_error(exc)
 
@@ -269,24 +280,58 @@ def _resolve_entry_or_external(
     }
 
 
-def _upsert_remote_from_request(req: ModelRemoteRequest) -> dict[str, Any]:
-    try:
-        entry = resolve_model_entry(req.model)
-        runtime_model = docker_model_name(entry)
-        api_model = req.api_model or str(entry.get("api_model") or runtime_model)
-        name = req.name or str(entry.get("id") or runtime_model).replace("/", "-").replace(":", "-")
-    except Exception:
-        runtime_model = req.model
-        api_model = req.api_model or req.model
-        name = req.name or req.model.replace("/", "-").replace(":", "-")
-    return upsert_model_remote(
-        name,
-        runtime_model,
-        req.base_url,
-        api_key=req.api_key,
-        api_model=api_model,
-        node=req.node,
-    )
+def _upsert_registry_record(record: dict[str, Any]) -> dict[str, Any]:
+    existing = get_registered_model(str(record.get("id") or ""))
+    if existing is None:
+        added, _path = add_registered_models([record])
+        return added[0]
+    record["created_at"] = existing.get("created_at")
+    updated, _path = replace_registered_model(record)
+    return updated
+
+
+def _remote_projection(record: dict[str, Any]) -> dict[str, Any]:
+    params = (record.get("litellm_entry") or {}).get("litellm_params") or {}
+    return {
+        "name": str(record.get("id") or ""),
+        "provider": "docker_model_runner",
+        "model": str(record.get("model") or record.get("api_model") or ""),
+        "api_model": str(record.get("api_model") or record.get("model") or ""),
+        "base_url": str(record.get("api_base") or params.get("api_base") or ""),
+        "api_key": str(params.get("api_key") or "not-needed"),
+        **({"node": str(record.get("selected_node"))} if record.get("selected_node") else {}),
+    }
+
+
+def _proxy_projection(record: dict[str, Any]) -> dict[str, Any]:
+    params = (record.get("litellm_entry") or {}).get("litellm_params") or {}
+    options = record.get("rest_options") if isinstance(record.get("rest_options"), dict) else {}
+    return {
+        "id": str(record.get("id") or ""),
+        "name": str(record.get("name") or record.get("id") or ""),
+        "provider": "openai-compatible",
+        "source_model": str(record.get("model") or ""),
+        "api_model": str(record.get("api_model") or record.get("id") or ""),
+        "base_url": str(record.get("api_base") or params.get("api_base") or ""),
+        "api_key": str(params.get("api_key") or "not-needed"),
+        "backend": "proxy",
+        **options,
+    }
+
+
+def _proxy_rest_options(req: Any) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in {
+            "config_path": str(getattr(req, "config_path", "") or ""),
+            "litellm_config_path": str(getattr(req, "litellm_config_path", "") or ""),
+            "container_name": str(getattr(req, "container_name", "") or ""),
+            "image": str(getattr(req, "image", "") or ""),
+            "port": getattr(req, "port", None),
+            "host": str(getattr(req, "host", "") or ""),
+        }.items()
+        if value not in {"", None}
+    }
 
 
 def _stream_chat_benchmark(

@@ -12,6 +12,7 @@ from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
 from fastapi import HTTPException
+from mn_sdk import add_registered_models, provider_registration, set_registered_default_model
 
 import mn_api.blueprints as blueprints_module
 from mn_api import state
@@ -1976,6 +1977,62 @@ def test_launch_model_policy_is_deferred_without_installing():
     assert summary["env"]["MN_RUNTIME_MODEL_MANAGED"] == "1"
 
 
+def test_launch_model_policy_keeps_provider_default_out_of_managed_dmr(tmp_path, monkeypatch):
+    mn_home = tmp_path / "mn-home"
+    monkeypatch.setenv("MN_HOME", str(mn_home))
+    add_registered_models(
+        [
+            provider_registration(
+                "muse",
+                source_model="muse-upstream",
+                api_base="http://spark:8000/v1",
+            )
+        ]
+    )
+    set_registered_default_model("muse")
+    bundle = tmp_path / "vc_assistant"
+    bundle.mkdir()
+    (bundle / "manifest.json").write_text(
+        json.dumps(
+            {
+                "apiVersion": "mn.workflow/v2",
+                "config": {"manifest_defaults": ["llm"]},
+                "llm": {
+                    "model": "default",
+                    "configs": {
+                        "primary": {
+                            "provider": "docker_model_runner",
+                            "api_base": "auto",
+                        }
+                    },
+                },
+                "runtime": {
+                    "models": {
+                        "primary": {
+                            "provider": "docker_model_runner",
+                            "model": "default",
+                            "required": True,
+                        }
+                    }
+                },
+                "nodes": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = defer_blueprint_runtime_models(
+        tmp_path,
+        {"id": "vc_assistant", "path": "vc_assistant"},
+    )
+
+    assert summary["ok"] is True
+    assert summary["models"][0]["provider"] == "litellm_proxy"
+    assert summary["models"][0]["selection_policy"] == ["muse"]
+    assert summary["env"]["MN_LLM_MODEL"] == "default"
+    assert "MN_RUNTIME_MODEL_MANAGED" not in summary["env"]
+
+
 def test_launch_model_policy_skips_runtime_models_for_fake_llm():
     with tempfile.TemporaryDirectory() as tmpdir:
         repo = Path(tmpdir)
@@ -2012,4 +2069,3 @@ def test_launch_model_policy_skips_runtime_models_for_fake_llm():
     assert summary["ok"] is True
     assert summary["models"] == []
     assert summary["env"]["MN_LLM_PROVIDER"] == "fake"
-

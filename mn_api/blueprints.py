@@ -369,6 +369,15 @@ def load_blueprint_catalog(config: ApiConfig) -> tuple[Path, list[Dict[str, Any]
         raise _catalog_http_exception(exc) from exc
 
 
+def refresh_blueprint_catalog(config: ApiConfig) -> tuple[Path, list[Dict[str, Any]]]:
+    """Refresh a remote catalog, or re-read the configured local catalog."""
+    try:
+        catalog = sdk_load_active_blueprint_catalog(config, update=True)
+        return catalog.repo_root, catalog.blueprints
+    except BlueprintCatalogError as exc:
+        raise _catalog_http_exception(exc) from exc
+
+
 def normalize_blueprint(entry: Any) -> Optional[Dict[str, Any]]:
     return sdk_normalize_blueprint(entry)
 
@@ -628,9 +637,10 @@ def defer_blueprint_runtime_models(
             if requirement.get("default") is True or requested.lower() == "default"
             else requested
         )
+        entry_provider = str(entry.get("provider") or "docker_model_runner").strip().lower().replace("-", "_")
         policy = (
             ["nemotron3", "gemma4:e2b"]
-            if logical == "default"
+            if logical == "default" and entry_provider == "docker_model_runner"
             else [str(entry.get("id") or requested)]
         )
         models.append(
@@ -659,9 +669,12 @@ def defer_blueprint_runtime_models(
             }
         )
     env: dict[str, str] = {}
-    llm = config.get("llm") if isinstance(config.get("llm"), dict) else {}
-    llm_provider = str(llm.get("provider") or "docker_model_runner").strip().lower()
-    if models and llm_provider in {"", "docker_model_runner", "docker-model-runner", "dmr"}:
+    default_model = next(
+        (item for item in models if str(item.get("id") or "").strip().lower() == "default"),
+        None,
+    )
+    default_provider = str((default_model or {}).get("provider") or "docker_model_runner").strip().lower().replace("-", "_")
+    if default_model is not None and default_provider == "docker_model_runner":
         env.update(
             {
                 "MN_RUNTIME_MODEL_MANAGED": "1",

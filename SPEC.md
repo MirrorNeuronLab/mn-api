@@ -33,6 +33,8 @@ The API owns:
 - the FastAPI application and `/api/v1` route surface;
 - the `/api/v1` HTTP adaptation for stable-job definitions and one-to-many
   execution runs;
+- the stateless, URL-bound supervisory MCP adaptation at
+  `/api/v1/jobs/{job_id}/mcp` for MCP-enabled blueprint jobs;
 - HTTP request parsing, schema validation, authentication, and request limits;
 - JSON/problem response shapes and transport-level status mapping;
 - run/job progress over snapshots and authenticated, resumable SSE;
@@ -54,6 +56,9 @@ model placement algorithms, blueprint domain behavior, or the browser UI.
 - The surface includes runtime/system health, blueprints, bundles, jobs, runs,
   schedules/events, deployments, models, services, resources, artifacts, and
   realtime progress.
+- Existing model-remote and model-proxy REST paths are compatibility adapters
+  over the SDK-owned `$MN_HOME/models/registry.json`; they do not restore the
+  removed CLI proxy/manual-remote lifecycle or project legacy ledgers.
 - Collection responses contain `items` and an opaque `next_page_token`.
 - Streaming endpoints must terminate on completion, error, timeout, or client
   disconnect and must not leak background tasks.
@@ -91,6 +96,20 @@ model placement algorithms, blueprint domain behavior, or the browser UI.
 - Stable-job creation may resolve a catalog `blueprint_id`; only API-trusted
   catalog sources or uploaded bundle roots are read from the host filesystem.
   Caller-provided arbitrary host paths are rejected.
+- An MCP-enabled catalog job exposes the read-only tools `get_job_profile`,
+  `get_latest_run`, and `get_job_context` through Streamable HTTP. Tool inputs
+  cannot select another job. Responses use
+  `mn.mcp.stable_job_context.v1`, contain at most 50 evidence records and 256
+  KiB, and retain the stable profile with warnings when latest-run data cannot
+  be read. Never-run, running, paused, scheduled-waiting, idle, and archived
+  jobs remain readable; deleted, unknown, and non-enabled jobs share a
+  sanitized not-found response.
+- The stable supervisory MCP excludes credentials, secret/environment values,
+  raw logs, host paths, arbitrary files, and unrestricted artifact bodies. It
+  cannot mutate job, run, schedule, approval, or configuration state.
+- Core's discovered `mn-job-collaboration` service remains a separate,
+  run-scoped peer-collaboration surface. `mn-api` does not change its active-run
+  lifecycle or human-approval behavior.
 
 The route definitions and generated OpenAPI document are authoritative for
 exact fields and paths. `tests/test_v1_contract.py` protects consumer-visible
@@ -112,8 +131,8 @@ IDs may be returned for diagnosis.
 ## Security and Configuration
 
 - `MN_API_TOKEN` enables bearer authentication. Protected HTTP and SSE routes
-  accept the Authorization header. Credentials are never accepted in URL query
-  parameters.
+  plus stable job MCP accept the Authorization header. Credentials are never
+  accepted in URL query parameters.
 - `MN_API_REQUEST_SIZE_LIMIT_BYTES` bounds declared request body size.
 - CORS is disabled unless origins are explicitly configured.
 - Artifact and bundle paths must remain within their permitted roots.

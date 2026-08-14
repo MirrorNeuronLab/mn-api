@@ -352,12 +352,53 @@ def _patch_canonical_projections(monkeypatch):
     monkeypatch.setattr(infrastructure.model_routes, "list_runtime_models", lambda **_kwargs: {"models": [{"id": "model-1"}]})
     monkeypatch.setattr(infrastructure.model_routes, "show_runtime_model", lambda model_id: {"id": model_id})
     monkeypatch.setattr(infrastructure.model_routes, "benchmark_model", lambda model_id, request, _principal: {"id": model_id, **request})
-    monkeypatch.setattr(infrastructure.model_routes, "load_model_remotes", lambda: {"remotes": {"remote-1": {"name": "remote-1", "model": "m"}}})
-    monkeypatch.setattr(infrastructure, "upsert_model_remote", lambda *_args, **_kwargs: {"name": "remote-1", "model": "m"})
-    monkeypatch.setattr(infrastructure, "remove_model_remote", lambda _name: None)
-    monkeypatch.setattr(infrastructure, "upsert_model_proxy", lambda *_args, **_kwargs: {"model_id": "proxy-1"})
+    monkeypatch.setattr(infrastructure, "registered_model_records", lambda: [{"id": "remote-1", "source": "rest_remote"}])
+    monkeypatch.setattr(infrastructure, "provider_registration", lambda model_id, **kwargs: {"id": model_id, **kwargs})
+    monkeypatch.setattr(infrastructure, "remove_registered_model", lambda _name: (None, None))
+    monkeypatch.setattr(infrastructure.model_routes, "_upsert_registry_record", lambda record: record)
+    monkeypatch.setattr(infrastructure.model_routes, "_remote_projection", lambda _record: {"name": "remote-1", "model": "m"})
+    monkeypatch.setattr(infrastructure.model_routes, "_proxy_projection", lambda _record: {"model_id": "proxy-1"})
     monkeypatch.setattr(infrastructure, "uploaded_bundle_root", lambda *_args: SimpleNamespace(__truediv__=lambda *_: None))
     monkeypatch.setattr(infrastructure, "run_service_validation", lambda *_args, **_kwargs: {"ok": True})
+    monkeypatch.setattr(
+        blueprints.legacy_blueprints,
+        "install_blueprint",
+        lambda blueprint_id, **_kwargs: {"installed": True, "blueprint": {"id": blueprint_id}},
+    )
+    monkeypatch.setattr(
+        blueprints,
+        "refresh_blueprint_catalog",
+        lambda _config: (SimpleNamespace(__str__=lambda _self: "/catalog"), [{"id": "worker-1"}]),
+    )
+
+
+def test_blueprint_run_forwards_secret_environment(monkeypatch):
+    client, _runtime = _client(monkeypatch)
+    blueprint = {"id": "worker-1", "name": "Worker", "installed": True}
+    captured = {}
+    monkeypatch.setattr(blueprints, "find_blueprint", lambda _config, _id: (None, blueprint))
+
+    def resolve(_blueprint_id, request):
+        captured["request"] = request
+        return request
+
+    monkeypatch.setattr(blueprints.legacy_blueprints, "resolve_async_blueprint_run_request", resolve)
+    monkeypatch.setattr(
+        blueprints.legacy_blueprints,
+        "run_blueprint_record",
+        lambda *_args, **_kwargs: {"job_id": "job-blueprint", "run_id": "run-blueprint", "status": "pending"},
+    )
+
+    response = client.post(
+        "/api/v1/blueprints/worker-1/runs",
+        headers={"Idempotency-Key": "blueprint-run-secret-1"},
+        json={"secret_environment": {"DECLARED_SECRET": "secret-value"}},
+    )
+
+    assert response.status_code == 202
+    secret = captured["request"].secret_environment["DECLARED_SECRET"]
+    assert secret.get_secret_value() == "secret-value"
+    assert "secret-value" not in response.text
 
 
 def test_canonical_resource_happy_paths(monkeypatch):

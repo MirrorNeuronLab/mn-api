@@ -4,16 +4,22 @@ import json
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Header, Query, Response, status
-from mn_sdk import RuntimeService, deployment_policy
-from mn_sdk import load_model_proxies, remove_model_proxy, remove_model_remote, upsert_model_proxy, upsert_model_remote
+from mn_sdk import (
+    RuntimeService,
+    deployment_policy,
+    provider_registration,
+    registered_model_records,
+    remove_registered_model,
+    run_service_validation,
+)
 
 from mn_api import state
 from mn_api.api_models import (
     DeploymentCreate,
     DeploymentRollback,
     DesiredStateUpdate,
-    ModelInstallation,
     ModelBenchmark,
+    ModelInstallation,
     ModelProxyRegistration,
     ModelRegistration,
     PageResponse,
@@ -33,8 +39,6 @@ from mn_api.operations import start_operation
 from mn_api.pagination import page
 from mn_api.public import idempotent_response, public_value, records, resource_response
 from mn_api.routes import models as model_routes
-from mn_sdk import run_service_validation
-
 
 router = APIRouter(prefix=API_PREFIX)
 
@@ -268,8 +272,11 @@ def list_model_remotes(
     page_token: str | None = None,
     principal=Depends(require_auth),
 ):
-    ledger = model_routes.load_model_remotes()
-    items = [public_value(item) for item in (ledger.get("remotes") or {}).values()]
+    items = [
+        public_value(model_routes._remote_projection(record))
+        for record in registered_model_records()
+        if record.get("source") == "rest_remote"
+    ]
     return _page(
         items,
         route=f"{API_PREFIX}/model-remotes",
@@ -289,15 +296,18 @@ def list_model_remotes(
     response_model=ResourceModel,
 )
 def create_model_remote(request: ModelRegistration, response: Response, principal=Depends(require_auth)):
-    remote = upsert_model_remote(
-        request.model,
-        request.base_url,
-        name=request.name,
-        api_model=request.api_model,
+    name = request.name or request.model.replace("/", "-").replace(":", "-")
+    record = provider_registration(
+        name,
+        source_model=request.api_model or request.model,
+        api_base=request.base_url,
+        api_model=request.api_model or request.model,
         api_key="not-needed",
-        node=request.node,
+        selected_node=request.node,
+        source="rest_remote",
     )
-    name = str(remote.get("name") or request.name or request.model)
+    remote = model_routes._remote_projection(model_routes._upsert_registry_record(record))
+    name = str(remote.get("name") or name)
     response.headers["Location"] = f"{API_PREFIX}/model-remotes/{name}"
     response.headers["ETag"] = resource_response(remote, etag=True).headers["etag"]
     return public_value(remote)
@@ -318,7 +328,7 @@ def delete_model_remote(
         {"name": name},
     )
     require_if_match(if_match, current)
-    remove_model_remote(name)
+    remove_registered_model(name)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -330,18 +340,17 @@ def delete_model_remote(
     response_model=ResourceModel,
 )
 def create_model_proxy(request: ModelProxyRegistration, response: Response, principal=Depends(require_auth)):
-    proxy = upsert_model_proxy(
+    record = provider_registration(
         request.model_id,
         source_model=request.source_model,
-        base_url=request.base_url,
+        api_base=request.base_url,
         api_model=request.api_model,
-        display_name=request.display_name,
+        name=request.display_name,
         api_key="not-needed",
-        container_name=request.container_name,
-        image=request.image,
-        port=request.port,
-        host=request.host,
+        source="rest_proxy",
     )
+    record["rest_options"] = model_routes._proxy_rest_options(request)
+    proxy = model_routes._proxy_projection(model_routes._upsert_registry_record(record))
     response.headers["Location"] = f"{API_PREFIX}/model-proxies/{request.model_id}"
     return public_value(proxy)
 
@@ -352,8 +361,11 @@ def list_model_proxies(
     page_token: str | None = None,
     principal=Depends(require_auth),
 ):
-    ledger = load_model_proxies()
-    items = [public_value(item) for item in (ledger.get("proxies") or {}).values()]
+    items = [
+        public_value(model_routes._proxy_projection(record))
+        for record in registered_model_records()
+        if record.get("source") == "rest_proxy"
+    ]
     return _page(
         items,
         route=f"{API_PREFIX}/model-proxies",
@@ -385,7 +397,7 @@ def delete_model_proxy(
         {"model_id": model_id},
     )
     require_if_match(if_match, current)
-    remove_model_proxy(model_id)
+    remove_registered_model(model_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

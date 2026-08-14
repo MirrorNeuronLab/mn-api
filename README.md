@@ -112,7 +112,9 @@ All paths below are under `/api/v1`.
 - Capability: unauthenticated `GET /health` returns
   `api_contract: "mirrorneuron.rest.v1"`.
 - Jobs: `GET/POST /jobs`, `GET/PATCH/DELETE /jobs/{job_id}`,
-  `PUT /jobs/{job_id}/bundle`, and `POST /jobs/{job_id}/data-resets`.
+  `PUT /jobs/{job_id}/bundle`, `POST /jobs/{job_id}/data-resets`, and the
+  read-only Streamable HTTP MCP endpoint at `/jobs/{job_id}/mcp` for eligible
+  blueprint jobs.
 - Runs: `POST/GET /jobs/{job_id}/runs`,
   `POST /blueprints/{blueprint_id}/runs`, `GET /runs`, and
   `GET/PATCH/DELETE /runs/{run_id}`.
@@ -157,6 +159,21 @@ When an existing `job_id` is supplied, the API installs the freshly prepared
 bundle before starting the run; job data, schedules, and prior run history are
 preserved.
 
+Blueprints that explicitly enable `mcp_collaboration` also expose a stable,
+stateless supervisory MCP at `/api/v1/jobs/{job_id}/mcp`. It remains available
+when the job has never run, is idle, paused, waiting for a schedule, terminal,
+or archived; it needs Core data but no active target Run or runtime worker
+service. The endpoint is bound to the URL job, uses the API bearer-auth policy,
+and exposes only `get_job_profile`, `get_latest_run`, and `get_job_context`.
+Responses use `mn.mcp.stable_job_context.v1`, are limited to 256 KiB and 50
+evidence records, and omit secrets, environment values, raw logs, host paths,
+and unrestricted artifact bodies.
+
+This API-owned supervisory endpoint is separate from Core's
+`mn-job-collaboration` service. The Core service is created only for an active
+Run and supports peer collaboration inside executing workflows; its discovery
+and lifecycle contract is unchanged.
+
 ## SDK Usage
 
 Use SDK services directly when building another client:
@@ -194,5 +211,7 @@ bounded in `errors`.
 ## Notes
 
 - A running MirrorNeuron core is required for live runtime calls.
+- Stable job MCP reads require `mn-api` and Core to be reachable, but do not
+  require the target job to be running.
 - Use `MN_ENV=prod` with `MN_API_TOKEN` when exposing protected endpoints.
 - `MN_RUNS_ROOT` controls where run artifacts are read from.

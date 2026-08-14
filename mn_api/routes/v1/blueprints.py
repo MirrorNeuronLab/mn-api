@@ -11,11 +11,11 @@ from mn_api.api_models import (
     PageResponse,
     ResourceModel,
 )
-from mn_api.blueprints import filter_blueprints_by_category, find_blueprint, load_blueprint_catalog
+from mn_api.blueprints import filter_blueprints_by_category, find_blueprint, load_blueprint_catalog, refresh_blueprint_catalog
 from mn_api.contracts import API_PREFIX, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 from mn_api.dependencies import require_auth
 from mn_api.http_semantics import require_if_match
-from mn_api.operations import start_operation
+from mn_api.operations import complete_local_operation, start_operation
 from mn_api.pagination import page
 from mn_api.public import idempotent_response, public_value, resource_response
 from mn_api.routes import blueprints as legacy_blueprints
@@ -91,12 +91,25 @@ def replace_blueprint_installation(
     principal: str = Depends(require_auth),
 ):
     require_if_match(if_match, _installation(blueprint_id))
+
+    def install():
+        result = legacy_blueprints.install_blueprint(
+            blueprint_id,
+            force=request.force,
+            _auth=principal,
+        )
+        return complete_local_operation(
+            "install_blueprint",
+            {"blueprint_id": blueprint_id, "force": request.force},
+            result=result,
+        )
+
     return idempotent_response(
         principal=principal,
         route=f"{API_PREFIX}/blueprints/{blueprint_id}/installation",
         key=idempotency_key,
         body=request.model_dump(),
-        call=lambda: start_operation("install_blueprint", {"blueprint_id": blueprint_id, "force": request.force}),
+        call=install,
         status_code=status.HTTP_202_ACCEPTED,
         location=lambda result: f"{API_PREFIX}/operations/{result.get('operation_id') or result.get('id')}",
     )
@@ -167,6 +180,7 @@ def create_blueprint_run(
                 job_id=payload.job_id,
                 run_id=payload.run_id,
                 config_overrides=payload.config_overrides,
+                secret_environment=payload.secret_environment,
                 force=payload.force,
                 fake_llm=payload.fake_llm,
                 fake_skills=payload.fake_skills,
@@ -199,12 +213,19 @@ def create_blueprint_catalog_refresh(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", max_length=255),
     principal: str = Depends(require_auth),
 ):
+    def refresh():
+        repo_root, blueprints = refresh_blueprint_catalog(_config())
+        return complete_local_operation(
+            "refresh_blueprint_catalog",
+            result={"repo_root": str(repo_root), "blueprint_count": len(blueprints)},
+        )
+
     return idempotent_response(
         principal=principal,
         route=f"{API_PREFIX}/blueprint-catalog-refreshes",
         key=idempotency_key,
         body={},
-        call=lambda: start_operation("refresh_blueprint_catalog", {}),
+        call=refresh,
         status_code=status.HTTP_202_ACCEPTED,
         location=lambda result: f"{API_PREFIX}/operations/{result.get('operation_id') or result.get('id')}",
     )
