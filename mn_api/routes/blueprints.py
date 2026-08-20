@@ -1679,7 +1679,9 @@ def model_install_problem_response(
 
 def runtime_active_jobs_payload() -> object | None:
     try:
-        return json.loads(state.client.list_jobs(0, False))
+        return json.loads(
+            state.client.list_jobs(include_archived=False, page_size=500)
+        )
     except Exception:
         return None
 
