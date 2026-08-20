@@ -207,7 +207,7 @@ class TestBlueprintServices(unittest.TestCase):
             (manifest_dir / "manifest.json").write_text(
                 json.dumps(
                     {
-                    "apiVersion": "mn.workflow/v2",
+                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
                         "metadata": {
                             "init_config_review": {
                                 "required": True,
@@ -288,7 +288,7 @@ class TestBlueprintServices(unittest.TestCase):
             bundle = repo / "worker_one"
             bundle.mkdir()
             (bundle / "manifest.json").write_text(json.dumps({
-                    "apiVersion": "mn.workflow/v2",
+                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
                 "metadata": {"blueprint_id": "worker_one"},
                 "nodes": [],
                 "edges": [],
@@ -359,7 +359,7 @@ class TestBlueprintServices(unittest.TestCase):
                 }
             }))
             (bundle / "manifest.json").write_text(json.dumps({
-                    "apiVersion": "mn.workflow/v2",
+                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
                 "metadata": {"blueprint_id": "worker_one"},
                 "nodes": [],
                 "edges": [],
@@ -424,7 +424,7 @@ class TestBlueprintServices(unittest.TestCase):
                 )
             )
             (bundle / "manifest.json").write_text(json.dumps({
-                    "apiVersion": "mn.workflow/v2",
+                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
                 "metadata": {"blueprint_id": "worker_one"},
                 "nodes": [],
                 "edges": [],
@@ -507,7 +507,7 @@ class TestBlueprintServices(unittest.TestCase):
             bundle = repo / "worker_one"
             bundle.mkdir()
             (bundle / "manifest.json").write_text(json.dumps({
-                    "apiVersion": "mn.workflow/v2",
+                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
                 "metadata": {"blueprint_id": "worker_one"},
                 "nodes": [],
                 "edges": [],
@@ -557,7 +557,7 @@ class TestBlueprintServices(unittest.TestCase):
             bundle = repo / "worker_one"
             bundle.mkdir()
             (bundle / "manifest.json").write_text(json.dumps({
-                    "apiVersion": "mn.workflow/v2",
+                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
                 "metadata": {"blueprint_id": "worker_one"},
                 "nodes": [],
                 "edges": [],
@@ -635,7 +635,7 @@ class TestBlueprintServices(unittest.TestCase):
             bundle = repo / "vc_assistant"
             bundle.mkdir()
             (bundle / "manifest.json").write_text(json.dumps({
-                    "apiVersion": "mn.workflow/v2",
+                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
                 "metadata": {"blueprint_id": "vc_assistant"},
                 "nodes": [],
                 "edges": [],
@@ -746,7 +746,7 @@ class TestBlueprintServices(unittest.TestCase):
                 }
             }))
             (bundle / "manifest.json").write_text(json.dumps({
-                    "apiVersion": "mn.workflow/v2",
+                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
                 "metadata": {"blueprint_id": "vc_assistant"},
                 "nodes": [],
                 "edges": [],
@@ -845,7 +845,7 @@ class TestBlueprintServices(unittest.TestCase):
             config_dir.mkdir(parents=True)
             (config_dir / "default.json").write_text(json.dumps({"llm": {"enabled": True, "model": "medium", "provider": "docker_model_runner"}}))
             (bundle / "manifest.json").write_text(json.dumps({
-                    "apiVersion": "mn.workflow/v2",
+                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
                 "metadata": {"blueprint_id": "vc_assistant"}, "nodes": [], "edges": [],
                 "runtime": {"models": {"primary": {"provider": "docker_model_runner", "model": "medium"}}},
             }))
@@ -892,7 +892,7 @@ class TestBlueprintServices(unittest.TestCase):
             bundle = repo / "worker_one"
             bundle.mkdir()
             (bundle / "manifest.json").write_text(json.dumps({
-                    "apiVersion": "mn.workflow/v2","nodes": [], "edges": []}))
+                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},"nodes": [], "edges": []}))
             summary = install_blueprint_runtime_models(
                 repo.resolve(), {"id": "worker_one", "path": "worker_one"}
             )
@@ -1003,7 +1003,7 @@ class TestBlueprintServices(unittest.TestCase):
             (bundle / "manifest.json").write_text(
                 json.dumps(
                     {
-                    "apiVersion": "mn.workflow/v2",
+                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
                         "graph_id": "worker_graph",
                         "nodes": [
                             {
@@ -1048,7 +1048,7 @@ class TestBlueprintServices(unittest.TestCase):
             (bundle / "manifest.json").write_text(
                 json.dumps(
                     {
-                        "apiVersion": "mn.workflow/v2",
+                        "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
                         "kind": "Workflow",
                         "workflow": {
                             "workflow_id": "worker_one_v2",
@@ -1105,7 +1105,7 @@ class TestBlueprintServices(unittest.TestCase):
             (bundle / "manifest.json").write_text(
                 json.dumps(
                     {
-                    "apiVersion": "mn.workflow/v2",
+                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
                         "graph_id": "worker_graph",
                         "nodes": [
                             {
@@ -1174,7 +1174,7 @@ class TestBlueprintServices(unittest.TestCase):
             (bundle / "manifest.json").write_text(
                 json.dumps(
                     {
-                    "apiVersion": "mn.workflow/v2",
+                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
                         "graph_id": "host_worker",
                         "nodes": [
                             {
@@ -1315,7 +1315,7 @@ class TestBlueprintServices(unittest.TestCase):
             (bundle / "manifest.json").write_text(
                 json.dumps(
                     {
-                    "apiVersion": "mn.workflow/v2",
+                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
                         "graph_id": "vc_assistant",
                         "nodes": [
                             {
@@ -1408,7 +1408,7 @@ class TestBlueprintServices(unittest.TestCase):
             (bundle / "manifest.json").write_text(
                 json.dumps(
                     {
-                    "apiVersion": "mn.workflow/v2",
+                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
                         "graph_id": "worker_graph",
                         "nodes": [
                             {
@@ -1477,7 +1477,7 @@ class TestBlueprintServices(unittest.TestCase):
             (bundle / "manifest.json").write_text(
                 json.dumps(
                     {
-                    "apiVersion": "mn.workflow/v2",
+                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
                         "graph_id": "tax_worker",
                         "nodes": [
                             {
@@ -1551,7 +1551,7 @@ class TestBlueprintServices(unittest.TestCase):
             (sandbox / "Dockerfile").write_text("FROM alpine\n")
             (bundle / "manifest.json").write_text(
                 json.dumps({
-                    "apiVersion": "mn.workflow/v2",
+                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
                     "graph_id": "worker_graph",
                     "nodes": [
                         {
@@ -1595,7 +1595,7 @@ class TestBlueprintServices(unittest.TestCase):
             (bundle / "manifest.json").write_text(
                 json.dumps(
                     {
-                    "apiVersion": "mn.workflow/v2",
+                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
                         "nodes": [
                             {
                                 "node_id": "worker",
@@ -1631,7 +1631,7 @@ class TestBlueprintServices(unittest.TestCase):
                     (config_dir / "default.json").write_text(json.dumps({"vl_model": {"model": "default"}}))
                     (config_dir / "overwrite.json").write_text(payload)
                     (bundle / "manifest.json").write_text(json.dumps({
-                    "apiVersion": "mn.workflow/v2","nodes": []}))
+                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},"nodes": []}))
 
                     with self.assertRaises(HTTPException) as raised:
                         load_blueprint_bundle(
@@ -1669,7 +1669,7 @@ class TestBlueprintServices(unittest.TestCase):
             (bundle / "manifest.json").write_text(
                 json.dumps(
                     {
-                    "apiVersion": "mn.workflow/v2",
+                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
                         "nodes": [
                             {
                                 "node_id": "worker",
@@ -1927,7 +1927,7 @@ def test_launch_model_policy_is_deferred_without_installing():
         (bundle / "manifest.json").write_text(
             json.dumps(
                 {
-                    "apiVersion": "mn.workflow/v2",
+                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
                     "runtime": {
                         "models": {
                             "primary": {
@@ -1995,7 +1995,7 @@ def test_launch_model_policy_keeps_provider_default_out_of_managed_dmr(tmp_path,
     (bundle / "manifest.json").write_text(
         json.dumps(
             {
-                "apiVersion": "mn.workflow/v2",
+                "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
                 "config": {"manifest_defaults": ["llm"]},
                 "llm": {
                     "model": "default",
@@ -2041,7 +2041,7 @@ def test_launch_model_policy_skips_runtime_models_for_fake_llm():
         (bundle / "manifest.json").write_text(
             json.dumps(
                 {
-                    "apiVersion": "mn.workflow/v2",
+                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
                     "runtime": {
                         "models": {
                             "primary": {

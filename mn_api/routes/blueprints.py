@@ -1144,7 +1144,7 @@ def resolve_launch_source(req: BlueprintLaunchRequest) -> dict:
         manifest = json.loads(manifest_json)
         bundle_root = Path(req.bundle_path).expanduser().resolve()
         workflow = manifest.get("workflow") if isinstance(manifest.get("workflow"), dict) else {}
-        workflow_manifest = manifest.get("apiVersion") == "mn.workflow/v2" or manifest.get("kind") == "Workflow" or isinstance(manifest.get("workflow"), dict)
+        workflow_manifest = manifest.get("apiVersion") == "mn.workflow/v1" or manifest.get("kind") == "Workflow" or isinstance(manifest.get("workflow"), dict)
         blueprint_id = sanitize_blueprint_id(
             manifest.get("id")
             or manifest.get("blueprint_id")

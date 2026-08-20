@@ -6,6 +6,7 @@ from threading import Event
 import time
 from types import SimpleNamespace
 
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from mn_api import state
@@ -14,6 +15,7 @@ from mn_api.blueprint_additions import BlueprintAddError
 from mn_api.contracts import API_CONTRACT
 from mn_api.http_semantics import strong_etag
 from mn_api.pagination import PageTokenRegistry, page
+from mn_api.routes import jobs as internal_jobs
 from mn_api.routes.v1 import blueprints, infrastructure, jobs, system
 
 
@@ -171,9 +173,71 @@ def _client(monkeypatch) -> tuple[TestClient, CanonicalRuntime]:
         "config",
         SimpleNamespace(api_token="", request_size_limit_bytes=1024 * 1024, cors_allow_origins=[]),
     )
-    manifest = '{"apiVersion":"mn.workflow/v2","graph_id":"g","nodes":[]}'
+    manifest = json.dumps(
+        {
+            "apiVersion": "mn.workflow/v1",
+            "kind": "Workflow",
+            "id": "g",
+            "name": "g",
+            "manifest_version": "1.0",
+            "job_name": "g",
+            "contract": {"inputs": {}, "outputs": {"primary": {}}},
+            "workflow": {
+                "schema": "mn.workflow.problem_graph/v1",
+                "workflow_id": "g",
+                "entrypoint": "start",
+                "source": "start",
+                "sink": "start",
+                "steps": [{"id": "start"}],
+                "edges": [],
+            },
+            "agents": {"nodes": [], "edges": []},
+            "runtime": {},
+        }
+    )
     monkeypatch.setattr(jobs, "load_uploaded_bundle", lambda *_args: (manifest, {}))
     return TestClient(create_app()), runtime
+
+
+def test_job_manifest_decoder_selects_both_v1_forms_and_rejects_retired_versions():
+    source = {
+        "apiVersion": "mn.workflow/v1",
+        "kind": "WorkflowSource",
+        "identity": {"id": "source-api", "name": "Source API"},
+        "defaults": {"worker": {"with": {"image": "python:3.11"}}},
+        "workflow": {
+            "steps": [
+                {"id": "prepare", "needs": [], "run": {"handler": "source_api.prepare"}},
+                {
+                    "id": "publish",
+                    "needs": ["prepare"],
+                    "run": {"handler": "source_api.publish"},
+                },
+            ]
+        },
+    }
+    executable = {
+        "apiVersion": "mn.workflow/v1",
+        "kind": "Workflow",
+        "id": "executable-api",
+        "contract": {},
+        "agents": {},
+        "runtime": {},
+    }
+
+    materialized = internal_jobs._decode_manifest(json.dumps(source))
+    assert materialized["apiVersion"] == "mn.workflow/v1"
+    assert materialized["kind"] == "Workflow"
+    assert materialized["workflow"]["edges"][0]["from"] == "prepare"
+    assert internal_jobs._decode_manifest(json.dumps(executable)) == executable
+
+    try:
+        internal_jobs._decode_manifest(json.dumps({"apiVersion": "mn.workflow/v2"}))
+    except HTTPException as exc:
+        assert exc.status_code == 400
+        assert "mn.workflow/v1" in str(exc.detail)
+    else:
+        raise AssertionError("retired workflow versions must be rejected")
 
 
 def test_openapi_is_only_canonical_v1_and_documents_auth():

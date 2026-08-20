@@ -470,7 +470,7 @@ def create_job_schedule(job_id: str, request: ScheduleCreate, response: Response
     schedule = _service().create_job_schedule(job_id, schedule=request.schedule, source=request.source)
     schedule_id = str(schedule.get("schedule_id") or schedule.get("id") or "")
     if schedule_id:
-        response.headers["Location"] = f"{API_PREFIX}/schedules/{schedule_id}"
+        response.headers["Location"] = f"{API_PREFIX}/jobs/{job_id}"
     return public_value(schedule)
 
 

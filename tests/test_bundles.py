@@ -16,7 +16,7 @@ class TestBundleServices(unittest.TestCase):
             payloads = bundle_root / "payloads" / "nested"
             payloads.mkdir(parents=True)
             (bundle_root / "manifest.json").write_text(
-                '{"apiVersion": "mn.workflow/v2", "graph_id": "g"}'
+                '{"apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {}, "graph_id": "g"}'
             )
             (payloads / "a.txt").write_bytes(b"hello")
 
@@ -24,7 +24,7 @@ class TestBundleServices(unittest.TestCase):
 
         self.assertEqual(
             manifest_json,
-            '{"apiVersion": "mn.workflow/v2", "graph_id": "g"}',
+            '{"apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {}, "graph_id": "g"}',
         )
         self.assertEqual(payload_bytes, {"nested/a.txt": b"hello"})
 
@@ -56,7 +56,7 @@ class TestBundleServices(unittest.TestCase):
             extracted_root = Path(tmpdir)
             nested = extracted_root / "bundle-root"
             nested.mkdir()
-            (nested / "manifest.json").write_text('{"apiVersion": "mn.workflow/v2"}')
+            (nested / "manifest.json").write_text('{"apiVersion": "mn.workflow/v1"}')
 
             self.assertEqual(find_bundle_root(extracted_root), nested)
 

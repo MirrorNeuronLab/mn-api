@@ -1307,7 +1307,7 @@ def local_blueprint_from_path(path: str) -> tuple[Path, Dict[str, Any]]:
 
     metadata = as_dict(manifest.get("metadata"))
     identity = as_dict(manifest.get("identity"))
-    workflow_manifest = manifest.get("apiVersion") == "mn.workflow/v2" or manifest.get("kind") == "Workflow" or isinstance(manifest.get("workflow"), dict)
+    workflow_manifest = manifest.get("apiVersion") == "mn.workflow/v1" or manifest.get("kind") == "Workflow" or isinstance(manifest.get("workflow"), dict)
     raw_id = (
         metadata.get("blueprint_id")
         or identity.get("blueprint_id")

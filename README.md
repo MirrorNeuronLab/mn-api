@@ -125,10 +125,9 @@ All paths below are under `/api/v1`.
   `POST /blueprints/{id}/additions`, removals at
   `POST /blueprints/{id}/removals`, validations, catalog refresh/cleanup
   operations, and multipart `POST /bundles` returning an opaque `bundle_id`.
-- Scheduling: schedules are created below a job, managed through `/schedules`,
-  dispatched through `/schedules/{id}/dispatches`, and event emissions use
-  `/trigger-events`.
-- Infrastructure: `/nodes`, `/deployments`, `/models`, `/model-remotes`,
+- Scheduling: schedules are created only through
+  `POST /jobs/{job_id}/schedules` and are returned with the authoritative job.
+- Infrastructure: `/nodes`, `/models`, `/model-remotes`,
   `/model-proxies`, `/services/{name}/resolution`, and `/service-checks`.
 - Administrative work: `/operations` and `/operations/{id}`.
 - Streams: authenticated, resumable SSE at

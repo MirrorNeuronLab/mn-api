@@ -28,6 +28,7 @@ from mn_sdk import (
     failure_from_event,
     is_lowered_runtime_projection as _is_lowered_runtime_projection,
     is_manifest_source,
+    manifest_form,
     matches_public_workflow_contract as _matches_public_workflow_contract,
     normalize_error,
     workflow_progress_snapshot,
@@ -109,11 +110,11 @@ def _decode_manifest(manifest_json: str, *, root_dir: Path | None = None) -> dic
         raise HTTPException(status_code=400, detail="manifest_json is malformed") from exc
     if not isinstance(manifest, dict):
         raise HTTPException(status_code=400, detail="manifest_json must be an object")
-    if is_manifest_source(manifest):
-        try:
+    try:
+        if manifest_form(manifest) == "source":
             manifest = expand_manifest_source(manifest, root_dir=root_dir)
-        except ManifestConversionError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ManifestConversionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return manifest
 
 
@@ -691,7 +692,7 @@ def _manifest_from_job_details(details: dict[str, Any], *, run_dir: Path | None 
         "workflow",
     )
     return {
-        "apiVersion": "mn.workflow/v2",
+        "apiVersion": "mn.workflow/v1",
         "kind": "Workflow",
         "id": workflow_id,
         "name": _first_string(
@@ -826,7 +827,7 @@ def _public_workflow_manifest_from_job(
     )
     job_type = str(job.get("job_type") or job.get("type") or summary.get("job_type") or summary.get("type") or "")
     return {
-        "apiVersion": "mn.workflow/v2",
+        "apiVersion": "mn.workflow/v1",
         "kind": "Workflow",
         "id": str(job.get("graph_id") or summary.get("graph_id") or workflow_id),
         "name": str(job.get("job_name") or summary.get("job_name") or workflow_id),
@@ -1439,8 +1440,6 @@ def replay_job_dead_letter(job_id: str, index: int, _auth=Depends(require_auth))
             "message": "core replay is available in-process; gRPC replay will be added to expose it over REST",
         },
     )
-
-
 
 
 
