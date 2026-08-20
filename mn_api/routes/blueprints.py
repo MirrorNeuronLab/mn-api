@@ -1013,7 +1013,7 @@ def run_blueprint_record(
         )
         if not req.job_id:
             created = json.loads(
-                state.client.create_stable_job(
+                state.client.create_job(
                     manifest_json,
                     payloads,
                     job_id=stable_job_id,
@@ -1023,7 +1023,7 @@ def run_blueprint_record(
             stable_job_id = str(created["job_id"])
             definition_committed = True
         else:
-            state.client.update_stable_job(
+            state.client.update_job(
                 stable_job_id,
                 {"resolved_configuration": config_overrides}
                 if config_overrides

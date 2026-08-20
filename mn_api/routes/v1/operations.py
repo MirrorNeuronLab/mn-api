@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from mn_api import state
-from mn_api.api_models import CleanupCreate, PageResponse, ResourceModel
+from mn_api.api_models import PageResponse, ResourceModel
 from mn_api.contracts import API_PREFIX, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 from mn_api.dependencies import require_auth
 from mn_api.operations import (
@@ -13,70 +13,14 @@ from mn_api.operations import (
     is_local_operation,
     known_operations,
     sse_envelope,
-    start_operation,
     stream_local_operation_events,
 )
 from mn_api.pagination import page
-from mn_api.public import decode, idempotent_response, public_value
+from mn_api.public import decode, public_value
 
 
 router = APIRouter(prefix=API_PREFIX)
 
-
-def _administrative_run_operation(
-    *,
-    kind: str,
-    request: CleanupCreate,
-    idempotency_key: str | None,
-    principal: str,
-):
-    route = f"{API_PREFIX}/{'run-cleanups' if kind == 'clear_jobs' else 'run-cancellations'}"
-    body = request.model_dump()
-    return idempotent_response(
-        principal=principal,
-        route=route,
-        key=idempotency_key,
-        body=body,
-        call=lambda: start_operation(kind, body),
-        status_code=202,
-        location=lambda item: f"{API_PREFIX}/operations/{item.get('operation_id')}",
-    )
-
-
-@router.post(
-    "/run-cleanups", operation_id="create_run_cleanup", tags=["operations"], status_code=202, response_model=ResourceModel
-)
-def create_run_cleanup(
-    request: CleanupCreate,
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-    principal: str = Depends(require_auth),
-):
-    return _administrative_run_operation(
-        kind="clear_jobs",
-        request=request,
-        idempotency_key=idempotency_key,
-        principal=principal,
-    )
-
-
-@router.post(
-    "/run-cancellations",
-    operation_id="create_run_cancellation",
-    tags=["operations"],
-    status_code=202,
-    response_model=ResourceModel,
-)
-def create_run_cancellation(
-    request: CleanupCreate,
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-    principal: str = Depends(require_auth),
-):
-    return _administrative_run_operation(
-        kind="cancel_all_jobs",
-        request=request,
-        idempotency_key=idempotency_key,
-        principal=principal,
-    )
 
 
 @router.get("/operations", operation_id="list_operations", tags=["operations"], response_model=PageResponse)

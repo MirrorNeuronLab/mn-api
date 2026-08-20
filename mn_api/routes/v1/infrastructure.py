@@ -6,7 +6,6 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Header, Query, Response, status
 from mn_sdk import (
     RuntimeService,
-    deployment_policy,
     provider_registration,
     registered_model_records,
     remove_registered_model,
@@ -15,9 +14,6 @@ from mn_sdk import (
 
 from mn_api import state
 from mn_api.api_models import (
-    DeploymentCreate,
-    DeploymentRollback,
-    DesiredStateUpdate,
     ModelBenchmark,
     ModelInstallation,
     ModelProxyRegistration,
@@ -31,7 +27,7 @@ from mn_api.blueprints import (
     expand_blueprint_manifest_if_source,
     load_blueprint_config,
 )
-from mn_api.bundles import load_uploaded_bundle, uploaded_bundle_root
+from mn_api.bundles import uploaded_bundle_root
 from mn_api.contracts import API_PREFIX, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 from mn_api.dependencies import require_auth
 from mn_api.http_semantics import require_if_match
@@ -74,121 +70,6 @@ def _page(
         key=identity,
         identity=identity,
     )
-
-
-@router.post(
-    "/deployments",
-    status_code=status.HTTP_201_CREATED,
-    operation_id="create_deployment",
-    tags=["deployments"],
-    response_model=ResourceModel,
-)
-def create_deployment(request: DeploymentCreate, response: Response, _principal=Depends(require_auth)):
-    manifest_json, payloads = load_uploaded_bundle(request.bundle_id, state.BUNDLE_UPLOAD_ROOT)
-    policy = deployment_policy(
-        str(request.policy.get("strategy") or "rolling"),
-        int(request.policy.get("canary") or 0),
-        int(request.policy.get("max_parallel") or 1),
-        bool(request.policy.get("auto_promote")),
-        bool(request.policy.get("auto_revert")),
-    )
-    deployment = _service().deploy_job(
-        manifest_json,
-        payloads,
-        deployment_key=request.deployment_key,
-        policy=policy,
-        wait=request.wait,
-    )
-    deployment_id = str(deployment.get("deployment_id") or deployment.get("id") or request.deployment_key)
-    response.headers["Location"] = f"{API_PREFIX}/deployments/{deployment_id}"
-    response.headers["ETag"] = resource_response(deployment, etag=True).headers["etag"]
-    return public_value(deployment)
-
-
-@router.get("/deployments", operation_id="list_deployments", tags=["deployments"], response_model=PageResponse)
-def list_deployments(
-    page_size: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
-    page_token: str | None = None,
-    principal: str = Depends(require_auth),
-):
-    return _page(
-        records(_service().list_deployments(), "items", "deployments", "data"),
-        route=f"{API_PREFIX}/deployments",
-        principal=principal,
-        filters={},
-        page_size=page_size,
-        page_token=page_token,
-        id_names=("deployment_id", "id", "deployment_key"),
-    )
-
-
-@router.get(
-    "/deployments/{deployment_id}", operation_id="get_deployment", tags=["deployments"], response_model=ResourceModel
-)
-def get_deployment(deployment_id: str, _principal=Depends(require_auth)):
-    return resource_response(_service().get_deployment(deployment_id), etag=True)
-
-
-@router.patch(
-    "/deployments/{deployment_id}", operation_id="update_deployment", tags=["deployments"], response_model=ResourceModel
-)
-def update_deployment(
-    deployment_id: str,
-    request: DesiredStateUpdate,
-    if_match: str | None = Header(default=None, alias="If-Match"),
-    _principal=Depends(require_auth),
-):
-    current = public_value(_service().get_deployment(deployment_id))
-    require_if_match(if_match, current)
-    if request.desired_state == "running":
-        result = _service().resume_deployment(deployment_id, reason=request.reason)
-    elif request.desired_state == "paused":
-        result = _service().pause_deployment(deployment_id, reason=request.reason)
-    elif request.desired_state == "failed":
-        result = _service().fail_deployment(deployment_id, reason=request.reason)
-    else:
-        result = start_operation("cancel_deployment", {"deployment_id": deployment_id, "reason": request.reason})
-    return resource_response(result, etag=True)
-
-
-@router.delete("/deployments/{deployment_id}", status_code=status.HTTP_204_NO_CONTENT, operation_id="delete_deployment", tags=["deployments"])
-def delete_deployment(
-    deployment_id: str,
-    if_match: str | None = Header(default=None, alias="If-Match"),
-    _principal=Depends(require_auth),
-):
-    current = public_value(_service().get_deployment(deployment_id))
-    require_if_match(if_match, current)
-    start_operation("delete_deployment", {"deployment_id": deployment_id})
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-
-@router.post(
-    "/deployments/{deployment_id}/promotions",
-    status_code=status.HTTP_201_CREATED,
-    operation_id="create_deployment_promotion",
-    tags=["deployments"],
-    response_model=ResourceModel,
-)
-def create_deployment_promotion(deployment_id: str, _principal=Depends(require_auth)):
-    return public_value(_service().promote_deployment(deployment_id))
-
-
-@router.post(
-    "/deployments/{deployment_id}/rollbacks",
-    status_code=status.HTTP_202_ACCEPTED,
-    operation_id="create_deployment_rollback",
-    tags=["deployments"],
-    response_model=ResourceModel,
-)
-def create_deployment_rollback(deployment_id: str, request: DeploymentRollback, _principal=Depends(require_auth)):
-    result = _service().rollback_deployment(
-        deployment_id,
-        version=request.target_version or "",
-        tag=request.tag,
-        reason=request.reason,
-    )
-    return resource_response(result, status_code=status.HTTP_202_ACCEPTED, location=f"{API_PREFIX}/deployments/{deployment_id}")
 
 
 @router.get("/models", operation_id="list_models", tags=["models"], response_model=PageResponse)

@@ -24,7 +24,7 @@ from mn_api.routes import runs as runtime_run_routes
 from mn_sdk import RuntimeService
 
 
-STABLE_JOB_CONTEXT_SCHEMA = "mn.mcp.stable_job_context.v1"
+JOB_CONTEXT_SCHEMA = "mn.mcp.job_context.v1"
 MAX_CONTEXT_BYTES = 256 * 1024
 MAX_EVIDENCE_RECORDS = 50
 _ACTIVE_RUN_STATUSES = {"pending", "validated", "running", "pausing", "resuming"}
@@ -61,7 +61,7 @@ _OMITTED_PAYLOAD_KEYS = {
     "stderr",
     "stdout",
 }
-_current_job_id: contextvars.ContextVar[str] = contextvars.ContextVar("stable_job_mcp_job_id", default="")
+_current_job_id: contextvars.ContextVar[str] = contextvars.ContextVar("job_mcp_job_id", default="")
 
 
 class JobMCPNotFoundError(RuntimeError):
@@ -211,11 +211,13 @@ def _identity(job_id: str, blueprint_id: str, descriptor: Mapping[str, Any]) -> 
     return identity
 
 
-def _schedule_for_job(service: RuntimeService, job_id: str) -> list[dict[str, Any]]:
-    payload = service.list_schedules(job_id=job_id)
+def _schedules_for_job(job: Mapping[str, Any], job_id: str) -> list[dict[str, Any]]:
+    payload = job.get("schedules")
+    schedules = payload if isinstance(payload, list) else []
     return [
         safe_context_value(schedule)
-        for schedule in records(payload, "items", "schedules", "data")
+        for schedule in schedules
+        if isinstance(schedule, Mapping)
         if _first_text(schedule.get("job_id"), schedule.get("jobId"), schedule.get("target_job_id")) == job_id
     ][:20]
 
@@ -297,7 +299,7 @@ def _fit_context(context: dict[str, Any]) -> dict[str, Any]:
         return context
 
     context["truncation"]["truncated"] = True
-    context.setdefault("warnings", []).append("The stable job context was truncated to the MCP response limit.")
+    context.setdefault("warnings", []).append("The job context was truncated to the MCP response limit.")
     evidence = context.get("evidence") if isinstance(context.get("evidence"), list) else []
     while evidence and _encoded_size(context) > MAX_CONTEXT_BYTES:
         del evidence[: max(1, len(evidence) // 2)]
@@ -327,7 +329,7 @@ def _fit_context(context: dict[str, Any]) -> dict[str, Any]:
     context["truncation"]["evidence_returned"] = len(context.get("evidence") or [])
     if _encoded_size(context) > MAX_CONTEXT_BYTES:
         context = {
-            "schema_version": STABLE_JOB_CONTEXT_SCHEMA,
+            "schema_version": JOB_CONTEXT_SCHEMA,
             "fetched_at": context.get("fetched_at"),
             "identity": context.get("identity"),
             "state": context.get("state"),
@@ -344,7 +346,7 @@ def _fit_context(context: dict[str, Any]) -> dict[str, Any]:
             "schedules": [],
             "latest_run": None,
             "evidence": [],
-            "warnings": ["The stable job context was truncated to the MCP response limit."],
+            "warnings": ["The job context was truncated to the MCP response limit."],
             "truncation": {
                 **context.get("truncation", {}),
                 "truncated": True,
@@ -354,31 +356,31 @@ def _fit_context(context: dict[str, Any]) -> dict[str, Any]:
     return context
 
 
-class StableJobContextProvider:
+class JobContextProvider:
     def _service(self) -> RuntimeService:
         return RuntimeService(state.client)
 
     def _job_and_blueprint(self, job_id: str) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
         try:
-            job = public_value(_as_record(self._service().get_stable_job(job_id)))
+            job = public_value(_as_record(self._service().get_job(job_id)))
         except Exception as error:
             if _is_not_found_error(error):
-                raise JobMCPNotFoundError("The requested stable job MCP is unavailable.") from error
-            raise JobMCPUnavailableError("Stable job context is temporarily unavailable.") from error
+                raise JobMCPNotFoundError("The requested job MCP is unavailable.") from error
+            raise JobMCPUnavailableError("Job context is temporarily unavailable.") from error
         if not job or _first_text(job.get("deleted_at")) or job.get("deleted") is True:
-            raise JobMCPNotFoundError("The requested stable job MCP is unavailable.")
+            raise JobMCPNotFoundError("The requested job MCP is unavailable.")
         blueprint_id = _first_text(job.get("blueprint_id"), job.get("blueprintId"))
         if not blueprint_id:
-            raise JobMCPNotFoundError("The requested stable job MCP is unavailable.")
+            raise JobMCPNotFoundError("The requested job MCP is unavailable.")
         try:
             _repo_root, blueprint = find_blueprint(state.refresh_config_from_env(), blueprint_id)
         except Exception as error:
             if _is_not_found_error(error):
-                raise JobMCPNotFoundError("The requested stable job MCP is unavailable.") from error
-            raise JobMCPUnavailableError("The stable job blueprint is temporarily unavailable.") from error
+                raise JobMCPNotFoundError("The requested job MCP is unavailable.") from error
+            raise JobMCPUnavailableError("The job blueprint is temporarily unavailable.") from error
         descriptor = _mcp_descriptor(blueprint)
         if not descriptor["enabled"]:
-            raise JobMCPNotFoundError("The requested stable job MCP is unavailable.")
+            raise JobMCPNotFoundError("The requested job MCP is unavailable.")
         return job, blueprint, descriptor
 
     def validate(self, job_id: str) -> None:
@@ -390,11 +392,7 @@ class StableJobContextProvider:
         service = self._service()
         blueprint_id = _first_text(job.get("blueprint_id"), job.get("blueprintId"))
         warnings: list[str] = []
-        try:
-            schedules = _schedule_for_job(service, job_id)
-        except Exception:
-            schedules = []
-            warnings.append("Schedule context is temporarily unavailable.")
+        schedules = _schedules_for_job(job, job_id)
         try:
             run = _latest_run_record(service, job, job_id)
         except Exception:
@@ -456,7 +454,7 @@ class StableJobContextProvider:
             "archived": state_name == "archived",
         }
         context = {
-            "schema_version": STABLE_JOB_CONTEXT_SCHEMA,
+            "schema_version": JOB_CONTEXT_SCHEMA,
             "fetched_at": _now_iso(),
             "identity": identity,
             "state": state_name,
@@ -491,8 +489,8 @@ class StableJobContextProvider:
         }
 
 
-class StableJobMCPGuard:
-    def __init__(self, app, provider: StableJobContextProvider) -> None:
+class JobMCPGuard:
+    def __init__(self, app, provider: JobContextProvider) -> None:
         self.app = app
         self.provider = provider
 
@@ -550,11 +548,11 @@ class StableJobMCPGuard:
             _current_job_id.reset(token)
 
 
-def create_stable_job_mcp(provider: StableJobContextProvider | None = None) -> tuple[FastMCP, Any]:
-    context_provider = provider or StableJobContextProvider()
+def create_job_mcp(provider: JobContextProvider | None = None) -> tuple[FastMCP, Any]:
+    context_provider = provider or JobContextProvider()
     server = FastMCP(
-        "MirrorNeuron stable job context",
-        instructions="Read-only supervisory context for the stable job bound by the MCP URL.",
+        "MirrorNeuron job context",
+        instructions="Read-only supervisory context for the job bound by the MCP URL.",
         streamable_http_path="/mcp",
         json_response=True,
         stateless_http=True,
@@ -564,12 +562,12 @@ def create_stable_job_mcp(provider: StableJobContextProvider | None = None) -> t
     def bound_job_id() -> str:
         job_id = _current_job_id.get()
         if not job_id:
-            raise JobMCPNotFoundError("The MCP request is not bound to a stable job.")
+            raise JobMCPNotFoundError("The MCP request is not bound to a job.")
         return job_id
 
     @server.tool(
         name="get_job_profile",
-        description="Read this stable job's identity, mission, safe configuration, schedule, and lifecycle state.",
+        description="Read this job's identity, mission, safe configuration, schedule, and lifecycle state.",
         structured_output=True,
     )
     def get_job_profile() -> dict[str, Any]:
@@ -585,16 +583,16 @@ def create_stable_job_mcp(provider: StableJobContextProvider | None = None) -> t
 
     @server.tool(
         name="get_job_context",
-        description="Read the combined stable job profile, schedule, and bounded latest-run context.",
+        description="Read the combined job profile, schedule, and bounded latest-run context.",
         structured_output=True,
     )
     def get_job_context(evidence_limit: int = MAX_EVIDENCE_RECORDS) -> dict[str, Any]:
         return context_provider.get_context(bound_job_id(), evidence_limit=evidence_limit)
 
-    return server, StableJobMCPGuard(server.streamable_http_app(), context_provider)
+    return server, JobMCPGuard(server.streamable_http_app(), context_provider)
 
 
-def stable_job_mcp_lifespan(server: FastMCP):
+def job_mcp_lifespan(server: FastMCP):
     @asynccontextmanager
     async def lifespan(_app):
         async with server.session_manager.run():
@@ -606,10 +604,10 @@ def stable_job_mcp_lifespan(server: FastMCP):
 __all__ = [
     "MAX_CONTEXT_BYTES",
     "MAX_EVIDENCE_RECORDS",
-    "STABLE_JOB_CONTEXT_SCHEMA",
-    "StableJobContextProvider",
+    "JOB_CONTEXT_SCHEMA",
+    "JobContextProvider",
     "context_state",
-    "create_stable_job_mcp",
+    "create_job_mcp",
     "safe_context_value",
-    "stable_job_mcp_lifespan",
+    "job_mcp_lifespan",
 ]

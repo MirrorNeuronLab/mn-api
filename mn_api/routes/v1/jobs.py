@@ -198,7 +198,7 @@ def create_job(
             )
         else:
             manifest_json, payloads = load_uploaded_bundle(str(request.bundle_id), state.BUNDLE_UPLOAD_ROOT)
-        return _service().create_stable_job(
+        return _service().create_job(
             manifest_json,
             payloads,
             bundle_dir=bundle_dir,
@@ -229,7 +229,7 @@ def list_jobs(
     principal: str = Depends(require_auth),
 ):
     return _upstream_page(
-        load=lambda size, token: _service().list_stable_jobs(
+        load=lambda size, token: _service().list_jobs(
             include_archived=include_archived,
             page_size=size,
             page_token=token,
@@ -246,7 +246,7 @@ def list_jobs(
 
 @router.get("/jobs/{job_id}", operation_id="get_job", tags=["jobs"], response_model=ResourceModel)
 def get_job(job_id: str, _principal=Depends(require_auth)):
-    return resource_response(_service().get_stable_job(job_id), etag=True)
+    return resource_response(_service().get_job(job_id), etag=True)
 
 
 @router.patch("/jobs/{job_id}", operation_id="update_job", tags=["jobs"], response_model=ResourceModel)
@@ -256,15 +256,15 @@ def update_job(
     if_match: str | None = Header(default=None, alias="If-Match"),
     _principal=Depends(require_auth),
 ):
-    current = public_value(_service().get_stable_job(job_id))
+    current = public_value(_service().get_job(job_id))
     require_if_match(if_match, current)
     if request.status == "archived":
-        result = _service().archive_stable_job(job_id, expected_revision=_revision(current))
+        result = _service().archive_job(job_id, expected_revision=_revision(current))
     else:
         attrs = {key: value for key, value in request.model_dump(exclude_none=True).items() if key != "status"}
         if request.status:
             attrs["status"] = request.status
-        result = _service().update_stable_job(job_id, attrs, expected_revision=_revision(current))
+        result = _service().update_job(job_id, attrs, expected_revision=_revision(current))
     return resource_response(result, etag=True)
 
 
@@ -275,10 +275,10 @@ def replace_job_bundle(
     if_match: str | None = Header(default=None, alias="If-Match"),
     _principal=Depends(require_auth),
 ):
-    current = public_value(_service().get_stable_job(job_id))
+    current = public_value(_service().get_job(job_id))
     require_if_match(if_match, current)
     manifest_json, payloads = load_uploaded_bundle(request.bundle_id, state.BUNDLE_UPLOAD_ROOT)
-    result = _service().update_stable_job(
+    result = _service().update_job(
         job_id,
         {},
         manifest_json=manifest_json,
@@ -294,9 +294,9 @@ def delete_job(
     if_match: str | None = Header(default=None, alias="If-Match"),
     _principal=Depends(require_auth),
 ):
-    current = public_value(_service().get_stable_job(job_id))
+    current = public_value(_service().get_job(job_id))
     require_if_match(if_match, current)
-    _service().delete_stable_job(job_id, confirmed=True, expected_revision=_revision(current))
+    _service().delete_job(job_id, confirmed=True, expected_revision=_revision(current))
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -317,7 +317,7 @@ def create_job_data_reset(
         route=f"{API_PREFIX}/jobs/{job_id}/data-resets",
         key=idempotency_key,
         body={"job_id": job_id},
-        call=lambda: start_operation("reset_stable_job_data", {"job_id": job_id}),
+        call=lambda: start_operation("reset_job_data", {"job_id": job_id}),
         status_code=status.HTTP_202_ACCEPTED,
         location=lambda result: f"{API_PREFIX}/operations/{result.get('operation_id') or result.get('id')}",
     )
@@ -359,7 +359,7 @@ def create_job_run(
 
 def _all_runs() -> list[dict[str, Any]]:
     runs: list[dict[str, Any]] = []
-    jobs = records(_service().list_stable_jobs(include_archived=True), "items", "jobs", "data")
+    jobs = records(_service().list_jobs(include_archived=True), "items", "jobs", "data")
     for job in jobs:
         job_id = str(job.get("job_id") or "")
         if job_id:

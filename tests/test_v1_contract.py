@@ -22,12 +22,12 @@ class CanonicalRuntime:
         self.calls: list[tuple] = []
         self.run_status = "completed"
 
-    def create_stable_job(self, _manifest, _payloads, **kwargs):
-        self.calls.append(("create_stable_job", kwargs))
+    def create_job(self, _manifest, _payloads, **kwargs):
+        self.calls.append(("create_job", kwargs))
         return json.dumps({"version": 2, "job_id": kwargs.get("job_id") or "job-1", "status": "active", "revision": 1})
 
-    def list_stable_jobs(self, *, include_archived=False, page_size=50, page_token=""):
-        self.calls.append(("list_stable_jobs", include_archived))
+    def list_jobs(self, *, include_archived=False, page_size=50, page_token=""):
+        self.calls.append(("list_jobs", include_archived))
         offset = int(page_token or 0)
         values = [
             {"job_id": f"job-{index:03}", "created_at": f"2026-01-01T00:{index:02}:00Z"}
@@ -42,18 +42,18 @@ class CanonicalRuntime:
             }
         )
 
-    def get_stable_job(self, job_id):
+    def get_job(self, job_id):
         return json.dumps({"job_id": job_id, "status": "active", "revision": 1})
 
-    def archive_stable_job(self, job_id, **_kwargs):
+    def archive_job(self, job_id, **_kwargs):
         return json.dumps({"job_id": job_id, "status": "archived", "revision": 2})
 
-    def delete_stable_job(self, job_id, **_kwargs):
-        self.calls.append(("delete_stable_job", job_id))
+    def delete_job(self, job_id, **_kwargs):
+        self.calls.append(("delete_job", job_id))
         return json.dumps({"job_id": job_id, "deleted": True})
 
-    def update_stable_job(self, job_id, attrs, **_kwargs):
-        self.calls.append(("update_stable_job", job_id, attrs))
+    def update_job(self, job_id, attrs, **_kwargs):
+        self.calls.append(("update_job", job_id, attrs))
         return json.dumps({"job_id": job_id, "status": "active", "revision": 2, **attrs})
 
     def start_run(self, job_id, **kwargs):
@@ -173,7 +173,6 @@ def _client(monkeypatch) -> tuple[TestClient, CanonicalRuntime]:
     )
     manifest = '{"apiVersion":"mn.workflow/v2","graph_id":"g","nodes":[]}'
     monkeypatch.setattr(jobs, "load_uploaded_bundle", lambda *_args: (manifest, {}))
-    monkeypatch.setattr(infrastructure, "load_uploaded_bundle", lambda *_args: (manifest, {}))
     return TestClient(create_app()), runtime
 
 
@@ -191,7 +190,7 @@ def test_openapi_is_only_canonical_v1_and_documents_auth():
     ]
     assert len(operation_ids) == len(set(operation_ids))
     assert schema["components"]["securitySchemes"]["HTTPBearer"]["scheme"] == "bearer"
-    for path in ("/api/v1/jobs", "/api/v1/runs", "/api/v1/schedules", "/api/v1/operations"):
+    for path in ("/api/v1/jobs", "/api/v1/runs", "/api/v1/operations"):
         success_schema = paths[path]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
         assert success_schema["$ref"].endswith("/PageResponse")
 
@@ -202,7 +201,16 @@ def test_health_capability_and_removed_routes(monkeypatch):
     assert health.status_code == 200
     assert health.json() == {"status": "ok", "api_contract": API_CONTRACT, "auth": "disabled"}
 
-    for path in ("/api/v2/health", "/api/v1/runtime-runs", "/api/v1/realtime"):
+    for path in (
+        "/api/v2/health",
+        "/api/v1/runtime-runs",
+        "/api/v1/realtime",
+        "/api/v1/schedules",
+        "/api/v1/trigger-events",
+        "/api/v1/deployments",
+        "/api/v1/run-cleanups",
+        "/api/v1/run-cancellations",
+    ):
         response = client.get(path)
         assert response.status_code == 404
         assert response.headers["content-type"] == "application/problem+json"
@@ -523,10 +531,6 @@ def test_canonical_resource_happy_paths(monkeypatch):
         "/api/v1/runs",
         "/api/v1/jobs/job-1/runs",
         "/api/v1/runs/run-1",
-        "/api/v1/schedules",
-        "/api/v1/trigger-events",
-        "/api/v1/deployments",
-        "/api/v1/deployments/deployment-1",
         "/api/v1/models",
         "/api/v1/models/model-1",
         "/api/v1/model-remotes",
@@ -689,7 +693,7 @@ def test_run_monitor_overlays_canonical_terminal_status(monkeypatch):
     assert response.json()["summary"]["status"] == "completed"
 
 
-def test_canonical_run_detail_operation_schedule_and_infrastructure(monkeypatch):
+def test_canonical_run_detail_and_operations(monkeypatch):
     client, _runtime = _client(monkeypatch)
     _patch_canonical_projections(monkeypatch)
 
@@ -726,39 +730,6 @@ def test_canonical_run_detail_operation_schedule_and_infrastructure(monkeypatch)
     stream = client.get("/api/v1/runs/run-1/events/stream?interval=0.25")
     assert stream.status_code == 200
     assert "event: run.completed" in stream.text
-
-    for route, key in (("run-cleanups", "clear-1"), ("run-cancellations", "cancel-all-1")):
-        assert client.post(f"/api/v1/{route}", headers={"Idempotency-Key": key}, json={}).status_code == 202
-    listed = client.get("/api/v1/operations")
-    assert listed.status_code == 200
-    operation_id = listed.json()["items"][0]["operation_id"]
-    assert client.get(f"/api/v1/operations/{operation_id}").status_code == 200
-    operation_stream = client.get(f"/api/v1/operations/{operation_id}/events/stream")
-    assert operation_stream.status_code == 200
-    assert "event: operation.completed" in operation_stream.text
-
-    schedule = client.get("/api/v1/schedules/schedule-1")
-    match = {"If-Match": schedule.headers["etag"]}
-    assert client.patch("/api/v1/schedules/schedule-1", headers=match, json={"desired_state": "paused"}).status_code == 200
-    schedule = client.get("/api/v1/schedules/schedule-1")
-    assert client.delete("/api/v1/schedules/schedule-1", headers={"If-Match": schedule.headers["etag"]}).status_code == 204
-    assert client.post(
-        "/api/v1/schedules/schedule-1/dispatches",
-        headers={"Idempotency-Key": "dispatch-1"},
-        json={},
-    ).status_code == 202
-    assert client.post("/api/v1/trigger-events", json={"event_type": "invoice.received"}).status_code == 201
-
-    created_deployment = client.post("/api/v1/deployments", json={"bundle_id": "bundle-1", "deployment_key": "deployment-1"})
-    assert created_deployment.status_code == 201
-    deployment = client.get("/api/v1/deployments/deployment-1")
-    assert client.patch(
-        "/api/v1/deployments/deployment-1",
-        headers={"If-Match": deployment.headers["etag"]},
-        json={"desired_state": "paused"},
-    ).status_code == 200
-    assert client.post("/api/v1/deployments/deployment-1/promotions").status_code == 201
-    assert client.post("/api/v1/deployments/deployment-1/rollbacks", json={}).status_code == 202
 
     assert client.put(
         "/api/v1/models/model-1/installation",

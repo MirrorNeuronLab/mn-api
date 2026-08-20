@@ -67,8 +67,8 @@ from mn_api.run_store import stream_jsonl_files as _stream_jsonl_files
 from mn_api.schemas import RestoreJobBackupRequest, SubmitJobRequest
 
 
-# The route functions in this module are retained as internal projections used
-# by the v2 monitor adapter. This router is intentionally not mounted.
+# These helpers are retained as internal projections used by the v1 run
+# adapter. This module is intentionally not mounted as a router.
 _MAX_COMPACT_STRING = 2000
 _MAX_COMPACT_LIST = 25
 _MAX_STATUS_RUNTIME_EVENTS = 25
@@ -99,124 +99,7 @@ _IMMEDIATE_PROGRESS_EVENTS = {
 }
 
 
-def submit_job(req: SubmitJobRequest, _auth=Depends(require_auth)):
-    try:
-        bundle_dir: str | None = None
-        if req.bundle_path:
-            manifest_json, payloads_bytes = load_uploaded_bundle(req.bundle_path, state.BUNDLE_UPLOAD_ROOT)
-            bundle_dir = req.bundle_path
-            state.close_client()
-            validation_response = _validate_job_bundle(req.bundle_path, manifest_json, force=req.force)
-            if validation_response is not None:
-                return validation_response
-        elif req.manifest_json is not None:
-            manifest_json = req.manifest_json
-            payloads_bytes = {key: value.encode("utf-8") for key, value in req.payloads.items()} if req.payloads else {}
-            state.close_client()
-            validation_response = _validate_job_manifest(manifest_json, force=req.force)
-            if validation_response is not None:
-                return validation_response
-        else:
-            raise HTTPException(
-                status_code=422,
-                detail="manifest_json or _bundle_path is required",
-            )
 
-        return RuntimeService(state.client).submit_job(
-            manifest_json,
-            payloads_bytes,
-            bundle_dir=bundle_dir,
-            run_id=_submission_run_id(manifest_json),
-            force=req.force,
-        )
-    except HTTPException:
-        raise
-    except Exception as exc:
-        return handle_grpc_error(exc)
-
-
-def _validate_job_bundle(bundle_path: str, manifest_json: str, *, force: bool):
-    manifest = _decode_manifest(manifest_json, root_dir=Path(bundle_path))
-    spec_issues = (
-        validate_requirements_spec_issues(manifest)
-        + validate_resource_spec_issues(manifest)
-        + validate_input_validation_spec_issues(manifest)
-    )
-    if spec_issues:
-        return validation_problem_response(
-            make_validation_report(spec_issues),
-            status_code=422,
-            error="manifest_validation_failed",
-            title="Manifest validation failed",
-            detail="Fix the highlighted manifest fields and submit again.",
-        )
-    requirements = run_hardware_requirements_validation(
-        manifest,
-        resource_report=runtime_resource_report,
-        force=force,
-    )
-    if not requirements.get("ok"):
-        return validation_problem_response(
-            requirements,
-            status_code=412,
-            error="requirements_not_met",
-            title="Runtime node required",
-            detail="Add or connect a runtime node that meets this job's hardware requirements, then submit again.",
-        )
-    if force:
-        return None
-    result = run_input_validation(Path(bundle_path), manifest)
-    if not result.get("ok"):
-        return validation_problem_response(
-            result,
-            status_code=422,
-            error="input_validation_failed",
-            title="Input validation failed",
-            detail="Fix the highlighted input fields and submit again.",
-        )
-    return None
-
-
-def _validate_job_manifest(manifest_json: str, *, force: bool):
-    manifest = _decode_manifest(manifest_json, root_dir=Path.cwd())
-    spec_issues = (
-        validate_requirements_spec_issues(manifest)
-        + validate_resource_spec_issues(manifest)
-        + validate_input_validation_spec_issues(manifest)
-    )
-    if spec_issues:
-        return validation_problem_response(
-            make_validation_report(spec_issues),
-            status_code=422,
-            error="manifest_validation_failed",
-            title="Manifest validation failed",
-            detail="Fix the highlighted manifest fields and submit again.",
-        )
-    requirements = run_hardware_requirements_validation(
-        manifest,
-        resource_report=runtime_resource_report,
-        force=force,
-    )
-    if not requirements.get("ok"):
-        return validation_problem_response(
-            requirements,
-            status_code=412,
-            error="requirements_not_met",
-            title="Runtime node required",
-            detail="Add or connect a runtime node that meets this job's hardware requirements, then submit again.",
-        )
-    if force:
-        return None
-    validation = run_input_validation(Path.cwd(), manifest)
-    if not validation.get("ok"):
-        return validation_problem_response(
-            validation,
-            status_code=422,
-            error="input_validation_failed",
-            title="Input validation failed",
-            detail="Fix the highlighted input fields and submit again.",
-        )
-    return None
 
 
 def _decode_manifest(manifest_json: str, *, root_dir: Path | None = None) -> dict:
@@ -234,23 +117,6 @@ def _decode_manifest(manifest_json: str, *, root_dir: Path | None = None) -> dic
     return manifest
 
 
-def _submission_run_id(manifest_json: str) -> str | None:
-    try:
-        manifest = _decode_manifest(manifest_json)
-    except Exception:
-        return None
-    metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
-    for value in (
-        manifest.get("run_id"),
-        metadata.get("blueprint_run_id"),
-        metadata.get("run_id"),
-        _nested_get(metadata, ["mn_cli", "blueprint_run_id"]),
-        _nested_get(metadata, ["mn_cli", "run_id"]),
-    ):
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return None
-
 
 def _nested_get(value: dict[str, Any], path: list[str]) -> Any:
     cursor: Any = value
@@ -261,32 +127,7 @@ def _nested_get(value: dict[str, Any], path: list[str]) -> Any:
     return cursor
 
 
-def list_jobs(limit: int = 20, include_terminal: bool = True, _auth=Depends(require_auth)):
-    try:
-        jobs_json = state.client.list_jobs(limit, include_terminal)
-        return json.loads(jobs_json)
-    except Exception as exc:
-        return handle_grpc_error(exc)
 
-
-def cleanup_jobs(_auth=Depends(require_auth)):
-    try:
-        return _start_operation("clear_jobs")
-    except Exception as exc:
-        if _is_clear_jobs_admin_token_error(exc):
-            state.close_client()
-            try:
-                return _start_operation("clear_jobs")
-            except Exception as retry_exc:
-                return handle_grpc_error(retry_exc)
-        return handle_grpc_error(exc)
-
-
-def cancel_all_jobs(_auth=Depends(require_auth)):
-    try:
-        return _start_operation("cancel_all_jobs")
-    except Exception as exc:
-        return handle_grpc_error(exc)
 
 
 def start_operation(kind: str, options: dict[str, Any] | None = None, _auth=Depends(require_auth)):
@@ -333,13 +174,6 @@ def _start_operation(kind: str, options: dict[str, Any] | None = None) -> dict[s
     payload.setdefault("version", 2)
     return payload
 
-
-def _is_clear_jobs_admin_token_error(exc: Exception) -> bool:
-    if not isinstance(exc, grpc.RpcError):
-        return False
-    if exc.code() != grpc.StatusCode.PERMISSION_DENIED:
-        return False
-    return "MN_GRPC_ADMIN_TOKEN" in str(exc.details())
 
 
 def unfinished_jobs(_auth=Depends(require_auth)):
@@ -1607,72 +1441,7 @@ def replay_job_dead_letter(job_id: str, index: int, _auth=Depends(require_auth))
     )
 
 
-def cancel_job(job_id: str, _auth=Depends(require_auth)):
-    try:
-        result = RuntimeService(state.client).cancel_job(job_id)
-        cleanup_blueprint_processes_for_job(job_id)
-        return result
-    except Exception as exc:
-        cleanup_blueprint_processes_for_job(job_id)
-        return handle_grpc_error(exc)
 
 
-def export_job_backup(job_id: str, _auth=Depends(require_auth)):
-    try:
-        backup_json, bundle_files = state.client.export_job_backup(job_id)
-        return {
-            "job_id": job_id,
-            "backup_json": backup_json,
-            "bundle_files": {path: base64.b64encode(content).decode("ascii") for path, content in bundle_files.items()},
-            "encoding": "base64",
-        }
-    except Exception as exc:
-        return handle_grpc_error(exc)
 
 
-def restore_job_backup(req: RestoreJobBackupRequest, _auth=Depends(require_auth)):
-    try:
-        bundle_files = {path: base64.b64decode(content.encode("ascii")) for path, content in req.bundle_files.items()}
-        return json.loads(
-            state.client.restore_job_backup(
-                req.backup_json,
-                bundle_files,
-                blueprint_id=req.blueprint_id,
-                run_id=req.run_id,
-            )
-        )
-    except Exception as exc:
-        return handle_grpc_error(exc)
-
-
-def pause_job(job_id: str, _auth=Depends(require_auth)):
-    try:
-        return RuntimeService(state.client).pause_job(job_id)
-    except Exception as exc:
-        legacy = _legacy_job_control_error(exc)
-        if legacy is not None:
-            return legacy
-        return handle_grpc_error(exc)
-
-
-def resume_job(job_id: str, _auth=Depends(require_auth)):
-    try:
-        return RuntimeService(state.client).resume_job(job_id)
-    except Exception as exc:
-        legacy = _legacy_job_control_error(exc)
-        if legacy is not None:
-            return legacy
-        return handle_grpc_error(exc)
-
-
-def _legacy_job_control_error(exc: Exception) -> JSONResponse | None:
-    details = getattr(exc, "details", None)
-    if not callable(details):
-        return None
-    try:
-        detail = str(details())
-    except Exception:
-        return None
-    if not detail:
-        return None
-    return JSONResponse(status_code=500, content={"version": 2, "error": detail})

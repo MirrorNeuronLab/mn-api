@@ -17,20 +17,20 @@ from mn_api.errors import (
     request_validation_exception_handler,
     unexpected_exception_handler,
 )
-from mn_api.job_mcp import create_stable_job_mcp, stable_job_mcp_lifespan
+from mn_api.job_mcp import create_job_mcp, job_mcp_lifespan
 from mn_sdk.errors import AppError
 from mn_api.routes import bundles
-from mn_api.routes.v1 import blueprints, infrastructure, jobs, operations, schedules, system
+from mn_api.routes.v1 import blueprints, infrastructure, jobs, operations, system
 
 
 def create_app() -> FastAPI:
-    job_mcp_server, job_mcp_app = create_stable_job_mcp()
+    job_mcp_server, job_mcp_app = create_job_mcp()
     app = FastAPI(
         title="MirrorNeuron API",
         version="1.0",
         openapi_url="/api/v1/openapi.json",
         responses=COMMON_PROBLEM_RESPONSES,
-        lifespan=stable_job_mcp_lifespan(job_mcp_server),
+        lifespan=job_mcp_lifespan(job_mcp_server),
     )
 
     app.add_exception_handler(AppError, app_error_exception_handler)
@@ -63,7 +63,6 @@ def create_app() -> FastAPI:
     app.include_router(bundles.router)
     app.include_router(jobs.router)
     app.include_router(operations.router)
-    app.include_router(schedules.router)
     app.include_router(infrastructure.router)
-    app.mount("/api/v1/jobs/{job_id}", job_mcp_app, name="stable-job-mcp")
+    app.mount("/api/v1/jobs/{job_id}", job_mcp_app, name="job-mcp")
     return app

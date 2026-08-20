@@ -10,8 +10,8 @@ from mn_api import state
 from mn_api.app import create_app
 from mn_api.job_mcp import (
     MAX_CONTEXT_BYTES,
-    STABLE_JOB_CONTEXT_SCHEMA,
-    StableJobContextProvider,
+    JOB_CONTEXT_SCHEMA,
+    JobContextProvider,
     context_state,
     safe_context_value,
 )
@@ -42,9 +42,8 @@ class MCPRuntime:
             "job-disabled": {"job_id": "job-disabled", "blueprint_id": "disabled-blueprint", "status": "active"},
         }
         self.runs: dict[str, list[dict]] = {"job-1": [], "job-2": []}
-        self.schedules: list[dict] = []
 
-    def get_stable_job(self, job_id):
+    def get_job(self, job_id):
         if job_id not in self.jobs:
             raise HTTPException(status_code=404, detail="missing")
         return json.dumps(self.jobs[job_id])
@@ -59,10 +58,6 @@ class MCPRuntime:
                 if run.get("run_id") == run_id:
                     return json.dumps(run)
         raise HTTPException(status_code=404, detail="missing")
-
-    def list_schedules(self, **_kwargs):
-        return json.dumps({"items": self.schedules})
-
 
 def _blueprint(_config, blueprint_id):
     enabled = blueprint_id != "disabled-blueprint"
@@ -150,7 +145,7 @@ def test_protocol_lists_only_stable_read_tools_and_reads_never_run_context(monke
         ).json()
 
     context = called["result"]["structuredContent"]
-    assert context["schema_version"] == STABLE_JOB_CONTEXT_SCHEMA
+    assert context["schema_version"] == JOB_CONTEXT_SCHEMA
     assert context["identity"] == {"job_id": "job-1", "blueprint_id": "chat-blueprint", "goal_id": "goal-1"}
     assert context["state"] == "never_run"
     assert context["latest_run"] is None
@@ -208,7 +203,9 @@ def test_context_states_latest_result_partial_warning_and_bounds(monkeypatch):
             "completed_at": "2026-08-13T12:05:00Z",
         }
     ]
-    runtime.schedules = [{"schedule_id": "schedule-1", "job_id": "job-1", "status": "running"}]
+    runtime.jobs["job-1"]["schedules"] = [
+        {"schedule_id": "schedule-1", "job_id": "job-1", "status": "running"}
+    ]
     runtime.jobs["job-1"]["resolved_configuration"] = {f"field_{index}": "x" * 10_000 for index in range(200)}
     _configure(monkeypatch, runtime)
     monkeypatch.setattr(
@@ -228,7 +225,7 @@ def test_context_states_latest_result_partial_warning_and_bounds(monkeypatch):
         lambda _run_id, _principal: {"summary": "Finished safely", "access_token": "must-not-leak"},
     )
 
-    context = StableJobContextProvider().get_context("job-1", evidence_limit=50)
+    context = JobContextProvider().get_context("job-1", evidence_limit=50)
     assert context["state"] == "scheduled_waiting"
     assert context["latest_run"]["result"] == {"summary": "Finished safely"}
     assert len(context["evidence"]) <= 50
@@ -240,7 +237,7 @@ def test_context_states_latest_result_partial_warning_and_bounds(monkeypatch):
         "_workflow_progress_snapshot_for_job",
         lambda _run_id: (_ for _ in ()).throw(RuntimeError("offline")),
     )
-    partial = StableJobContextProvider().get_context("job-1")
+    partial = JobContextProvider().get_context("job-1")
     assert partial["profile"]["identity"]["job_id"] == "job-1"
     assert any("Workflow evidence" in warning for warning in partial["warnings"])
 
