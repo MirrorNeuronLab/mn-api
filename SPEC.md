@@ -106,20 +106,24 @@ model placement algorithms, blueprint domain behavior, or the browser UI.
 - Stable-job creation may resolve a catalog `blueprint_id`; only API-trusted
   catalog sources or uploaded bundle roots are read from the host filesystem.
   Caller-provided arbitrary host paths are rejected.
-- An MCP-enabled catalog job exposes the read-only tools `get_job_profile`,
-  `get_latest_run`, and `get_job_context` through Streamable HTTP. Tool inputs
-  cannot select another job. Responses use
-  `mn.mcp.stable_job_context.v1`, contain at most 50 evidence records and 256
-  KiB, and retain the stable profile with warnings when latest-run data cannot
-  be read. Never-run, running, paused, scheduled-waiting, idle, and archived
-  jobs remain readable; deleted, unknown, and non-enabled jobs share a
-  sanitized not-found response.
+- A legacy MCP-enabled catalog Job exposes the read-only tools
+  `get_job_profile`, `get_latest_run`, and `get_job_context` through Streamable
+  HTTP. A response-enabled Job exposes those tools plus `ask_job`. Tool inputs
+  cannot select another Job. Context responses use `mn.mcp.job_context.v1`,
+  contain at most 50 evidence records and 256 KiB, and retain the stable
+  profile with warnings when latest-run data cannot be read. Never-run,
+  running, paused, scheduled-waiting, idle, and archived Jobs remain readable;
+  deleted, unknown, and non-enabled Jobs share a sanitized not-found response.
+- `ask_job` accepts an 8,000-character question, an optional UUID conversation
+  ID, and an optional 128-character request ID. It returns the bounded
+  `mn.mcp.job_answer.v1` contract through Core's owner-routed unary query,
+  never creates a Run, and has no REST, SSE, or UI chat equivalent.
 - The stable supervisory MCP excludes credentials, secret/environment values,
   raw logs, host paths, arbitrary files, and unrestricted artifact bodies. It
   cannot mutate job, run, schedule, approval, or configuration state.
-- Core's discovered `mn-job-collaboration` service remains a separate,
-  run-scoped peer-collaboration surface. `mn-api` does not change its active-run
-  lifecycle or human-approval behavior.
+- Legacy Core `mn-job-collaboration` services remain separate, run-scoped peer
+  surfaces for blueprints that have not opted into the definition response
+  service.
 
 The route definitions and generated OpenAPI document are authoritative for
 exact fields and paths. `tests/test_v1_contract.py` protects consumer-visible

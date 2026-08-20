@@ -265,8 +265,14 @@ def _job_record_matches(job_record: dict[str, Any], job_id: str) -> bool:
     candidates = [
         job_record.get("job_id"),
         job_record.get("id"),
+        job_record.get("run_id"),
+        job_record.get("runtime_run_id"),
+        job_record.get("blueprint_run_id"),
         nested.get("job_id"),
         nested.get("id"),
+        nested.get("run_id"),
+        nested.get("runtime_run_id"),
+        nested.get("blueprint_run_id"),
     ]
     return any(str(candidate) == job_id for candidate in candidates if candidate)
 
@@ -1440,7 +1446,6 @@ def replay_job_dead_letter(job_id: str, index: int, _auth=Depends(require_auth))
             "message": "core replay is available in-process; gRPC replay will be added to expose it over REST",
         },
     )
-
 
 
 

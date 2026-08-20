@@ -2,11 +2,9 @@ from __future__ import annotations
 
 import contextvars
 import hmac
-import json
-import re
-import urllib.parse
+import os
+import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 from typing import Any, Mapping
 
 import anyio
@@ -18,49 +16,28 @@ from mn_api import state
 from mn_api.blueprints import find_blueprint
 from mn_api.config import auth_enabled
 from mn_api.errors import problem_response
-from mn_api.public import decode, public_value, records
+from mn_api.public import decode, public_value
 from mn_api.routes import jobs as runtime_job_routes
 from mn_api.routes import runs as runtime_run_routes
-from mn_sdk import RuntimeService
+from mn_sdk import RuntimeConfig, RuntimeService
+from mn_sdk.staged_artifacts import is_staged_artifact_ref, resolve_json_reference
+from mn_sdk.job_context import (
+    JOB_CONTEXT_SCHEMA,
+    MAX_CONTEXT_BYTES,
+    MAX_EVIDENCE_RECORDS,
+    MAX_RECENT_RUNS,
+    assemble_job_context,
+    context_state as sdk_context_state,
+    evidence_from_workflow as sdk_evidence_from_workflow,
+    fit_context as sdk_fit_context,
+    now_iso as sdk_now_iso,
+    run_summary as sdk_run_summary,
+    safe_context_value as sdk_safe_context_value,
+    safe_text as sdk_safe_text,
+)
 
 
-JOB_CONTEXT_SCHEMA = "mn.mcp.job_context.v1"
-MAX_CONTEXT_BYTES = 256 * 1024
-MAX_EVIDENCE_RECORDS = 50
-_ACTIVE_RUN_STATUSES = {"pending", "validated", "running", "pausing", "resuming"}
-_TERMINAL_RUN_STATUSES = {"completed", "failed", "cancelled", "canceled", "deleted"}
 _ACTIVE_SCHEDULE_STATUSES = {"active", "enabled", "running", "scheduled"}
-_SENSITIVE_KEY_PARTS = {
-    "api_key",
-    "apikey",
-    "authorization",
-    "cookie",
-    "credential",
-    "password",
-    "private_key",
-    "secret",
-    "session",
-    "token",
-}
-_PATH_KEY_PARTS = {"bundle_dir", "bundle_path", "host_path", "local_path", "run_dir", "runs_root"}
-_OMITTED_PAYLOAD_KEYS = {
-    "artifact_bodies",
-    "artifact_body",
-    "blob",
-    "body",
-    "bytes",
-    "content",
-    "contents",
-    "env",
-    "environment",
-    "file_contents",
-    "files",
-    "logs",
-    "raw",
-    "raw_logs",
-    "stderr",
-    "stdout",
-}
 _current_job_id: contextvars.ContextVar[str] = contextvars.ContextVar("job_mcp_job_id", default="")
 
 
@@ -85,74 +62,16 @@ def _first_text(*values: Any) -> str:
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-def _normalized_key(value: Any) -> str:
-    return re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
-
-
-def _sensitive_key(key: Any) -> bool:
-    normalized = _normalized_key(key)
-    return any(part == normalized or part in normalized for part in _SENSITIVE_KEY_PARTS)
-
-
-def _path_key(key: Any) -> bool:
-    normalized = _normalized_key(key)
-    return normalized == "path" or normalized.endswith("_path") or normalized in _PATH_KEY_PARTS
-
-
-def _omitted_payload_key(key: Any) -> bool:
-    normalized = _normalized_key(key)
-    return (
-        normalized in _OMITTED_PAYLOAD_KEYS
-        or normalized.endswith("_environment")
-        or normalized.endswith("_logs")
-    )
+    return sdk_now_iso()
 
 
 def _safe_text(value: Any, *, limit: int = 4_000) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return ""
-    lowered = text.lower()
-    if lowered.startswith("file://") or text.startswith("/") or re.match(r"^[a-zA-Z]:[\\/]", text):
-        return "<redacted-path>"
-    if "://" in text:
-        try:
-            parsed = urllib.parse.urlsplit(text)
-            if parsed.username is not None or parsed.password is not None:
-                return "<redacted-credential-url>"
-        except ValueError:
-            return "<redacted-url>"
-    return f"{text[: limit - 3]}..." if len(text) > limit else text
+    return sdk_safe_text(value, limit=limit)
 
 
 def safe_context_value(value: Any, *, depth: int = 0) -> Any:
     """Return a bounded, secret- and host-path-free MCP projection."""
-    if depth >= 12:
-        return "<truncated>"
-    if isinstance(value, Mapping):
-        result: dict[str, Any] = {}
-        for raw_key, item in list(value.items())[:100]:
-            key = str(raw_key)
-            if (
-                key == "version"
-                or key.startswith("_")
-                or _sensitive_key(key)
-                or _path_key(key)
-                or _omitted_payload_key(key)
-            ):
-                continue
-            result[key] = safe_context_value(item, depth=depth + 1)
-        return result
-    if isinstance(value, (list, tuple)):
-        return [safe_context_value(item, depth=depth + 1) for item in list(value)[:50]]
-    if isinstance(value, str):
-        return _safe_text(value)
-    if value is None or isinstance(value, (bool, int, float)):
-        return value
-    return str(value)[:4_000]
+    return sdk_safe_context_value(value, depth=depth)
 
 
 def _descriptor_sources(blueprint: Mapping[str, Any]) -> list[Mapping[str, Any]]:
@@ -185,6 +104,24 @@ def _mcp_descriptor(blueprint: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _response_service_declared(blueprint: Mapping[str, Any]) -> bool:
+    value = blueprint.get("response_service")
+    return isinstance(value, Mapping) and value.get("enabled") is True
+
+
+def _response_service_enabled(job: Mapping[str, Any], blueprint: Mapping[str, Any]) -> bool:
+    projected = job.get("response_service")
+    if isinstance(projected, Mapping):
+        state_name = _first_text(projected.get("state")).lower()
+        if state_name == "disabled":
+            return False
+        if state_name in {"starting", "ready", "degraded", "failed"}:
+            return True
+        if projected.get("enabled") is True:
+            return True
+    return _response_service_declared(blueprint)
+
+
 def _blueprint_field(blueprint: Mapping[str, Any], *keys: str) -> Any:
     metadata = blueprint.get("metadata") if isinstance(blueprint.get("metadata"), Mapping) else {}
     product_value = blueprint.get("product") or metadata.get("product")
@@ -202,6 +139,12 @@ def _is_not_found_error(error: Exception) -> bool:
     code = _first_text(getattr(error, "code", None)).lower()
     message = str(error).lower()
     return status_code == 404 or "not_found" in code or "not found" in message
+
+
+def _is_request_conflict_error(error: Exception) -> bool:
+    code = _first_text(getattr(error, "code", None), getattr(error, "status", None)).lower()
+    message = str(error).lower()
+    return "already_exists" in code or "request_id_conflict" in message
 
 
 def _identity(job_id: str, blueprint_id: str, descriptor: Mapping[str, Any]) -> dict[str, Any]:
@@ -222,52 +165,82 @@ def _schedules_for_job(job: Mapping[str, Any], job_id: str) -> list[dict[str, An
     ][:20]
 
 
-def _latest_run_record(service: RuntimeService, job: Mapping[str, Any], job_id: str) -> dict[str, Any] | None:
+def _recent_run_records(service: RuntimeService, job: Mapping[str, Any], job_id: str) -> list[dict[str, Any]]:
+    recent_ids = job.get("recent_run_ids")
+    if isinstance(recent_ids, list) and recent_ids:
+        records_by_id: list[dict[str, Any]] = []
+        for run_id in recent_ids[:MAX_RECENT_RUNS]:
+            if _first_text(run_id):
+                try:
+                    record = _as_record(service.get_run(str(run_id)))
+                except Exception:
+                    continue
+                if record:
+                    records_by_id.append(record)
+        return [item for item in records_by_id if item][:MAX_RECENT_RUNS]
+    # Keep the internal staged-artifact reference intact until it has been
+    # resolved. The generic public projection intentionally removes `version`
+    # fields, which would make a valid `mn.staged_artifact/v1` reference
+    # impossible to recognize here. Only bounded summaries and the resolved,
+    # sanitized result leave this provider.
+    listed = decode(service.list_runs(job_id, page_size=MAX_RECENT_RUNS, page_token=""))
+    listed_record = listed if isinstance(listed, Mapping) else {}
+    raw_items = next(
+        (
+            listed_record.get(key)
+            for key in ("items", "runs", "data")
+            if isinstance(listed_record.get(key), list)
+        ),
+        listed if isinstance(listed, list) else [],
+    )
+    run_items = [dict(item) for item in raw_items if isinstance(item, Mapping)][:MAX_RECENT_RUNS]
     latest_run_id = _first_text(job.get("latest_run_id"), job.get("latestRunId"))
-    if latest_run_id:
-        return _as_record(service.get_run(latest_run_id))
-    run_items = records(service.list_runs(job_id, page_size=1, page_token=""), "items", "runs", "data")
-    return run_items[0] if run_items else None
+    if latest_run_id and not any(_first_text(item.get("run_id"), item.get("id")) == latest_run_id for item in run_items):
+        run_items.insert(0, _as_record(service.get_run(latest_run_id)))
+    return [item for item in run_items if item][:MAX_RECENT_RUNS]
 
 
 def _run_summary(run: Mapping[str, Any]) -> dict[str, Any]:
-    allowed = (
-        "run_id",
-        "job_id",
-        "status",
-        "created_at",
-        "submitted_at",
-        "started_at",
-        "updated_at",
-        "completed_at",
-        "finished_at",
-        "run_type",
-        "trigger",
-        "failure",
-    )
-    return safe_context_value({key: run.get(key) for key in allowed if run.get(key) is not None})
+    return sdk_run_summary(run)
+
+
+def _runtime_output_id(run: Mapping[str, Any], public_run_id: str) -> str:
+    for key in ("runtime_run_id", "runtimeRunId", "runtime_job_id", "output_run_id"):
+        value = _first_text(run.get(key))
+        if value:
+            return value
+    for key in ("result_ref", "workflow_state_ref"):
+        reference = run.get(key)
+        if not isinstance(reference, Mapping):
+            continue
+        value = _first_text(reference.get("run_id"), reference.get("runtime_run_id"))
+        if value:
+            return value
+    return public_run_id
+
+
+def _final_artifact_for_run(run: Mapping[str, Any], runtime_run_id: str) -> Any:
+    try:
+        return runtime_run_routes.get_run_final_artifact(runtime_run_id, "authenticated")
+    except Exception as error:
+        if not _is_not_found_error(error):
+            raise
+        reference = run.get("result_ref")
+        if not is_staged_artifact_ref(reference):
+            result = run.get("result")
+            reference = result.get("result_ref") if isinstance(result, Mapping) else None
+        if not is_staged_artifact_ref(reference):
+            raise
+        resolution_env = dict(os.environ)
+        resolution_env.setdefault(
+            "MN_HOST_SHARED_STORAGE_ROOT",
+            RuntimeConfig.from_env().shared_storage_root,
+        )
+        return resolve_json_reference(reference, env=resolution_env)
 
 
 def _evidence_from_workflow(workflow: Mapping[str, Any], limit: int) -> list[dict[str, Any]]:
-    evidence: list[dict[str, Any]] = []
-    for step in list(workflow.get("steps") or [])[:limit]:
-        if not isinstance(step, Mapping):
-            continue
-        record_id = _first_text(step.get("id"), step.get("step_id"), step.get("name"))
-        title = _first_text(step.get("summary"), step.get("message"), step.get("title"), step.get("name"), record_id)
-        if not title:
-            continue
-        evidence.append(
-            {
-                "kind": "status",
-                "record_id": record_id or f"step-{len(evidence) + 1}",
-                "summary": title[:800],
-                "status": _first_text(step.get("status"), step.get("state")) or "unknown",
-                "publication_state": "final" if _first_text(step.get("status")).lower() in _TERMINAL_RUN_STATUSES else "staged",
-                "published_at": _first_text(step.get("updated_at"), step.get("completed_at"), step.get("started_at")) or None,
-            }
-        )
-    return evidence
+    return sdk_evidence_from_workflow(workflow, limit)
 
 
 def _active_schedule(schedules: list[dict[str, Any]]) -> bool:
@@ -275,85 +248,89 @@ def _active_schedule(schedules: list[dict[str, Any]]) -> bool:
 
 
 def context_state(job: Mapping[str, Any], latest_run: Mapping[str, Any] | None, schedules: list[dict[str, Any]]) -> str:
-    if _first_text(job.get("status")).lower() == "archived":
-        return "archived"
-    run_status = _first_text((latest_run or {}).get("status")).lower()
-    if run_status in _ACTIVE_RUN_STATUSES:
-        return "running"
-    if run_status == "paused":
-        return "paused"
-    if _active_schedule(schedules) or run_status == "scheduled":
-        return "scheduled_waiting"
-    if not latest_run:
-        return "never_run"
-    return "idle"
-
-
-def _encoded_size(value: Any) -> int:
-    return len(json.dumps(value, sort_keys=True, default=str, ensure_ascii=False).encode("utf-8"))
+    return sdk_context_state(job, latest_run, schedules)
 
 
 def _fit_context(context: dict[str, Any]) -> dict[str, Any]:
-    context.setdefault("truncation", {"truncated": False, "max_bytes": MAX_CONTEXT_BYTES})
-    if _encoded_size(context) <= MAX_CONTEXT_BYTES:
-        return context
+    return sdk_fit_context(context)
 
-    context["truncation"]["truncated"] = True
-    context.setdefault("warnings", []).append("The job context was truncated to the MCP response limit.")
-    evidence = context.get("evidence") if isinstance(context.get("evidence"), list) else []
-    while evidence and _encoded_size(context) > MAX_CONTEXT_BYTES:
-        del evidence[: max(1, len(evidence) // 2)]
-    profile = context.get("profile") if isinstance(context.get("profile"), dict) else {}
-    if _encoded_size(context) > MAX_CONTEXT_BYTES and "configuration" in profile:
-        profile["configuration"] = {"truncated": True}
-    latest = context.get("latest_run") if isinstance(context.get("latest_run"), dict) else {}
-    if _encoded_size(context) > MAX_CONTEXT_BYTES and "result" in latest:
-        latest["result"] = {"truncated": True}
-    if _encoded_size(context) > MAX_CONTEXT_BYTES and "workflow" in latest:
-        latest["workflow"] = {"truncated": True}
-    schedules = context.get("schedules") if isinstance(context.get("schedules"), list) else []
-    while schedules and _encoded_size(context) > MAX_CONTEXT_BYTES:
-        schedules.pop()
-    if _encoded_size(context) > MAX_CONTEXT_BYTES:
-        profile["capabilities"] = list(profile.get("capabilities") or [])[:5]
-        profile["mission"] = _safe_text(profile.get("mission"), limit=1_000)
-        profile["expected_output"] = _safe_text(profile.get("expected_output"), limit=1_000)
-    if _encoded_size(context) > MAX_CONTEXT_BYTES:
-        context["latest_run"] = {
-            key: _safe_text(value, limit=512) if isinstance(value, str) else value
-            for key, value in latest.items()
-            if key in {"run_id", "job_id", "status", "created_at", "started_at", "updated_at", "completed_at", "finished_at"}
-        } or None
-        context["evidence"] = []
-        context["schedules"] = []
-    context["truncation"]["evidence_returned"] = len(context.get("evidence") or [])
-    if _encoded_size(context) > MAX_CONTEXT_BYTES:
-        context = {
-            "schema_version": JOB_CONTEXT_SCHEMA,
-            "fetched_at": context.get("fetched_at"),
-            "identity": context.get("identity"),
-            "state": context.get("state"),
-            "read_only": True,
-            "profile": {
-                "identity": profile.get("identity"),
-                "name": _safe_text(profile.get("name"), limit=512),
-                "mission": _safe_text(profile.get("mission"), limit=1_000),
-                "capabilities": [],
-                "expected_output": _safe_text(profile.get("expected_output"), limit=1_000),
-                "configuration": {"truncated": True},
-                "archived": bool(profile.get("archived")),
-            },
-            "schedules": [],
-            "latest_run": None,
-            "evidence": [],
-            "warnings": ["The job context was truncated to the MCP response limit."],
-            "truncation": {
-                **context.get("truncation", {}),
-                "truncated": True,
-                "max_bytes": MAX_CONTEXT_BYTES,
-            },
-        }
-    return context
+
+def _fallback_job_answer(
+    question: str,
+    context: Mapping[str, Any],
+    *,
+    conversation_id: str | None,
+    request_id: str | None,
+) -> dict[str, Any]:
+    del question
+    identity = context.get("identity") if isinstance(context.get("identity"), Mapping) else {}
+    profile = context.get("profile") if isinstance(context.get("profile"), Mapping) else {}
+    latest = context.get("latest_run") if isinstance(context.get("latest_run"), Mapping) else None
+    state_name = _first_text(context.get("state")) or "unknown"
+    name = _first_text(profile.get("name"), identity.get("blueprint_id"), "This job")
+    lines = [f"{name} is currently {state_name.replace('_', ' ')}."]
+    mission = _safe_text(profile.get("mission"), limit=1_200)
+    if mission:
+        lines.append(f"Its declared purpose is: {mission}")
+    if latest:
+        lines.append(
+            f"The latest run ({_first_text(latest.get('run_id'), 'latest')}) is "
+            f"{_first_text(latest.get('status'), 'unknown')}."
+        )
+    else:
+        lines.append("It has not started a run yet, so there is no run progress or result to report.")
+    lines.append(
+        "This is a grounded status summary; the semantic answer service was unavailable, "
+        "so no additional conclusion was inferred."
+    )
+    citations = []
+    for item in list(context.get("evidence") or [])[:20]:
+        if not isinstance(item, Mapping):
+            continue
+        citations.append(
+            {
+                "kind": _safe_text(item.get("kind"), limit=100) or "job_context",
+                "record_id": _safe_text(item.get("record_id"), limit=200) or "evidence",
+                "summary": _safe_text(item.get("summary"), limit=800),
+                "status": _safe_text(item.get("status"), limit=100),
+            }
+        )
+    response = {
+        "schema_version": "mn.mcp.job_answer.v1",
+        "answer": "\n\n".join(lines)[:12_000],
+        "conversation_id": conversation_id or str(uuid.uuid4()),
+        "request_id": request_id or None,
+        "job_id": _first_text(identity.get("job_id")),
+        "state": {
+            "job": state_name,
+            "latest_run": (
+                {
+                    key: latest.get(key)
+                    for key in ("run_id", "status", "started_at", "updated_at", "completed_at", "finished_at")
+                    if latest.get(key) is not None
+                }
+                if latest
+                else None
+            ),
+        },
+        "citations": citations,
+        "warnings": ["A deterministic answer was returned because the response service was unavailable."],
+        "service": {"state": "degraded"},
+        "model": {"used": False, "fallback": True},
+        "conversation_persisted": False,
+    }
+    while response["citations"] and len(_json_bytes(response)) > 64 * 1024:
+        response["citations"].pop()
+    if len(_json_bytes(response)) > 64 * 1024:
+        response["state"]["latest_run"] = None
+        response["answer"] = response["answer"][:4_000]
+    return response
+
+
+def _json_bytes(value: Any) -> bytes:
+    import json
+
+    return json.dumps(value, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
 
 
 class JobContextProvider:
@@ -379,12 +356,17 @@ class JobContextProvider:
                 raise JobMCPNotFoundError("The requested job MCP is unavailable.") from error
             raise JobMCPUnavailableError("The job blueprint is temporarily unavailable.") from error
         descriptor = _mcp_descriptor(blueprint)
-        if not descriptor["enabled"]:
+        descriptor["response_enabled"] = _response_service_enabled(job, blueprint)
+        if not descriptor["enabled"] and not descriptor["response_enabled"]:
             raise JobMCPNotFoundError("The requested job MCP is unavailable.")
         return job, blueprint, descriptor
 
     def validate(self, job_id: str) -> None:
         self._job_and_blueprint(job_id)
+
+    def response_enabled(self, job_id: str) -> bool:
+        _job, _blueprint, descriptor = self._job_and_blueprint(job_id)
+        return bool(descriptor.get("response_enabled"))
 
     def get_context(self, job_id: str, *, evidence_limit: int = MAX_EVIDENCE_RECORDS) -> dict[str, Any]:
         bounded_limit = max(1, min(MAX_EVIDENCE_RECORDS, int(evidence_limit or MAX_EVIDENCE_RECORDS)))
@@ -394,8 +376,10 @@ class JobContextProvider:
         warnings: list[str] = []
         schedules = _schedules_for_job(job, job_id)
         try:
-            run = _latest_run_record(service, job, job_id)
+            recent_run_records = _recent_run_records(service, job, job_id)
+            run = recent_run_records[0] if recent_run_records else None
         except Exception:
+            recent_run_records = []
             run = None
             warnings.append("The latest run record is temporarily unavailable.")
 
@@ -404,7 +388,7 @@ class JobContextProvider:
         if run:
             latest = _run_summary(run)
             run_id = _first_text(run.get("run_id"), run.get("id"), job.get("latest_run_id"))
-            runtime_run_id = _first_text(run.get("runtime_run_id"), run.get("runtimeRunId"), run_id)
+            runtime_run_id = _runtime_output_id(run, run_id)
             if run_id:
                 latest["run_id"] = run_id
             try:
@@ -420,7 +404,7 @@ class JobContextProvider:
             except Exception:
                 warnings.append("Workflow evidence for the latest run is temporarily unavailable.")
             try:
-                final_artifact = runtime_run_routes.get_run_final_artifact(runtime_run_id, "authenticated")
+                final_artifact = _final_artifact_for_run(run, runtime_run_id)
                 latest["result"] = safe_context_value(final_artifact)
                 evidence.append(
                     {
@@ -453,50 +437,90 @@ class JobContextProvider:
             "configuration": safe_context_value(job.get("resolved_configuration") or job.get("resolvedConfiguration") or {}),
             "archived": state_name == "archived",
         }
-        context = {
-            "schema_version": JOB_CONTEXT_SCHEMA,
-            "fetched_at": _now_iso(),
-            "identity": identity,
-            "state": state_name,
-            "read_only": True,
-            "profile": profile,
-            "schedules": schedules,
-            "latest_run": latest,
-            "evidence": evidence[-bounded_limit:],
-            "warnings": warnings,
-            "truncation": {
-                "truncated": len(evidence) > bounded_limit,
-                "max_bytes": MAX_CONTEXT_BYTES,
-                "evidence_limit": bounded_limit,
-                "evidence_available": len(evidence),
-                "evidence_returned": min(len(evidence), bounded_limit),
-            },
-        }
-        return _fit_context(context)
+        return assemble_job_context(
+            identity=identity,
+            state=state_name,
+            profile=profile,
+            schedules=schedules,
+            latest_run=latest,
+            recent_runs=[_run_summary(item) for item in recent_run_records],
+            evidence=evidence,
+            warnings=warnings,
+            response_service=(
+                job.get("response_service")
+                if isinstance(job.get("response_service"), Mapping)
+                else {"state": "disabled"}
+            ),
+            evidence_limit=bounded_limit,
+        )
 
     def get_profile(self, job_id: str) -> dict[str, Any]:
         context = self.get_context(job_id, evidence_limit=1)
         return {
             key: context[key]
-            for key in ("schema_version", "fetched_at", "identity", "state", "read_only", "profile", "schedules", "warnings", "truncation")
+            for key in ("schema_version", "fetched_at", "identity", "state", "read_only", "response_service", "profile", "schedules", "warnings", "truncation")
         }
 
     def get_latest_run(self, job_id: str) -> dict[str, Any]:
         context = self.get_context(job_id)
         return {
             key: context[key]
-            for key in ("schema_version", "fetched_at", "identity", "state", "read_only", "latest_run", "evidence", "warnings", "truncation")
+            for key in ("schema_version", "fetched_at", "identity", "state", "read_only", "response_service", "latest_run", "recent_runs", "evidence", "warnings", "truncation")
         }
+
+    def ask_job(
+        self,
+        job_id: str,
+        question: str,
+        *,
+        conversation_id: str | None = None,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        question = str(question or "").strip()
+        if not question:
+            raise ValueError("question is required")
+        if len(question) > 8_000:
+            raise ValueError("question must not exceed 8000 characters")
+        if conversation_id:
+            try:
+                conversation_id = str(uuid.UUID(conversation_id))
+            except (ValueError, TypeError, AttributeError) as error:
+                raise ValueError("conversation_id must be a UUID") from error
+        if request_id is not None and len(str(request_id)) > 128:
+            raise ValueError("request_id must not exceed 128 characters")
+        if not self.response_enabled(job_id):
+            raise JobMCPNotFoundError("The requested job response service is unavailable.")
+        context = self.get_context(job_id)
+        try:
+            return self._service().query_job_response(
+                job_id,
+                question,
+                context=context,
+                conversation_id=conversation_id or "",
+                request_id=request_id or "",
+            )
+        except (ValueError, TypeError):
+            raise
+        except Exception as error:
+            if _is_request_conflict_error(error):
+                raise ValueError("request_id was already used for a different question") from error
+            return _fallback_job_answer(
+                question,
+                context,
+                conversation_id=conversation_id,
+                request_id=request_id,
+            )
 
 
 class JobMCPGuard:
-    def __init__(self, app, provider: JobContextProvider) -> None:
-        self.app = app
+    def __init__(self, base_app, enhanced_app, provider: JobContextProvider) -> None:
+        self.base_app = base_app
+        self.enhanced_app = enhanced_app
         self.provider = provider
 
     async def __call__(self, scope, receive, send) -> None:
         if scope.get("type") != "http":
-            await self.app(scope, receive, send)
+            await self.base_app(scope, receive, send)
             return
         request = Request(scope)
         if auth_enabled(state.config):
@@ -517,7 +541,7 @@ class JobMCPGuard:
 
         job_id = _first_text(scope.get("path_params", {}).get("job_id"))
         try:
-            await anyio.to_thread.run_sync(self.provider.validate, job_id)
+            enhanced = await anyio.to_thread.run_sync(self.provider.response_enabled, job_id)
         except JobMCPNotFoundError as error:
             response = problem_response(
                 status_code=404,
@@ -543,20 +567,32 @@ class JobMCPGuard:
 
         token = _current_job_id.set(job_id)
         try:
-            await self.app(scope, receive, send)
+            selected_app = self.enhanced_app if enhanced else self.base_app
+            await selected_app(scope, receive, send)
         finally:
             _current_job_id.reset(token)
 
 
-def create_job_mcp(provider: JobContextProvider | None = None) -> tuple[FastMCP, Any]:
+def create_job_mcp(provider: JobContextProvider | None = None) -> tuple[list[FastMCP], Any]:
     context_provider = provider or JobContextProvider()
-    server = FastMCP(
+
+    def new_server(name: str, instructions: str) -> FastMCP:
+        return FastMCP(
+            name,
+            instructions=instructions,
+            streamable_http_path="/mcp",
+            json_response=True,
+            stateless_http=True,
+            transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+        )
+
+    base_server = new_server(
         "MirrorNeuron job context",
-        instructions="Read-only supervisory context for the job bound by the MCP URL.",
-        streamable_http_path="/mcp",
-        json_response=True,
-        stateless_http=True,
-        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+        "Read-only supervisory context for the job bound by the MCP URL.",
+    )
+    enhanced_server = new_server(
+        "MirrorNeuron real-time job response",
+        "Read safe context or ask grounded, multi-turn questions about the job bound by the MCP URL.",
     )
 
     def bound_job_id() -> str:
@@ -565,38 +601,74 @@ def create_job_mcp(provider: JobContextProvider | None = None) -> tuple[FastMCP,
             raise JobMCPNotFoundError("The MCP request is not bound to a job.")
         return job_id
 
-    @server.tool(
-        name="get_job_profile",
-        description="Read this job's identity, mission, safe configuration, schedule, and lifecycle state.",
+    def register_context_tools(server: FastMCP) -> None:
+        @server.tool(
+            name="get_job_profile",
+            description="Read this job's identity, mission, safe configuration, schedule, and lifecycle state.",
+            structured_output=True,
+        )
+        def get_job_profile() -> dict[str, Any]:
+            return context_provider.get_profile(bound_job_id())
+
+        @server.tool(
+            name="get_latest_run",
+            description="Read bounded status, workflow evidence, and final result context from this job's latest run.",
+            structured_output=True,
+        )
+        def get_latest_run() -> dict[str, Any]:
+            return context_provider.get_latest_run(bound_job_id())
+
+        @server.tool(
+            name="get_job_context",
+            description="Read the combined job profile, schedule, recent Runs, and bounded latest-run context.",
+            structured_output=True,
+        )
+        def get_job_context(evidence_limit: int = MAX_EVIDENCE_RECORDS) -> dict[str, Any]:
+            return context_provider.get_context(bound_job_id(), evidence_limit=evidence_limit)
+
+    register_context_tools(base_server)
+    register_context_tools(enhanced_server)
+
+    @enhanced_server.tool(
+        name="ask_job",
+        description=(
+            "Ask a fast, grounded, multi-turn question about this job's purpose, status, progress, "
+            "published results, or missing evidence. This never starts a Run."
+        ),
         structured_output=True,
     )
-    def get_job_profile() -> dict[str, Any]:
-        return context_provider.get_profile(bound_job_id())
+    def ask_job(
+        question: str,
+        conversation_id: str | None = None,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        return context_provider.ask_job(
+            bound_job_id(),
+            question,
+            conversation_id=conversation_id,
+            request_id=request_id,
+        )
 
-    @server.tool(
-        name="get_latest_run",
-        description="Read bounded status, workflow evidence, and final result context from this job's latest run.",
-        structured_output=True,
+    servers = [base_server, enhanced_server]
+    return servers, JobMCPGuard(
+        base_server.streamable_http_app(),
+        enhanced_server.streamable_http_app(),
+        context_provider,
     )
-    def get_latest_run() -> dict[str, Any]:
-        return context_provider.get_latest_run(bound_job_id())
-
-    @server.tool(
-        name="get_job_context",
-        description="Read the combined job profile, schedule, and bounded latest-run context.",
-        structured_output=True,
-    )
-    def get_job_context(evidence_limit: int = MAX_EVIDENCE_RECORDS) -> dict[str, Any]:
-        return context_provider.get_context(bound_job_id(), evidence_limit=evidence_limit)
-
-    return server, JobMCPGuard(server.streamable_http_app(), context_provider)
 
 
-def job_mcp_lifespan(server: FastMCP):
+def job_mcp_lifespan(servers: FastMCP | list[FastMCP]):
+    resolved_servers = servers if isinstance(servers, list) else [servers]
+
     @asynccontextmanager
     async def lifespan(_app):
-        async with server.session_manager.run():
-            yield
+        if len(resolved_servers) == 1:
+            async with resolved_servers[0].session_manager.run():
+                yield
+            return
+        async with resolved_servers[0].session_manager.run():
+            async with resolved_servers[1].session_manager.run():
+                yield
 
     return lifespan
 

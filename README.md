@@ -159,20 +159,17 @@ When an existing `job_id` is supplied, the API installs the freshly prepared
 bundle before starting the run; job data, schedules, and prior run history are
 preserved.
 
-Blueprints that explicitly enable `mcp_collaboration` also expose a stable,
-stateless supervisory MCP at `/api/v1/jobs/{job_id}/mcp`. It remains available
-when the job has never run, is idle, paused, waiting for a schedule, terminal,
-or archived; it needs Core data but no active target Run or runtime worker
-service. The endpoint is bound to the URL job, uses the API bearer-auth policy,
-and exposes only `get_job_profile`, `get_latest_run`, and `get_job_context`.
-Responses use `mn.mcp.stable_job_context.v1`, are limited to 256 KiB and 50
-evidence records, and omit secrets, environment values, raw logs, host paths,
-and unrestricted artifact bodies.
-
-This API-owned supervisory endpoint is separate from Core's
-`mn-job-collaboration` service. The Core service is created only for an active
-Run and supports peer collaboration inside executing workflows; its discovery
-and lifecycle contract is unchanged.
+Legacy blueprints that enable `mcp_collaboration` expose the stable three-tool
+Job MCP at `/api/v1/jobs/{job_id}/mcp`. Blueprints that instead declare the
+top-level `response_service: {"enabled": true}` expose the same context tools
+plus `ask_job(question, conversation_id?, request_id?)`. The responder is
+definition-scoped and remains available before the first Run and between Runs;
+asking never creates a Run. Context uses `mn.mcp.job_context.v1`, is limited to
+256 KiB and 50 evidence records, and omits secrets, environment values, raw
+logs, host paths, and unrestricted artifact bodies. Answers use
+`mn.mcp.job_answer.v1`, are limited to 64 KiB, and fall back to a deterministic
+grounded status summary when the model or Job RAG is unavailable. There is no
+REST, SSE, or UI chat surface.
 
 ## SDK Usage
 

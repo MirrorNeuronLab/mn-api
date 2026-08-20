@@ -72,6 +72,27 @@ def test_extract_nested_string_and_agent_summaries():
     ]
 
 
+def test_find_run_dir_for_job_matches_blueprint_run_identity(monkeypatch, tmp_path):
+    blueprint_run_id = "blueprint-run-1"
+    record = {
+        "job_id": "job-1",
+        "run_id": "runtime-run-1",
+        "blueprint_run_id": blueprint_run_id,
+        "job": {"runtime_run_id": "nested-runtime-run-1"},
+    }
+    run_dir = tmp_path / blueprint_run_id
+    run_dir.mkdir()
+    (run_dir / "job.json").write_text(json.dumps(record), encoding="utf-8")
+    monkeypatch.setattr(jobs, "_runs_root", lambda: tmp_path)
+
+    for identifier in ("job-1", "runtime-run-1", blueprint_run_id, "nested-runtime-run-1"):
+        assert jobs._job_record_matches(record, identifier)
+    found_dir, found_record = jobs._find_run_dir_for_job(blueprint_run_id)
+    assert found_dir == run_dir
+    assert found_record == record
+    assert not jobs._job_record_matches(record, "another-run")
+
+
 def test_run_artifacts_dedupes_output_refs(monkeypatch, tmp_path):
     artifact = tmp_path / "artifact.json"
     artifact.write_text("{}", encoding="utf-8")

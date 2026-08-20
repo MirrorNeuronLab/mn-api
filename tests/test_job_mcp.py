@@ -40,8 +40,22 @@ class MCPRuntime:
                 "deleted": True,
             },
             "job-disabled": {"job_id": "job-disabled", "blueprint_id": "disabled-blueprint", "status": "active"},
+            "job-response": {
+                "job_id": "job-response",
+                "blueprint_id": "response-blueprint",
+                "status": "active",
+                "run_count": 0,
+                "response_service": {"state": "ready", "ready_at": "2026-08-20T12:00:00Z"},
+            },
+            "job-response-disabled": {
+                "job_id": "job-response-disabled",
+                "blueprint_id": "response-blueprint",
+                "status": "active",
+                "response_service": {"state": "disabled"},
+            },
         }
-        self.runs: dict[str, list[dict]] = {"job-1": [], "job-2": []}
+        self.runs: dict[str, list[dict]] = {"job-1": [], "job-2": [], "job-response": []}
+        self.queries: list[dict] = []
 
     def get_job(self, job_id):
         if job_id not in self.jobs:
@@ -59,9 +73,35 @@ class MCPRuntime:
                     return json.dumps(run)
         raise HTTPException(status_code=404, detail="missing")
 
+    def query_job_response(
+        self,
+        job_id,
+        question,
+        *,
+        context,
+        conversation_id="",
+        request_id="",
+    ):
+        self.queries.append({"job_id": job_id, "question": question, "context": context})
+        return json.dumps(
+            {
+                "schema_version": "mn.mcp.job_answer.v1",
+                "answer": "This Job is ready and has not started a Run.",
+                "conversation_id": conversation_id or "57a8b9f2-23c8-4eef-8e2d-14806fb63739",
+                "request_id": request_id or None,
+                "job_id": job_id,
+                "state": {"job": context["state"], "latest_run": None},
+                "citations": [],
+                "warnings": [],
+                "service": {"state": "ready"},
+                "model": {"provider": "fake", "model": "fast", "used": True, "fallback": False},
+                "conversation_persisted": True,
+            }
+        )
+
 def _blueprint(_config, blueprint_id):
     enabled = blueprint_id != "disabled-blueprint"
-    return "catalog", {
+    blueprint = {
         "id": blueprint_id,
         "name": "Queue Reviewer",
         "description": "Review the account queue and explain the latest result.",
@@ -74,6 +114,9 @@ def _blueprint(_config, blueprint_id):
             "goal_id": "goal-1",
         },
     }
+    if blueprint_id == "response-blueprint":
+        blueprint["response_service"] = {"enabled": True}
+    return "catalog", blueprint
 
 
 def _configure(monkeypatch, runtime: MCPRuntime, *, token: str = "") -> None:
@@ -190,6 +233,87 @@ def test_auth_job_isolation_archived_and_disabled_behavior(monkeypatch):
         assert deleted.json()["detail"] == disabled.json()["detail"] == missing.json()["detail"]
 
 
+def test_response_enabled_job_lists_ask_job_and_never_starts_a_run(monkeypatch):
+    runtime = MCPRuntime()
+    _configure(monkeypatch, runtime)
+
+    with TestClient(create_app()) as client:
+        assert _initialize(client, "job-response").status_code == 200
+        listed = _mcp_request(
+            client,
+            "job-response",
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+        ).json()
+        assert {tool["name"] for tool in listed["result"]["tools"]} == {
+            "ask_job",
+            "get_job_context",
+            "get_job_profile",
+            "get_latest_run",
+        }
+        called = _mcp_request(
+            client,
+            "job-response",
+            {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {
+                    "name": "ask_job",
+                    "arguments": {
+                        "question": "What is happening?",
+                        "request_id": "request-1",
+                    },
+                },
+            },
+        ).json()["result"]["structuredContent"]
+
+    assert called["schema_version"] == "mn.mcp.job_answer.v1"
+    assert called["state"]["job"] == "never_run"
+    assert runtime.jobs["job-response"]["run_count"] == 0
+    assert runtime.runs["job-response"] == []
+    assert len(runtime.queries) == 1
+
+
+def test_job_projection_is_authoritative_when_catalog_now_enables_responses(monkeypatch):
+    runtime = MCPRuntime()
+    _configure(monkeypatch, runtime)
+
+    with TestClient(create_app()) as client:
+        assert _initialize(client, "job-response-disabled").status_code == 200
+        listed = _mcp_request(
+            client,
+            "job-response-disabled",
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+        ).json()
+
+    assert {tool["name"] for tool in listed["result"]["tools"]} == {
+        "get_job_context",
+        "get_job_profile",
+        "get_latest_run",
+    }
+
+
+def test_ask_job_preserves_idempotency_conflicts_instead_of_falling_back(monkeypatch):
+    runtime = MCPRuntime()
+    _configure(monkeypatch, runtime)
+
+    def conflict(*_args, **_kwargs):
+        raise RuntimeError("ALREADY_EXISTS: request_id_conflict")
+
+    runtime.query_job_response = conflict
+
+    try:
+        JobContextProvider().ask_job(
+            "job-response",
+            "Different question",
+            request_id="request-1",
+        )
+    except ValueError as error:
+        assert "different question" in str(error)
+    else:
+        raise AssertionError("Expected request_id conflict to be preserved")
+
+
 def test_context_states_latest_result_partial_warning_and_bounds(monkeypatch):
     runtime = MCPRuntime()
     runtime.jobs["job-1"]["latest_run_id"] = "run-1"
@@ -242,6 +366,60 @@ def test_context_states_latest_result_partial_warning_and_bounds(monkeypatch):
     assert any("Workflow evidence" in warning for warning in partial["warnings"])
 
 
+def test_context_resolves_final_result_from_staged_runtime_output_identity(monkeypatch):
+    runtime = MCPRuntime()
+    runtime.jobs["job-1"]["latest_run_id"] = "public-run-1"
+    runtime.runs["job-1"] = [
+        {
+            "job_id": "job-1",
+            "run_id": "public-run-1",
+            "status": "completed",
+            "result_ref": {
+                "version": "mn.staged_artifact/v1",
+                "type": "artifact_ref",
+                "storage": "syncthing",
+                "submission_id": "job-definition-1",
+                "run_id": "runtime-output-1",
+                "relative_path": "outputs/runs/runtime-output-1/artifacts/final.json",
+                "sha256": "a" * 64,
+                "size_bytes": 128,
+            },
+        }
+    ]
+    _configure(monkeypatch, runtime)
+    projected_ids: list[str] = []
+    resolved_references: list[dict] = []
+    monkeypatch.setattr(
+        job_mcp.runtime_run_routes,
+        "get_run_final_artifact",
+        lambda run_id, _principal: projected_ids.append(run_id) or (_ for _ in ()).throw(
+            HTTPException(status_code=404, detail="runtime final file not copied")
+        ),
+    )
+    monkeypatch.setattr(
+        job_mcp,
+        "resolve_json_reference",
+        lambda reference, **_kwargs: resolved_references.append(reference) or {"summary": "Published result"},
+    )
+
+    context = JobContextProvider().get_context("job-1")
+
+    assert projected_ids == ["runtime-output-1"]
+    assert resolved_references == [runtime.runs["job-1"][0]["result_ref"]]
+    assert context["latest_run"]["run_id"] == "public-run-1"
+    assert context["latest_run"]["result"] == {"summary": "Published result"}
+    assert any(
+        item["record_id"] == "final-result" and item["publication_state"] == "final"
+        for item in context["evidence"]
+    )
+
+
+def test_response_service_requires_exact_top_level_snake_case_declaration():
+    assert job_mcp._response_service_declared({"response_service": {"enabled": True}}) is True
+    assert job_mcp._response_service_declared({"responseService": {"enabled": True}}) is False
+    assert job_mcp._response_service_declared({"metadata": {"response_service": {"enabled": True}}}) is False
+
+
 def test_safe_context_value_removes_secret_and_path_keys_recursively():
     value = safe_context_value(
         {
@@ -252,7 +430,7 @@ def test_safe_context_value_removes_secret_and_path_keys_recursively():
             "environment": {"REGION": "hidden"},
             "artifact": {"content": "hidden", "summary": "visible summary"},
             "generic_location": "/Users/example/private",
-            "service_url": "https://user:password@example.test/resource",
+            "service_source": "https://user:password@example.test/resource",
         }
     )
     assert value == {
@@ -260,7 +438,7 @@ def test_safe_context_value_removes_secret_and_path_keys_recursively():
         "items": [{"name": "visible"}],
         "artifact": {"summary": "visible summary"},
         "generic_location": "<redacted-path>",
-        "service_url": "<redacted-credential-url>",
+        "service_source": "<redacted-credential-url>",
     }
 
 

@@ -24,13 +24,13 @@ from mn_api.routes.v1 import blueprints, infrastructure, jobs, operations, syste
 
 
 def create_app() -> FastAPI:
-    job_mcp_server, job_mcp_app = create_job_mcp()
+    job_mcp_servers, job_mcp_app = create_job_mcp()
     app = FastAPI(
         title="MirrorNeuron API",
         version="1.0",
         openapi_url="/api/v1/openapi.json",
         responses=COMMON_PROBLEM_RESPONSES,
-        lifespan=job_mcp_lifespan(job_mcp_server),
+        lifespan=job_mcp_lifespan(job_mcp_servers),
     )
 
     app.add_exception_handler(AppError, app_error_exception_handler)
