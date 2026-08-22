@@ -96,6 +96,8 @@ model placement algorithms, blueprint domain behavior, or the browser UI.
   into SDK preparation before forwarding Job creation. Distributed workflows
   prepare HostLocal Python environments on that owner without changing their
   placement declaration.
+- Background output relays poll the durable job ID while retaining the separate
+  execution run ID for run-store paths and launch responses.
 - Blueprint launch delegates manifest expansion, config application,
   dependency localization, environment injection, and topology lowering to the
   same SDK preparation path consumed by the CLI.

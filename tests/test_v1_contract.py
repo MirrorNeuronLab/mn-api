@@ -503,6 +503,66 @@ def test_async_blueprint_requests_preserve_federated_owner_node():
     assert launch_request.owner_node == "mirror_neuron@spark"
 
 
+def test_blueprint_output_relay_polls_durable_job_id(monkeypatch, tmp_path):
+    legacy = blueprints.legacy_blueprints
+    bundle = tmp_path / "worker-1"
+    bundle.mkdir()
+    (bundle / "manifest.json").write_text("{}", encoding="utf-8")
+    captured = {}
+
+    class Runtime:
+        def create_job(self, _manifest, _payloads, **_kwargs):
+            return json.dumps({"job_id": "job-stable"})
+
+        def start_run(self, job_id, **_kwargs):
+            assert job_id == "job-stable"
+            return json.dumps({"run_id": "run-execution"})
+
+    monkeypatch.setattr(legacy, "record_launch_progress", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(legacy, "validate_progress_id", lambda value: value)
+    monkeypatch.setattr(legacy, "validate_blueprint_bundle", lambda *_args: bundle)
+    monkeypatch.setattr(legacy, "read_manifest_for_launch", lambda _bundle: {})
+    monkeypatch.setattr(legacy, "validate_blueprint_secret_environment", lambda *_args: None)
+    monkeypatch.setattr(legacy, "runtime_blueprint_environment_overrides", lambda: {})
+    monkeypatch.setattr(legacy, "fake_mode_environment_overrides", lambda _req: {})
+    monkeypatch.setattr(legacy.state, "close_client", lambda: None)
+    monkeypatch.setattr(
+        legacy,
+        "run_launch_preflight",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            model_install=None,
+            env_overrides={},
+            config_overrides={},
+        ),
+    )
+    monkeypatch.setattr(legacy, "runtime_active_job_ids", lambda: set())
+    monkeypatch.setattr(legacy, "cleanup_stale_blueprint_run_processes", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(legacy, "start_blueprint_pre_launch_hook", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(legacy, "generate_stable_job_id", lambda _blueprint_id: "job-requested")
+    monkeypatch.setattr(legacy, "generate_job_definition_submission_id", lambda _job_id: "submission-1")
+    monkeypatch.setattr(legacy, "load_blueprint_bundle", lambda *_args, **_kwargs: ("{}", {}))
+    monkeypatch.setattr(legacy, "inject_declared_secret_environment", lambda manifest, _secrets: manifest)
+    monkeypatch.setattr(legacy.state, "client", Runtime())
+    monkeypatch.setattr(legacy, "write_blueprint_job_mapping", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(legacy, "manifest_without_secret_environment", lambda manifest, _secrets: manifest)
+    monkeypatch.setattr(legacy, "_current_config", lambda: SimpleNamespace())
+
+    def capture_relay(_repo, _blueprint, run_id, job_id, _manifest, **_kwargs):
+        captured.update(run_id=run_id, job_id=job_id)
+
+    monkeypatch.setattr(legacy, "start_background_event_relay_if_needed", capture_relay)
+
+    result = legacy.run_blueprint_record(
+        tmp_path,
+        {"id": "worker-1", "revision": "abc"},
+        legacy.BlueprintRunRequest(run_id="run-requested", force=True),
+    )
+
+    assert result["job_id"] == "job-stable"
+    assert result["run_id"] == "run-execution"
+    assert captured == {"run_id": "run-requested", "job_id": "job-stable"}
+
+
 def _wait_for_operation(client: TestClient, operation_id: str, terminal: set[str] | None = None) -> dict:
     terminal = terminal or {"completed", "failed"}
     deadline = time.monotonic() + 3
