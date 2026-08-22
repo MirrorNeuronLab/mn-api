@@ -80,6 +80,7 @@ class LaunchPreflight:
     model_install: dict[str, Any]
     env_overrides: dict[str, str]
     config_overrides: dict[str, Any]
+    owner_node: str = ""
 
 
 def _current_config():
@@ -804,8 +805,9 @@ def run_blueprint_record(
     validate_blueprint_secret_environment(read_manifest_for_launch(bundle_root), secret_environment)
     env_overrides = runtime_blueprint_environment_overrides()
     env_overrides.update(fake_mode_environment_overrides(req))
-    if req and req.owner_node:
-        env_overrides["MN_SELECTED_RUNTIME_NODE"] = req.owner_node
+    owner_node = str(req.owner_node or "") if req else ""
+    if owner_node:
+        env_overrides["MN_SELECTED_RUNTIME_NODE"] = owner_node
     force = bool(req.force) if req else False
     state.close_client()
     preflight = run_launch_preflight(
@@ -819,6 +821,9 @@ def run_blueprint_record(
     if isinstance(preflight, JSONResponse):
         return preflight
     model_install = preflight.model_install
+    owner_node = owner_node or getattr(preflight, "owner_node", "")
+    if owner_node:
+        env_overrides["MN_SELECTED_RUNTIME_NODE"] = owner_node
     env_overrides.update(preflight.env_overrides)
     config_overrides = deep_merge(config_overrides, preflight.config_overrides)
     record_launch_progress(
@@ -1003,7 +1008,7 @@ def run_blueprint_record(
             }
             if len(docker_owner_nodes) == 1:
                 prepared_owner_node = next(iter(docker_owner_nodes))
-        owner_node = req.owner_node or prepared_owner_node
+        owner_node = owner_node or prepared_owner_node
     except HTTPException:
         cleanup_blueprint_run_processes(run_id, reason="manifest_prepare_failed")
         record_launch_progress(
@@ -1621,7 +1626,28 @@ def run_launch_preflight(
         model_install=model_install,
         env_overrides=env_overrides,
         config_overrides=config_patch,
+        owner_node=single_hardware_owner_node(requirements_validation),
     )
+
+
+def single_hardware_owner_node(validation: dict[str, Any]) -> str:
+    matching_sets = [
+        {
+            str(node).strip()
+            for node in result.get("matching_nodes", [])
+            if str(node).strip()
+        }
+        for result in validation.get("results", [])
+        if isinstance(result, dict)
+        and result.get("type") == "hardware_requirement"
+        and isinstance(result.get("requirement"), dict)
+        and str(result["requirement"].get("enforcement") or "hard").lower()
+        == "hard"
+    ]
+    if not matching_sets:
+        return ""
+    matching_nodes = set.intersection(*matching_sets)
+    return next(iter(matching_nodes)) if len(matching_nodes) == 1 else ""
 
 
 def validate_launch_hardware_requirements(launch: dict, *, force: bool = False) -> dict[str, Any]:

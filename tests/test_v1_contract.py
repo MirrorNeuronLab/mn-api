@@ -533,6 +533,22 @@ def test_async_blueprint_requests_preserve_federated_owner_node():
     assert launch_request.owner_node == "mirror_neuron@spark"
 
 
+def test_hardware_preflight_selects_unique_owner_node():
+    selected = blueprints.legacy_blueprints.single_hardware_owner_node(
+        {
+            "results": [
+                {
+                    "type": "hardware_requirement",
+                    "requirement": {"resource": "gpu", "enforcement": "hard"},
+                    "matching_nodes": ["mirror_neuron@spark"],
+                }
+            ]
+        }
+    )
+
+    assert selected == "mirror_neuron@spark"
+
+
 def test_blueprint_output_relay_polls_durable_job_id(monkeypatch, tmp_path):
     legacy = blueprints.legacy_blueprints
     bundle = tmp_path / "worker-1"
