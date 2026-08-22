@@ -1174,12 +1174,16 @@ class TestBlueprintServices(unittest.TestCase):
             (bundle / "manifest.json").write_text(
                 json.dumps(
                     {
-                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
+                        "apiVersion": "mn.workflow/v1",
+                        "kind": "Workflow",
+                        "id": "test-workflow",
+                        "contract": {},
+                        "agents": {},
+                        "runtime": {"placement": {"mode": "distributed"}},
                         "graph_id": "host_worker",
                         "nodes": [
                             {
                                 "node_id": "worker",
-                                "policies": {"scheduler": {"preferred_node": "worker-a"}},
                                 "config": {
                                     "runner_module": "MirrorNeuron.Runner.HostLocal",
                                     "python_environment": {
@@ -1236,6 +1240,7 @@ class TestBlueprintServices(unittest.TestCase):
                     repo.resolve(),
                     {"id": "host_worker", "path": "host_worker"},
                     "host-run",
+                    env_overrides={"MN_SELECTED_RUNTIME_NODE": "worker-a"},
                 )
 
         manifest = json.loads(manifest_json)

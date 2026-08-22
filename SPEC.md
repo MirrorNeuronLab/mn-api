@@ -93,7 +93,9 @@ model placement algorithms, blueprint domain behavior, or the browser UI.
   before the new run starts.
 - When `owner_node` selects a federated Core, launch preserves that owner through
   asynchronous request normalization and passes the same selected-node handoff
-  into SDK preparation before forwarding Job creation.
+  into SDK preparation before forwarding Job creation. Distributed workflows
+  prepare HostLocal Python environments on that owner without changing their
+  placement declaration.
 - Blueprint launch delegates manifest expansion, config application,
   dependency localization, environment injection, and topology lowering to the
   same SDK preparation path consumed by the CLI.

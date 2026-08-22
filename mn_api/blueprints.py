@@ -1552,7 +1552,13 @@ def load_blueprint_bundle(
                 "Building or reusing isolated Python environments required by local workflow services.",
                 "A first launch may take several minutes while Python packages are installed.",
             )
-        prepare_hostlocal_python_environments_for_submission(bundle_root, manifest)
+        prepare_hostlocal_python_environments_for_submission(
+            bundle_root,
+            manifest,
+            selected_runtime_node=str(
+                runtime_env.get("MN_SELECTED_RUNTIME_NODE") or ""
+            ),
+        )
 
     payloads = stage_payload_assets(
         manifest,
@@ -1613,6 +1619,7 @@ def prepare_hostlocal_python_environments_for_submission(
     *,
     runtime_client: Any | None = None,
     timeout: float | None = None,
+    selected_runtime_node: str = "",
 ) -> list[dict[str, str]]:
     from mn_api import state
 
@@ -1637,7 +1644,11 @@ def prepare_hostlocal_python_environments_for_submission(
             node_id=node_id,
             requirements=requirements,
         )
-        selected_node = hostlocal_selected_runtime_node(manifest, node)
+        selected_node = hostlocal_selected_runtime_node(
+            manifest,
+            node,
+            selected_runtime_node=selected_runtime_node,
+        )
         local_source_versions = hostlocal_local_source_versions(manifest, packages)
         request = {
             "node": selected_node,
@@ -1743,6 +1754,8 @@ def hostlocal_blueprint_id(bundle_root: Path, manifest: dict[str, Any]) -> str:
 def hostlocal_selected_runtime_node(
     manifest: dict[str, Any],
     node: dict[str, Any],
+    *,
+    selected_runtime_node: str = "",
 ) -> str:
     policies = node.get("policies") if isinstance(node.get("policies"), dict) else {}
     scheduler = policies.get("scheduler") if isinstance(policies.get("scheduler"), dict) else {}
@@ -1759,7 +1772,9 @@ def hostlocal_selected_runtime_node(
         if isinstance(metadata.get("mn_workflow_placement"), dict)
         else {}
     )
-    return str(placement.get("selected_node") or "").strip()
+    return str(
+        placement.get("selected_node") or selected_runtime_node or ""
+    ).strip()
 
 
 def hostlocal_runtime_client(selected_node: str):
