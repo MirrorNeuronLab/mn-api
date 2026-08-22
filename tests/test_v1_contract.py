@@ -7,6 +7,7 @@ import time
 from types import SimpleNamespace
 
 from fastapi import HTTPException
+from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 from mn_api import state
@@ -484,6 +485,35 @@ def test_blueprint_run_forwards_secret_environment(monkeypatch):
     assert secret.get_secret_value() == "secret-value"
     assert captured["request"].owner_node == "mirror_neuron@spark"
     assert "secret-value" not in response.text
+
+
+def test_blueprint_run_preserves_launch_error_response(monkeypatch):
+    client, _runtime = _client(monkeypatch)
+    blueprint = {"id": "worker-1", "name": "Worker", "installed": True}
+    monkeypatch.setattr(blueprints, "find_blueprint", lambda _config, _id: (None, blueprint))
+    monkeypatch.setattr(
+        blueprints.legacy_blueprints,
+        "resolve_async_blueprint_run_request",
+        lambda _blueprint_id, request: request,
+    )
+    monkeypatch.setattr(
+        blueprints.legacy_blueprints,
+        "run_blueprint_record",
+        lambda *_args, **_kwargs: JSONResponse(
+            status_code=409,
+            content={"detail": "Selected owner is unavailable."},
+        ),
+    )
+
+    response = client.post(
+        "/api/v1/blueprints/worker-1/runs",
+        headers={"Idempotency-Key": "blueprint-run-error-1"},
+        json={},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Selected owner is unavailable."}
+    assert "location" not in response.headers
 
 
 def test_async_blueprint_requests_preserve_federated_owner_node():

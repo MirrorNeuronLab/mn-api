@@ -107,7 +107,10 @@ def idempotent_response(
             headers = {**dict(replay.headers), "Idempotency-Replayed": "true"}
             return JSONResponse(status_code=replay.status_code, content=replay.body, headers=headers)
 
-    result = public_value(decode(call()))
+    raw_result = call()
+    if isinstance(raw_result, JSONResponse):
+        return raw_result
+    result = public_value(decode(raw_result))
     resolved_location = location(result) if callable(location) else location
     headers = {"Location": resolved_location} if resolved_location else {}
     if key:
