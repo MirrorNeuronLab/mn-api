@@ -155,6 +155,9 @@ dispatches, blueprint additions/removals, and administrative work.
 before starting the first run unless the body supplies an existing `job_id`.
 Responses return a pending Run immediately. Run cleanup never deletes the
 stable job's shared data.
+Set `owner_node` to a healthy federated Core when the blueprint must be
+prepared and executed on that machine; the selected owner is retained through
+preflight, bundle preparation, and Job creation.
 When an existing `job_id` is supplied, the API installs the freshly prepared
 bundle before starting the run; job data, schedules, and prior run history are
 preserved.

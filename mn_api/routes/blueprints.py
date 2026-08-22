@@ -338,6 +338,7 @@ def resolve_async_blueprint_launch_request(req: BlueprintLaunchRequest) -> Bluep
         source=req.source,
         blueprint_id=req.blueprint_id,
         path=req.path,
+        owner_node=req.owner_node,
         **{"_bundle_path": req.bundle_path},
     )
 
@@ -803,6 +804,8 @@ def run_blueprint_record(
     validate_blueprint_secret_environment(read_manifest_for_launch(bundle_root), secret_environment)
     env_overrides = runtime_blueprint_environment_overrides()
     env_overrides.update(fake_mode_environment_overrides(req))
+    if req and req.owner_node:
+        env_overrides["MN_SELECTED_RUNTIME_NODE"] = req.owner_node
     force = bool(req.force) if req else False
     state.close_client()
     preflight = run_launch_preflight(

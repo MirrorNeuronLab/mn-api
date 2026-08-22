@@ -91,6 +91,9 @@ model placement algorithms, blueprint domain behavior, or the browser UI.
   `job_id` is supplied, and returns both identities. Existing jobs receive the
   freshly prepared manifest and payloads through atomic bundle replacement
   before the new run starts.
+- When `owner_node` selects a federated Core, launch preserves that owner through
+  asynchronous request normalization and passes the same selected-node handoff
+  into SDK preparation before forwarding Job creation.
 - Blueprint launch delegates manifest expansion, config application,
   dependency localization, environment injection, and topology lowering to the
   same SDK preparation path consumed by the CLI.

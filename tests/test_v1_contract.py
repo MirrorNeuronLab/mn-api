@@ -473,13 +473,34 @@ def test_blueprint_run_forwards_secret_environment(monkeypatch):
     response = client.post(
         "/api/v1/blueprints/worker-1/runs",
         headers={"Idempotency-Key": "blueprint-run-secret-1"},
-        json={"secret_environment": {"DECLARED_SECRET": "secret-value"}},
+        json={
+            "secret_environment": {"DECLARED_SECRET": "secret-value"},
+            "owner_node": "mirror_neuron@spark",
+        },
     )
 
     assert response.status_code == 202
     secret = captured["request"].secret_environment["DECLARED_SECRET"]
     assert secret.get_secret_value() == "secret-value"
+    assert captured["request"].owner_node == "mirror_neuron@spark"
     assert "secret-value" not in response.text
+
+
+def test_async_blueprint_requests_preserve_federated_owner_node():
+    run_request = blueprints.legacy_blueprints.resolve_async_blueprint_run_request(
+        "worker-1",
+        blueprints.BlueprintRunRequest(owner_node="mirror_neuron@spark"),
+    )
+    launch_request = blueprints.legacy_blueprints.resolve_async_blueprint_launch_request(
+        blueprints.legacy_blueprints.BlueprintLaunchRequest(
+            source="catalog",
+            blueprint_id="worker-1",
+            owner_node="mirror_neuron@spark",
+        )
+    )
+
+    assert run_request.owner_node == "mirror_neuron@spark"
+    assert launch_request.owner_node == "mirror_neuron@spark"
 
 
 def _wait_for_operation(client: TestClient, operation_id: str, terminal: set[str] | None = None) -> dict:
