@@ -577,8 +577,8 @@ def test_blueprint_output_relay_polls_durable_job_id(monkeypatch, tmp_path):
         lambda *_args, **_kwargs: (
             json.dumps(
                 {
-                    "runtime": {
-                        "placement": {
+                    "metadata": {
+                        "mn_workflow_placement": {
                             "mode": "single_node",
                             "selected_node": "mirror_neuron@spark",
                         }

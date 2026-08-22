@@ -969,11 +969,22 @@ def run_blueprint_record(
         )
         manifest_json = inject_declared_secret_environment(manifest_json, secret_environment)
         prepared_manifest = json.loads(manifest_json)
+        prepared_metadata = prepared_manifest.get("metadata", {})
         prepared_runtime = prepared_manifest.get("runtime", {})
-        prepared_placement = (
+        metadata_placement = (
+            prepared_metadata.get("mn_workflow_placement", {})
+            if isinstance(prepared_metadata, dict)
+            else {}
+        )
+        runtime_placement = (
             prepared_runtime.get("placement", {})
             if isinstance(prepared_runtime, dict)
             else {}
+        )
+        prepared_placement = (
+            metadata_placement
+            if isinstance(metadata_placement, dict) and metadata_placement
+            else runtime_placement
         )
         owner_node = req.owner_node or str(
             prepared_placement.get("selected_node") or ""
