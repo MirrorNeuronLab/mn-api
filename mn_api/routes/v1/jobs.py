@@ -207,6 +207,7 @@ def create_job(
             storage=request.storage,
             idempotency_key=idempotency_key or "",
             prepared=True,
+            owner_node=request.owner_node,
         )
 
     body = request.model_dump()

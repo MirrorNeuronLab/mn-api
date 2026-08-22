@@ -16,6 +16,7 @@ from mn_sdk import (
     ensure_combined_resource_totals,
     health_report_from_status,
     litellm_gateway_health,
+    join_federated_node,
     parse_duration_ms,
 )
 
@@ -135,27 +136,38 @@ def add_cluster_node(req: ClusterNodeAddRequest, _auth=Depends(require_auth)):
     try:
         host = normalize_node_host(req.host)
         token = normalize_node_token(req.token)
-        local_host = detect_lan_ip()
-        handshake = network_handshake_with_fallback(
+        local_host = local_core_advertised_host(state.client) or detect_lan_ip()
+        result = join_federated_node(
+            state.client,
             host=host,
             token=token,
             grpc_ports=candidate_grpc_ports(req.grpc_port),
             local_host=local_host,
         )
-        node_name = normalize_node_name(handshake.get("node_name") or f"mirror_neuron@{host}")
-        status = state.client.add_node(node_name, token=token)
-        return {
-            "ok": True,
-            "host": host,
-            "node_name": node_name,
-            "status": status,
-            "message": f"{node_name} was added to this box.",
-            "handshake": public_handshake_summary(handshake),
-        }
+        node_name = normalize_node_name(result.get("node_name") or f"mirror_neuron@{host}")
+        result["node_name"] = node_name
+        result["message"] = f"{node_name} is ready as a federated peer."
+        return result
     except HTTPException:
         raise
     except Exception as exc:
         return handle_grpc_error(exc)
+
+
+def local_core_advertised_host(client: Any) -> str:
+    try:
+        payload = client.get_system_summary()
+        summary = json.loads(payload) if isinstance(payload, str) else payload
+    except Exception:
+        return ""
+    if not isinstance(summary, dict):
+        return ""
+    nodes = [node for node in summary.get("nodes") or [] if isinstance(node, dict)]
+    node = next(
+        (item for item in nodes if item.get("self") is True or item.get("self?") is True),
+        nodes[0] if len(nodes) == 1 else {},
+    )
+    return str(node.get("grpc_host") or "").strip()
 
 
 def remove_cluster_node(req: ClusterNodeRemoveRequest, _auth=Depends(require_auth)):

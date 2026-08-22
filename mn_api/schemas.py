@@ -24,6 +24,7 @@ class StableJobCreateRequest(BaseModel):
     job_id: Optional[str] = None
     resolved_configuration: Dict[str, Any] = Field(default_factory=dict)
     storage: Dict[str, Any] = Field(default_factory=dict)
+    owner_node: Optional[str] = None
 
 
 class StableJobUpdateRequest(BaseModel):
@@ -73,6 +74,7 @@ class BlueprintRunRequest(BaseModel):
     progress_id: Optional[str] = None
     fake_llm: bool = False
     fake_skills: bool = False
+    owner_node: Optional[str] = None
 
 
 class BlueprintLaunchRequest(BlueprintRunRequest):

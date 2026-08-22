@@ -226,6 +226,7 @@ def run_blueprint_launch_record(req: BlueprintLaunchRequest):
         progress_id=progress_id,
         fake_llm=req.fake_llm,
         fake_skills=req.fake_skills,
+        owner_node=req.owner_node,
     )
     return run_blueprint_record(
         launch["repo_root"],
@@ -316,6 +317,7 @@ def resolve_async_blueprint_run_request(blueprint_id: str, req: BlueprintRunRequ
         progress_id=progress_id,
         fake_llm=req.fake_llm,
         fake_skills=req.fake_skills,
+        owner_node=req.owner_node,
     )
 
 
@@ -1018,6 +1020,7 @@ def run_blueprint_record(
                     payloads,
                     job_id=stable_job_id,
                     resolved_configuration=config_overrides,
+                    owner_node=req.owner_node or "",
                 )
             )
             stable_job_id = str(created["job_id"])

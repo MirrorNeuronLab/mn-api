@@ -19,6 +19,9 @@ _PRIVATE_KEYS = {
     "config_path",
     "host_path",
     "litellm_config_path",
+    "local_peer_auth_token",
+    "join_token",
+    "peer_auth_token",
     "repo_dir",
     "run_dir",
     "runs_root",
@@ -128,4 +131,3 @@ def first_identifier(resource: Any, names: Iterable[str]) -> str:
         if value is not None and str(value).strip():
             return str(value)
     return ""
-

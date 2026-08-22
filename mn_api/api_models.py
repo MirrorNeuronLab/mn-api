@@ -61,6 +61,7 @@ class JobCreate(StrictModel):
     job_id: str | None = None
     resolved_configuration: dict[str, Any] = Field(default_factory=dict)
     storage: dict[str, Any] = Field(default_factory=dict)
+    owner_node: str | None = None
 
 
 class JobUpdate(StrictModel):
@@ -86,6 +87,7 @@ class BlueprintRunCreate(RunCreate):
     force: bool = False
     fake_llm: bool = False
     fake_skills: bool = False
+    owner_node: str | None = None
 
 
 class RunUpdate(StrictModel):
