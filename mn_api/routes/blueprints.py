@@ -986,9 +986,24 @@ def run_blueprint_record(
             if isinstance(metadata_placement, dict) and metadata_placement
             else runtime_placement
         )
-        owner_node = req.owner_node or str(
+        prepared_owner_node = str(
             prepared_placement.get("selected_node") or ""
         )
+        if not prepared_owner_node and isinstance(prepared_metadata, dict):
+            docker_workers = prepared_metadata.get("mn_docker_workers", {})
+            docker_services = (
+                docker_workers.get("services", [])
+                if isinstance(docker_workers, dict)
+                else []
+            )
+            docker_owner_nodes = {
+                str(service.get("node") or "").strip()
+                for service in docker_services
+                if isinstance(service, dict) and str(service.get("node") or "").strip()
+            }
+            if len(docker_owner_nodes) == 1:
+                prepared_owner_node = next(iter(docker_owner_nodes))
+        owner_node = req.owner_node or prepared_owner_node
     except HTTPException:
         cleanup_blueprint_run_processes(run_id, reason="manifest_prepare_failed")
         record_launch_progress(

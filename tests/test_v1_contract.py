@@ -578,9 +578,13 @@ def test_blueprint_output_relay_polls_durable_job_id(monkeypatch, tmp_path):
             json.dumps(
                 {
                     "metadata": {
-                        "mn_workflow_placement": {
-                            "mode": "single_node",
-                            "selected_node": "mirror_neuron@spark",
+                        "mn_docker_workers": {
+                            "services": [
+                                {
+                                    "node": "mirror_neuron@spark",
+                                    "service": "cctv-adaptive-frame-sampler",
+                                }
+                            ]
                         }
                     }
                 }
