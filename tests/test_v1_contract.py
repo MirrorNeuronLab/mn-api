@@ -541,7 +541,8 @@ def test_blueprint_output_relay_polls_durable_job_id(monkeypatch, tmp_path):
     captured = {}
 
     class Runtime:
-        def create_job(self, _manifest, _payloads, **_kwargs):
+        def create_job(self, _manifest, _payloads, **kwargs):
+            captured["owner_node"] = kwargs.get("owner_node")
             return json.dumps({"job_id": "job-stable"})
 
         def start_run(self, job_id, **_kwargs):
@@ -570,7 +571,23 @@ def test_blueprint_output_relay_polls_durable_job_id(monkeypatch, tmp_path):
     monkeypatch.setattr(legacy, "start_blueprint_pre_launch_hook", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(legacy, "generate_stable_job_id", lambda _blueprint_id: "job-requested")
     monkeypatch.setattr(legacy, "generate_job_definition_submission_id", lambda _job_id: "submission-1")
-    monkeypatch.setattr(legacy, "load_blueprint_bundle", lambda *_args, **_kwargs: ("{}", {}))
+    monkeypatch.setattr(
+        legacy,
+        "load_blueprint_bundle",
+        lambda *_args, **_kwargs: (
+            json.dumps(
+                {
+                    "runtime": {
+                        "placement": {
+                            "mode": "single_node",
+                            "selected_node": "mirror_neuron@spark",
+                        }
+                    }
+                }
+            ),
+            {},
+        ),
+    )
     monkeypatch.setattr(legacy, "inject_declared_secret_environment", lambda manifest, _secrets: manifest)
     monkeypatch.setattr(legacy.state, "client", Runtime())
     monkeypatch.setattr(legacy, "write_blueprint_job_mapping", lambda *_args, **_kwargs: None)
@@ -590,7 +607,11 @@ def test_blueprint_output_relay_polls_durable_job_id(monkeypatch, tmp_path):
 
     assert result["job_id"] == "job-stable"
     assert result["run_id"] == "run-execution"
-    assert captured == {"run_id": "run-requested", "job_id": "job-stable"}
+    assert captured == {
+        "owner_node": "mirror_neuron@spark",
+        "run_id": "run-requested",
+        "job_id": "job-stable",
+    }
 
 
 def _wait_for_operation(client: TestClient, operation_id: str, terminal: set[str] | None = None) -> dict:

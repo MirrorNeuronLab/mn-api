@@ -968,6 +968,16 @@ def run_blueprint_record(
             ),
         )
         manifest_json = inject_declared_secret_environment(manifest_json, secret_environment)
+        prepared_manifest = json.loads(manifest_json)
+        prepared_runtime = prepared_manifest.get("runtime", {})
+        prepared_placement = (
+            prepared_runtime.get("placement", {})
+            if isinstance(prepared_runtime, dict)
+            else {}
+        )
+        owner_node = req.owner_node or str(
+            prepared_placement.get("selected_node") or ""
+        )
     except HTTPException:
         cleanup_blueprint_run_processes(run_id, reason="manifest_prepare_failed")
         record_launch_progress(
@@ -1023,7 +1033,7 @@ def run_blueprint_record(
                     payloads,
                     job_id=stable_job_id,
                     resolved_configuration=config_overrides,
-                    owner_node=req.owner_node or "",
+                    owner_node=owner_node,
                 )
             )
             stable_job_id = str(created["job_id"])
