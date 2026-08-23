@@ -285,6 +285,7 @@ def replace_job_bundle(
         manifest_json=manifest_json,
         payloads=payloads,
         expected_revision=_revision(current),
+        replace_existing_run=request.replace_existing_run,
     )
     return resource_response(result, etag=True)
 
@@ -338,11 +339,18 @@ def create_job_run(
     principal: str = Depends(require_auth),
 ):
     def start():
+        run_id = request.run_id
+        if request.replace_existing_run and not run_id:
+            raise HTTPException(
+                status_code=422,
+                detail="replace_existing_run requires a fresh explicit run_id",
+            )
         run = _service().start_run(
             job_id,
-            run_id=request.run_id,
+            run_id=run_id,
             inputs=request.inputs,
             idempotency_key=idempotency_key or "",
+            replace_existing_run=request.replace_existing_run,
         )
         run.setdefault("status", "pending")
         return run

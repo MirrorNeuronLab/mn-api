@@ -73,11 +73,13 @@ class JobUpdate(StrictModel):
 
 class JobBundleReplacement(StrictModel):
     bundle_id: str
+    replace_existing_run: bool = False
 
 
 class RunCreate(StrictModel):
     run_id: str | None = None
     inputs: dict[str, Any] = Field(default_factory=dict)
+    replace_existing_run: bool = False
 
 
 class BlueprintRunCreate(RunCreate):

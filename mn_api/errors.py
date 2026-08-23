@@ -156,6 +156,16 @@ def _legacy_validation_response(error: Exception):
             )
     if isinstance(error, grpc.RpcError) and error.code() == grpc.StatusCode.FAILED_PRECONDITION:
         detail = str(error.details())
+        if "MN_SERVICE_RUN_EXISTS" in detail:
+            return problem_response(
+                status_code=409,
+                error="service_run_exists",
+                title="Service run already exists",
+                detail=(
+                    "This service job already has a run. Resume, pause, cancel, delete, "
+                    "or explicitly replace the existing run."
+                ),
+            )
         if "coordination_store_mismatch" in detail:
             return problem_response(
                 status_code=412,

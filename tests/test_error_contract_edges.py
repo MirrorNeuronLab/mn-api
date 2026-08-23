@@ -57,6 +57,20 @@ def test_coordination_store_mismatch_preserves_machine_readable_error():
     assert "coordination_store_mismatch" in body["detail"]
 
 
+def test_service_run_exists_is_a_stable_conflict():
+    response = handle_grpc_error(
+        RpcError(
+            grpc.StatusCode.FAILED_PRECONDITION,
+            "MN_SERVICE_RUN_EXISTS: service job job-1 already has run run-1",
+        )
+    )
+
+    body = json.loads(response.body)
+    assert response.status_code == 409
+    assert body["code"] == "service_run_exists"
+    assert "replace" in body["detail"].lower()
+
+
 def test_invalid_argument_validation_problem_builds_legacy_report_for_plain_detail():
     response = handle_grpc_error(
         RpcError(grpc.StatusCode.INVALID_ARGUMENT, "input_validation_failed: missing input document")

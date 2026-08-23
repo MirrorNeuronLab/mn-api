@@ -55,8 +55,8 @@ class CanonicalRuntime:
         self.calls.append(("delete_job", job_id))
         return json.dumps({"job_id": job_id, "deleted": True})
 
-    def update_job(self, job_id, attrs, **_kwargs):
-        self.calls.append(("update_job", job_id, attrs))
+    def update_job(self, job_id, attrs, **kwargs):
+        self.calls.append(("update_job", job_id, attrs, kwargs))
         return json.dumps({"job_id": job_id, "status": "active", "revision": 2, **attrs})
 
     def start_run(self, job_id, **kwargs):
@@ -369,6 +369,25 @@ def test_etag_precondition_and_idempotent_run_creation(monkeypatch):
 
     conflict = client.post("/api/v1/jobs/job-1/runs", headers=headers, json={"inputs": {"x": 2}})
     assert conflict.status_code == 409
+
+    replacement = client.post(
+        "/api/v1/jobs/job-1/runs",
+        json={
+            "run_id": "run-replacement",
+            "inputs": {"x": 3},
+            "replace_existing_run": True,
+        },
+    )
+    assert replacement.status_code == 202
+    replacement_call = [call for call in runtime.calls if call[0] == "start_run"][-1]
+    assert replacement_call[2]["replace_existing_run"] is True
+    assert replacement_call[2]["run_id"] == "run-replacement"
+
+    missing_replacement_id = client.post(
+        "/api/v1/jobs/job-1/runs",
+        json={"replace_existing_run": True},
+    )
+    assert missing_replacement_id.status_code == 422
 
 
 def _patch_canonical_projections(monkeypatch):
@@ -800,8 +819,10 @@ def test_canonical_resource_happy_paths(monkeypatch):
     assert client.put(
         "/api/v1/jobs/job-1/bundle",
         headers={"If-Match": current.headers["etag"]},
-        json={"bundle_id": "bundle-2"},
+        json={"bundle_id": "bundle-2", "replace_existing_run": True},
     ).status_code == 200
+    bundle_update = [call for call in runtime.calls if call[0] == "update_job"][-1]
+    assert bundle_update[3]["replace_existing_run"] is True
     assert client.post("/api/v1/jobs/job-1/data-resets").status_code == 202
     assert client.post("/api/v1/jobs/job-1/schedules", json={"schedule": {"kind": "cron"}}).status_code == 201
 

@@ -31,11 +31,13 @@ class StableJobUpdateRequest(BaseModel):
     attrs: Dict[str, Any] = Field(default_factory=dict)
     manifest_json: Optional[str] = None
     payloads: Optional[Dict[str, str]] = Field(default_factory=dict)
+    replace_existing_run: bool = False
 
 
 class StartRunRequest(BaseModel):
     run_id: Optional[str] = None
     inputs: Dict[str, Any] = Field(default_factory=dict)
+    replace_existing_run: bool = False
 
 
 class BlueprintRunV2Request(BaseModel):
@@ -46,6 +48,7 @@ class BlueprintRunV2Request(BaseModel):
     progress_id: Optional[str] = None
     fake_llm: bool = False
     fake_skills: bool = False
+    replace_existing_run: bool = False
 
 
 class ConfirmDeleteRequest(BaseModel):
@@ -75,6 +78,7 @@ class BlueprintRunRequest(BaseModel):
     fake_llm: bool = False
     fake_skills: bool = False
     owner_node: Optional[str] = None
+    replace_existing_run: bool = False
 
 
 class BlueprintLaunchRequest(BlueprintRunRequest):

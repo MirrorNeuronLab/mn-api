@@ -177,6 +177,7 @@ def create_blueprint_run(
                 fake_llm=payload.fake_llm,
                 fake_skills=payload.fake_skills,
                 owner_node=payload.owner_node,
+                replace_existing_run=payload.replace_existing_run,
             ),
         )
         run = legacy_blueprints.run_blueprint_record(repo_root, blueprint, resolved)

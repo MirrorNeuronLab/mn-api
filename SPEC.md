@@ -80,8 +80,12 @@ model placement algorithms, blueprint domain behavior, or the browser UI.
   another client-side CLI step is neither required nor permitted as part of the
   HTTP workflow.
 - `job_id` is stable and owns configuration, schedules, and shared data;
-  `run_id` is the execution/control identity. Starting or dispatching a job
-  creates a fresh run, while retry/recovery attempts retain their run ID.
+  `run_id` is the execution/control identity. Batch starts create fresh runs.
+  Only executable `type: service` jobs are single-run: ordinary second starts
+  return HTTP 409 Problem Details with code `service_run_exists`, while explicit
+  `replace_existing_run` requires a fresh caller-supplied `run_id` and returns
+  that run plus optional replaced-run and deferred-cleanup metadata.
+  Retry/recovery attempts retain their run ID.
 - Archive retains shared data. Data reset and permanent job deletion are
   explicit operations; confirmed deletion is rejected while runs are active.
   Individual run deletion never deletes job data.
@@ -91,6 +95,8 @@ model placement algorithms, blueprint domain behavior, or the browser UI.
   `job_id` is supplied, and returns both identities. Existing jobs receive the
   freshly prepared manifest and payloads through atomic bundle replacement
   before the new run starts.
+  Existing service jobs use a separate `replace_existing_run` field; blueprint
+  `force` remains validation bypass and never implies destructive replacement.
 - When `owner_node` selects a federated Core, launch preserves that owner through
   asynchronous request normalization and passes the same selected-node handoff
   into SDK preparation before forwarding Job creation. Distributed workflows

@@ -228,6 +228,7 @@ def run_blueprint_launch_record(req: BlueprintLaunchRequest):
         fake_llm=req.fake_llm,
         fake_skills=req.fake_skills,
         owner_node=req.owner_node,
+        replace_existing_run=req.replace_existing_run,
     )
     return run_blueprint_record(
         launch["repo_root"],
@@ -319,6 +320,7 @@ def resolve_async_blueprint_run_request(blueprint_id: str, req: BlueprintRunRequ
         fake_llm=req.fake_llm,
         fake_skills=req.fake_skills,
         owner_node=req.owner_node,
+        replace_existing_run=req.replace_existing_run,
     )
 
 
@@ -340,6 +342,7 @@ def resolve_async_blueprint_launch_request(req: BlueprintLaunchRequest) -> Bluep
         blueprint_id=req.blueprint_id,
         path=req.path,
         owner_node=req.owner_node,
+        replace_existing_run=req.replace_existing_run,
         **{"_bundle_path": req.bundle_path},
     )
 
@@ -782,6 +785,12 @@ def run_blueprint_record(
         label="Find blueprint",
         detail="The catalog blueprint and launch configuration were found.",
     )
+    if req and req.replace_existing_run and not req.job_id:
+        raise HTTPException(
+            status_code=422,
+            detail="replace_existing_run requires an existing job_id",
+        )
+
     run_id = req.run_id if req and req.run_id else create_blueprint_run_id(blueprint_id)
     validate_run_id(run_id)
     config_overrides = {}
@@ -1077,6 +1086,7 @@ def run_blueprint_record(
                 else {},
                 manifest_json=manifest_json,
                 payloads=payloads,
+                replace_existing_run=bool(req.replace_existing_run),
             )
             definition_committed = True
         started = json.loads(
