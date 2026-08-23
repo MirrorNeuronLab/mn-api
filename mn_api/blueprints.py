@@ -2626,7 +2626,7 @@ def start_background_event_relay_if_needed(
     repo_root: Path,
     blueprint: Dict[str, Any],
     run_id: str,
-    job_id: str,
+    execution_id: str,
     manifest_json: str,
     *,
     config_overrides: Dict[str, Any] | None = None,
@@ -2661,8 +2661,8 @@ def start_background_event_relay_if_needed(
         sys.executable,
         "-m",
         "mn_sdk.blueprint_support.event_relay",
-        "--job-id",
-        job_id,
+        "--run-id",
+        execution_id,
         "--run-dir",
         str(run_dir),
         "--poll-seconds",
@@ -2699,7 +2699,7 @@ def start_background_event_relay_if_needed(
         return
 
     relay_info = {
-        "job_id": job_id,
+        "execution_id": execution_id,
         "pid": process.pid,
         "poll_seconds": poll_seconds,
         "max_seconds": max_seconds,

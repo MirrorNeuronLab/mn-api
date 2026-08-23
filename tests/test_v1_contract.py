@@ -549,7 +549,7 @@ def test_hardware_preflight_selects_unique_owner_node():
     assert selected == "mirror_neuron@spark"
 
 
-def test_blueprint_output_relay_polls_durable_job_id(monkeypatch, tmp_path):
+def test_blueprint_output_relay_polls_execution_run_id(monkeypatch, tmp_path):
     legacy = blueprints.legacy_blueprints
     bundle = tmp_path / "worker-1"
     bundle.mkdir()
@@ -614,8 +614,8 @@ def test_blueprint_output_relay_polls_durable_job_id(monkeypatch, tmp_path):
     monkeypatch.setattr(legacy, "manifest_without_secret_environment", lambda manifest, _secrets: manifest)
     monkeypatch.setattr(legacy, "_current_config", lambda: SimpleNamespace())
 
-    def capture_relay(_repo, _blueprint, run_id, job_id, _manifest, **_kwargs):
-        captured.update(run_id=run_id, job_id=job_id)
+    def capture_relay(_repo, _blueprint, run_id, execution_id, _manifest, **_kwargs):
+        captured.update(run_id=run_id, execution_id=execution_id)
 
     monkeypatch.setattr(legacy, "start_background_event_relay_if_needed", capture_relay)
 
@@ -630,7 +630,7 @@ def test_blueprint_output_relay_polls_durable_job_id(monkeypatch, tmp_path):
     assert captured == {
         "owner_node": "mirror_neuron@spark",
         "run_id": "run-requested",
-        "job_id": "job-stable",
+        "execution_id": "run-execution",
     }
 
 

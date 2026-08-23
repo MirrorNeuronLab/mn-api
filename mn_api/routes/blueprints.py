@@ -1102,7 +1102,7 @@ def run_blueprint_record(
             repo_root,
             blueprint,
             run_id,
-            stable_job_id,
+            execution_id,
             manifest_json,
             config_overrides=config_overrides,
             env_overrides=env_overrides,
