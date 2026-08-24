@@ -134,6 +134,12 @@ All paths below are under `/api/v1`.
   `/runs/{run_id}/events/stream` and
   `/operations/{operation_id}/events/stream`.
 
+`mn-web-ui-server` also owns a local-only job UI proxy at
+`/job-ui-proxy/{job_id}/{port}/...`. It resolves the durable
+`/jobs/{job_id}/ui` handle through the authenticated API, then forwards only
+the dashboard host and explicitly declared companion ports recorded for that
+job. It is not a public API route or a general-purpose network proxy.
+
 Workflow-progress snapshots expose source-facing `edges` and `layers`. When
 Core reports a lowered runtime graph, the API projects dependencies through
 internal start/end/fork/join nodes so desktop clients can render parallel

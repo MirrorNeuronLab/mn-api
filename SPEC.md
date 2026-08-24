@@ -83,7 +83,10 @@ model placement algorithms, blueprint domain behavior, or the browser UI.
   `run_id` is the execution/control identity. Batch starts create fresh runs.
   A blueprint-owned Web UI is optional singular Job state: its durable handle
   is served only at `GET /api/v1/jobs/{job_id}/ui` and is shared by every run
-  of that Job. Run UI paths are not mounted.
+  of that Job. Run UI paths are not mounted. The local `mn-web-ui-server` may
+  use that authenticated handle to proxy a declared external service UI and
+  its explicitly allowlisted companion ports; the API itself does not expose a
+  general remote-proxy route.
   Only executable `type: service` jobs are single-run: ordinary second starts
   return HTTP 409 Problem Details with code `service_run_exists`, while explicit
   `replace_existing_run` requires a fresh caller-supplied `run_id` and returns
