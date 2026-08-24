@@ -113,3 +113,31 @@ def test_run_artifacts_dedupes_output_refs(monkeypatch, tmp_path):
         {"path": str(output), "artifact_id": "output"},
     ]
     assert jobs._run_artifacts(None, tmp_path) == []
+
+
+def test_get_job_ui_reads_the_durable_job_data_directory(monkeypatch, tmp_path):
+    job_dir = tmp_path / "job-1"
+    job_dir.mkdir()
+    (job_dir / "ui.json").write_text(json.dumps({"job_id": "job-1", "title": "Example"}), encoding="utf-8")
+    (job_dir / "web_ui.json").write_text(
+        json.dumps({"job_id": "job-1", "url": "http://127.0.0.1:61000"}), encoding="utf-8"
+    )
+    monkeypatch.setattr(jobs, "job_data_dir_from_id", lambda _job_id, must_exist=False: job_dir)
+
+    assert jobs.get_job_ui("job-1") == {
+        "job_id": "job-1",
+        "ui": {"job_id": "job-1", "title": "Example"},
+        "web_ui": {"job_id": "job-1", "url": "http://127.0.0.1:61000"},
+    }
+
+
+def test_get_job_ui_rejects_handles_owned_by_another_job(monkeypatch, tmp_path):
+    job_dir = tmp_path / "job-1"
+    job_dir.mkdir()
+    (job_dir / "ui.json").write_text(json.dumps({"job_id": "job-2"}), encoding="utf-8")
+    (job_dir / "web_ui.json").write_text(json.dumps({"job_id": "job-2"}), encoding="utf-8")
+    monkeypatch.setattr(jobs, "job_data_dir_from_id", lambda _job_id, must_exist=False: job_dir)
+
+    with pytest.raises(HTTPException) as error:
+        jobs.get_job_ui("job-1")
+    assert error.value.status_code == 404

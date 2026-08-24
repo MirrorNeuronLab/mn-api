@@ -250,6 +250,14 @@ def get_job(job_id: str, _principal=Depends(require_auth)):
     return resource_response(_service().get_job(job_id), etag=True)
 
 
+@router.get("/jobs/{job_id}/ui", operation_id="get_job_ui", tags=["jobs"], response_model=ResourceModel)
+def get_job_ui(job_id: str, principal=Depends(require_auth)):
+    # Confirm the durable definition exists before reading its host-visible
+    # shared UI handle. A UI belongs to the Job, not any individual Run.
+    _service().get_job(job_id)
+    return public_value(runtime_job_routes.get_job_ui(job_id, principal))
+
+
 @router.patch("/jobs/{job_id}", operation_id="update_job", tags=["jobs"], response_model=ResourceModel)
 def update_job(
     job_id: str,
@@ -723,17 +731,6 @@ def create_run_human_acknowledgement(
         run_id=run_id,
         runtime_run_id=runtime_id,
     )
-
-
-@router.get("/runs/{run_id}/ui", operation_id="get_run_ui", tags=["runs"], response_model=ResourceModel)
-def get_run_ui(run_id: str, principal=Depends(require_auth)):
-    runtime_id = _runtime_output_id(run_id)
-    return _run_public(runtime_run_routes.get_run_ui(runtime_id, 200, principal), run_id=run_id, runtime_run_id=runtime_id)
-
-
-@router.get("/runs/{run_id}/ui/video", operation_id="get_run_ui_video", tags=["runs"])
-def get_run_ui_video(run_id: str, principal=Depends(require_auth)):
-    return runtime_run_routes.get_run_ui_video(_runtime_output_id(run_id), principal)
 
 
 @router.get(

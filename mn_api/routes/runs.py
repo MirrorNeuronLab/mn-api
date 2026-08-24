@@ -5,7 +5,6 @@ import subprocess
 import sys
 import time
 import urllib.parse
-from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -102,64 +101,6 @@ def _reveal_local_path(path: Path) -> None:
     subprocess.Popen(["xdg-open", str(path.parent)])
 
 
-def _read_event_tail(path: Path, *, limit: int) -> list[dict[str, Any]]:
-    if not path.exists() or limit <= 0:
-        return []
-    events: deque[dict[str, Any]] = deque(maxlen=limit)
-    try:
-        with path.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                stripped = line.strip()
-                if not stripped:
-                    continue
-                try:
-                    event = json.loads(stripped)
-                except json.JSONDecodeError:
-                    event = {"type": "unparseable_event", "payload": {"line": stripped}}
-                if isinstance(event, dict):
-                    events.append(event)
-    except OSError as exc:
-        raise HTTPException(status_code=500, detail="failed to read events") from exc
-    return list(events)
-
-
-def _first_video_source(ui: dict[str, Any]) -> str:
-    components = ui.get("components") if isinstance(ui.get("components"), list) else []
-    for component in components:
-        if not isinstance(component, dict):
-            continue
-        if component.get("type") == "video" and component.get("source"):
-            return str(component["source"])
-    return ""
-
-
-def _local_source_path(source: str, run_dir: Path) -> Path | None:
-    if not source:
-        return None
-    if source.startswith("file://"):
-        parsed = urllib.parse.urlparse(source)
-        return Path(urllib.parse.unquote(parsed.path)).expanduser().resolve()
-    if "://" in source:
-        return None
-    candidate = Path(source).expanduser()
-    if not candidate.is_absolute():
-        candidate = run_dir / candidate
-    return candidate.resolve()
-
-
-def _allowed_local_roots(run_dir: Path, ui: dict[str, Any]) -> list[Path]:
-    metadata = ui.get("metadata") if isinstance(ui.get("metadata"), dict) else {}
-    roots = [run_dir.resolve()]
-    bundle_dir = metadata.get("bundle_dir")
-    if isinstance(bundle_dir, str) and bundle_dir:
-        roots.append(Path(bundle_dir).expanduser().resolve())
-    return roots
-
-
-def _is_allowed_local_path(path: Path, roots: list[Path]) -> bool:
-    return any(path == root or path.is_relative_to(root) for root in roots)
-
-
 def get_run_result(run_id: str, _auth=Depends(require_auth)):
     run_dir = _ensure_run_exists(run_id)
     return _read_required_json_file(run_dir / "result.json", "result")
@@ -233,27 +174,6 @@ def get_run_output(run_id: str, output_index: int, _auth=Depends(require_auth)):
     if path is None or not path.is_file():
         raise HTTPException(status_code=404, detail="output not found")
     return FileResponse(path, media_type=output_content_type(path), filename=path.name)
-
-
-def get_run_ui(run_id: str, limit: int = Query(200, ge=0, le=1000), _auth=Depends(require_auth)):
-    run_dir = _run_dir(run_id)
-    if not run_dir.exists():
-        raise HTTPException(status_code=404, detail="run not found")
-
-    ui = _read_json_file(run_dir / "ui.json")
-    if not ui:
-        raise HTTPException(status_code=404, detail="run UI not found")
-    web_ui = _read_json_file(run_dir / "web_ui.json")
-
-    return {
-        "run_id": run_id,
-        "run_dir": str(run_dir),
-        "ui": ui,
-        "web_ui": web_ui,
-        "job": _read_json_file(run_dir / "job.json"),
-        "run": _read_json_file(run_dir / "run.json"),
-        "events": _read_event_tail(run_dir / "events.jsonl", limit=limit),
-    }
 
 
 def get_run_events(
@@ -431,25 +351,6 @@ def post_run_human_ack(
     _ensure_run_exists(run_id)
     tools = _observability_tools()
     return tools["acknowledge_human_notice"](run_id, notice_id, payload or {}, runs_root=_runs_root())
-
-
-def get_run_ui_video(run_id: str, _auth=Depends(require_auth)):
-    run_dir = _run_dir(run_id)
-    if not run_dir.exists():
-        raise HTTPException(status_code=404, detail="run not found")
-
-    ui = _read_json_file(run_dir / "ui.json")
-    if not ui:
-        raise HTTPException(status_code=404, detail="run UI not found")
-
-    source_path = _local_source_path(_first_video_source(ui), run_dir)
-    if source_path is None:
-        raise HTTPException(status_code=404, detail="local video not configured")
-    if not _is_allowed_local_path(source_path, _allowed_local_roots(run_dir, ui)):
-        raise HTTPException(status_code=403, detail="video source is outside allowed roots")
-    if not source_path.exists() or not source_path.is_file():
-        raise HTTPException(status_code=404, detail="video source not found")
-    return FileResponse(source_path)
 
 
 def _ensure_run_exists(run_id: str) -> Path:

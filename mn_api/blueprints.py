@@ -2639,7 +2639,6 @@ def cleanup_blueprint_run_processes(run_id: str, *, reason: str = "job_cancelled
     cleanup_post_launch_hook(run_dir, reason=reason)
     cleanup_run_process(run_dir, "pre_launch_process.json")
     cleanup_owned_port_listeners(cleanup_metadata)
-    cleanup_run_process(run_dir, "web_ui_process.json")
     cleanup_run_process(run_dir, "event_relay.json")
 
 
@@ -2931,6 +2930,9 @@ def unmapped_run_dir_is_stale(run_dir: Path) -> bool:
 
 
 def cleanup_blueprint_processes_for_job(job_id: str) -> None:
+    job_data_dir = job_data_dir_from_id(job_id)
+    if job_data_dir is not None:
+        cleanup_run_process(job_data_dir, "web_ui_process.json")
     runs_root = Path(shared_runs_root()).expanduser()
     if not runs_root.is_dir():
         return

@@ -55,6 +55,7 @@ from mn_api.blueprints import (
 from mn_api.bundles import load_uploaded_bundle
 from mn_api.dependencies import require_auth
 from mn_api.errors import handle_grpc_error, validation_problem_response
+from mn_api.job_store import job_data_dir_from_id
 from mn_api.job_activity import compact_event as _compact_event
 from mn_api.job_activity import compact_value as _compact_value
 from mn_api.job_activity import enrich_workflow_progress_activity as _enrich_workflow_progress_activity
@@ -201,6 +202,23 @@ def get_job(job_id: str, include: str = Query("compact"), _auth=Depends(require_
         raise
     except Exception as exc:
         return handle_grpc_error(exc)
+
+
+def get_job_ui(job_id: str, _auth=Depends(require_auth)):
+    job_dir = job_data_dir_from_id(job_id, must_exist=False)
+    if job_dir is None:
+        raise HTTPException(status_code=400, detail="invalid job id")
+    if not job_dir.is_dir():
+        raise HTTPException(status_code=404, detail="job UI not found")
+
+    ui = _read_json_file(job_dir / "ui.json")
+    web_ui = _read_json_file(job_dir / "web_ui.json")
+    if not ui or not web_ui:
+        raise HTTPException(status_code=404, detail="job UI not found")
+    if ui.get("job_id") != job_id or web_ui.get("job_id") != job_id:
+        raise HTTPException(status_code=404, detail="job UI not found")
+
+    return {"job_id": job_id, "ui": ui, "web_ui": web_ui}
 
 
 def get_job_snapshot(job_id: str, snapshot_kind: str, _auth=Depends(require_auth)):
@@ -1446,6 +1464,5 @@ def replay_job_dead_letter(job_id: str, index: int, _auth=Depends(require_auth))
             "message": "core replay is available in-process; gRPC replay will be added to expose it over REST",
         },
     )
-
 
 

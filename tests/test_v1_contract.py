@@ -275,11 +275,29 @@ def test_health_capability_and_removed_routes(monkeypatch):
         "/api/v1/deployments",
         "/api/v1/run-cleanups",
         "/api/v1/run-cancellations",
+        "/api/v1/runs/run-1/ui",
     ):
         response = client.get(path)
         assert response.status_code == 404
         assert response.headers["content-type"] == "application/problem+json"
         assert response.json()["code"] == "not_found"
+
+
+def test_job_ui_is_bound_to_the_durable_job(monkeypatch):
+    client, _runtime = _client(monkeypatch)
+    monkeypatch.setattr(
+        jobs.runtime_job_routes,
+        "get_job_ui",
+        lambda job_id, *_args: {"job_id": job_id, "ui": {"job_id": job_id}, "web_ui": {"job_id": job_id}},
+    )
+    response = client.get("/api/v1/jobs/job-1/ui")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "job_id": "job-1",
+        "ui": {"job_id": "job-1"},
+        "web_ui": {"job_id": "job-1"},
+    }
 
 
 def test_strict_bodies_and_problem_details(monkeypatch):
@@ -434,8 +452,11 @@ def _patch_canonical_projections(monkeypatch):
     monkeypatch.setattr(jobs.runtime_run_routes, "get_run_human_events", lambda *_args: {"data": [{"request_id": "request-1"}]})
     monkeypatch.setattr(jobs.runtime_run_routes, "post_run_human_response", lambda *_args: {"request_id": "request-1", "status": "answered"})
     monkeypatch.setattr(jobs.runtime_run_routes, "post_run_human_ack", lambda *_args: {"request_id": "request-1", "status": "acknowledged"})
-    monkeypatch.setattr(jobs.runtime_run_routes, "get_run_ui", lambda *_args: {"ui": {"components": []}})
-    monkeypatch.setattr(jobs.runtime_run_routes, "get_run_ui_video", lambda *_args: {"video": True})
+    monkeypatch.setattr(
+        jobs.runtime_job_routes,
+        "get_job_ui",
+        lambda job_id, *_args: {"job_id": job_id, "ui": {"job_id": job_id}, "web_ui": {"job_id": job_id}},
+    )
     monkeypatch.setattr(jobs.runtime_run_routes, "get_run_final_artifact", lambda *_args: {"artifact_id": "final"})
     monkeypatch.setattr(jobs.runtime_run_routes, "list_run_artifacts", lambda *_args: {"artifacts": [{"artifact_id": "a"}]})
     monkeypatch.setattr(jobs.runtime_run_routes, "get_run_artifact", lambda *_args: {"download": "artifact"})
@@ -941,8 +962,6 @@ def test_canonical_run_detail_and_operations(monkeypatch):
         "events",
         "resources",
         "human-requests",
-        "ui",
-        "ui/video",
         "artifacts/final",
         "artifacts",
         "artifacts/report.txt",
