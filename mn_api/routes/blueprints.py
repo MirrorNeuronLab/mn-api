@@ -819,6 +819,14 @@ def run_blueprint_record(
         env_overrides["MN_SELECTED_RUNTIME_NODE"] = owner_node
     force = bool(req.force) if req else False
     state.close_client()
+    if req and req.job_id and not owner_node:
+        # Updating a durable job retains its Core-owned node. Reuse that node
+        # when regenerating a single-node bundle so its new scheduler
+        # constraints cannot drift back to the API host.
+        existing_job = json.loads(state.client.get_job(req.job_id))
+        owner_node = str(existing_job.get("owner_node") or "").strip()
+        if owner_node:
+            env_overrides["MN_SELECTED_RUNTIME_NODE"] = owner_node
     preflight = run_launch_preflight(
         repo_root,
         blueprint,

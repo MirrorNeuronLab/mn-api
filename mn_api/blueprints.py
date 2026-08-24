@@ -1491,6 +1491,27 @@ def load_blueprint_bundle(
     )
     manifest = shared_preparation.manifest
     runtime_env = shared_preparation.runtime_environment
+    selected_runtime_node = str(
+        preparation_env.get("MN_SELECTED_RUNTIME_NODE") or ""
+    ).strip()
+    placement_mode = workflow_placement_mode(manifest, env=preparation_env)
+    if selected_runtime_node and (
+        placement_mode == "single_node"
+        or (placement_mode is None and workflow_requires_single_node(manifest))
+    ):
+        # A caller may be resubmitting a durable job already owned by a remote
+        # federation node. Preserve that ownership while rebuilding its bundle;
+        # otherwise a CPU-only workflow can be reselected onto the API host and
+        # leave the job owner and scheduler constraints pointing at different
+        # coordination stores.
+        reapply_selected_workflow_placement(
+            manifest,
+            fallback_placement={
+                "mode": "single_node",
+                "selected_node": selected_runtime_node,
+                "constraint_source": "mn-api-workflow-placement",
+            },
+        )
     package_payload_models_for_api(bundle_root, manifest)
     prepare_openshell_custom_images(bundle_root, manifest)
 

@@ -1154,6 +1154,83 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertIn("DockerWorker image", observed["detail"])
         self.assertIn("several minutes", observed["expectation"])
 
+    def test_load_blueprint_bundle_preserves_requested_single_node_owner(self):
+        owner = "mirror_neuron@10.0.4.26"
+        local = "mirror_neuron@10.0.4.23"
+        node = lambda name, self: {
+            "name": name,
+            "status": "healthy",
+            "scheduling_eligible": True,
+            "self": self,
+            "connection_mode": "federated" if not self else "local",
+            "coordination_store": {
+                "identity": f"{name}-store",
+                "writable_primary": True,
+                "healthy": True,
+            },
+            "hardware": {
+                "cpu": {"logical_processors": 8},
+                "memory": {"total_mb": 16384},
+                "native_sdk_grpc": {
+                    "enabled": True,
+                    "target": f"{name}:55052",
+                    "capabilities": ["docker_worker_prepare_v1"],
+                },
+            },
+        }
+        report = json.dumps({"nodes": [node(local, True), node(owner, False)]})
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            bundle = repo / "worker_one"
+            bundle.mkdir()
+            (bundle / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "apiVersion": "mn.workflow/v1",
+                        "kind": "Workflow",
+                        "id": "test-workflow",
+                        "contract": {},
+                        "runtime": {},
+                        "agents": {
+                            "nodes": [
+                                {
+                                    "node_id": "worker",
+                                    "config": {
+                                        "runner_module": "MirrorNeuron.Runner.DockerWorker"
+                                    },
+                                }
+                            ]
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.object(
+                blueprints_module,
+                "prepare_job_submission",
+                side_effect=lambda manifest, payloads, **_kwargs: SimpleNamespace(
+                    manifest_json=json.dumps(manifest), payloads=payloads
+                ),
+            ), patch.object(state.client, "get_resource", return_value=report), patch.object(
+                state.client, "get_system_summary", return_value=report
+            ):
+                manifest_json, _payloads = load_blueprint_bundle(
+                    repo.resolve(),
+                    {"id": "worker_one", "path": "worker_one"},
+                    "run-owner",
+                    env_overrides={"MN_SELECTED_RUNTIME_NODE": owner},
+                )
+
+        manifest = json.loads(manifest_json)
+        placement = manifest["metadata"]["mn_workflow_placement"]
+        self.assertEqual(placement["selected_node"], owner)
+        for workflow_node in manifest["flow"]["nodes"]:
+            self.assertEqual(
+                workflow_node["policies"]["scheduler"]["preferred_node"], owner
+            )
+
     def test_load_blueprint_bundle_prepares_hostlocal_python_environment(self):
         observed = {}
 
