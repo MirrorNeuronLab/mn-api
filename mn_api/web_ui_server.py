@@ -346,7 +346,8 @@ def _job_ui_target_url(
     host = parsed.hostname
     display_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
     target = f"{scheme}://{display_host}:{port}/{path}" if path else f"{scheme}://{display_host}:{port}/"
-    return f"{target}?{query}" if query else target
+    normalized_query = _normalize_proxy_query(query)
+    return f"{target}?{normalized_query}" if normalized_query else target
 
 
 def _allowed_job_ui_ports(web_ui: dict[str, Any], *, websocket: bool, primary_port: int) -> set[int]:
@@ -374,6 +375,11 @@ def _safe_proxy_path(path: str) -> str:
     if any(urllib.parse.unquote(part) in {".", ".."} for part in parts):
         raise JobUiProxyError(404, "That job Web UI path is invalid.")
     return "/".join(urllib.parse.quote(urllib.parse.unquote(part), safe=":@") for part in parts)
+
+
+def _normalize_proxy_query(query: str) -> str:
+    pairs = urllib.parse.parse_qsl(str(query or ""), keep_blank_values=True)
+    return urllib.parse.urlencode(pairs, doseq=True, safe="/")
 
 
 def _remote_proxy_headers(headers: Iterable[tuple[str, str]]) -> dict[str, str]:

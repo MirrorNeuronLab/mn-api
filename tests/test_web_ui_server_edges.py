@@ -131,6 +131,57 @@ def test_job_ui_proxy_uses_the_registered_spark_host_and_injects_local_proxy_con
     assert 'window.__MN_JOB_UI_PROXY_BASE__="/job-ui-proxy/job-1"' in response.text
 
 
+def test_job_ui_proxy_normalizes_video_topic_and_streams_mjpeg(monkeypatch, tmp_path):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("<html></html>", encoding="utf-8")
+    handle = {
+        "url": "http://10.0.4.26:8088/",
+        "metadata": {"proxy": {"http_ports": [8080, 8088]}},
+    }
+    captured: dict[str, str] = {}
+    headers = Message()
+    headers["Content-Type"] = "multipart/x-mixed-replace;boundary=boundarydonotcross"
+
+    class Upstream:
+        status = 200
+
+        def __init__(self):
+            self.headers = headers
+            self.chunks = [
+                b"--boundarydonotcross\r\nContent-type: image/jpeg\r\n\r\nJFIF",
+                b"\r\n--boundarydonotcross--\r\n",
+                b"",
+            ]
+            self.closed = False
+
+        def getcode(self):
+            return self.status
+
+        def read(self, _size):
+            return self.chunks.pop(0)
+
+        def close(self):
+            self.closed = True
+
+    def open_remote(request, timeout=30):
+        captured["url"] = request.full_url
+        return Upstream()
+
+    monkeypatch.setattr("mn_api.web_ui_server._load_job_web_ui", lambda *_args, **_kwargs: handle)
+    monkeypatch.setattr("mn_api.web_ui_server.urllib.request.urlopen", open_remote)
+
+    response = TestClient(create_app(dist_dir=dist, api_url="http://api.local/api/v1")).get(
+        "/job-ui-proxy/job-1/8080/stream?topic=%2Fcamera%2Fcolor%2Fimage_raw&type=mjpeg"
+    )
+
+    assert response.status_code == 200
+    assert captured["url"] == "http://10.0.4.26:8080/stream?topic=/camera/color/image_raw&type=mjpeg"
+    assert response.headers["content-type"] == "multipart/x-mixed-replace;boundary=boundarydonotcross"
+    assert b"Content-type: image/jpeg" in response.content
+    assert b"JFIF" in response.content
+
+
 def test_job_ui_proxy_rejects_ports_not_declared_by_the_job(monkeypatch, tmp_path):
     dist = tmp_path / "dist"
     dist.mkdir()
@@ -162,6 +213,21 @@ def test_job_ui_target_allows_only_declared_http_and_websocket_ports():
     assert _job_ui_target_url(handle, port=8080, path="stream", query="topic=/camera") == (
         "https://10.0.4.26:8080/stream?topic=/camera"
     )
+    assert _job_ui_target_url(
+        handle,
+        port=8080,
+        path="stream",
+        query="topic=%2Fcamera%2Fcolor%2Fimage_raw&type=mjpeg&quality=80&empty=&tag=one&tag=two",
+    ) == (
+        "https://10.0.4.26:8080/stream?topic=/camera/color/image_raw&type=mjpeg&quality=80&empty=&tag=one&tag=two"
+    )
+    assert _job_ui_target_url(
+        handle,
+        port=9090,
+        path="ws",
+        query="topic=%2Fcamera%2Fcolor%2Fimage_raw&empty=",
+        websocket=True,
+    ) == "wss://10.0.4.26:9090/ws?topic=/camera/color/image_raw&empty="
     assert _job_ui_target_url(handle, port=9090, path="", query="", websocket=True) == "wss://10.0.4.26:9090/"
     with pytest.raises(JobUiProxyError, match="not declared"):
         _job_ui_target_url(handle, port=8090, path="mcp", query="")
