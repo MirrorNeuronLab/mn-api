@@ -639,7 +639,7 @@ def defer_blueprint_runtime_models(
         )
         entry_provider = str(entry.get("provider") or "docker_model_runner").strip().lower().replace("-", "_")
         policy = (
-            ["nemotron3", "gemma4:e2b"]
+            ["nemotron-3.5-lightning:latest", "gemma4:e2b"]
             if logical == "default" and entry_provider == "docker_model_runner"
             else [str(entry.get("id") or requested)]
         )

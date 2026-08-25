@@ -110,19 +110,19 @@ class TestBlueprintServices(unittest.TestCase):
 
     def test_model_service_tags_include_nemotron_aliases(self):
         entry = {
-            "id": "nemotron3",
-            "model": "nemotron3",
-            "api_model": "nemotron3",
-            "aliases": ["nemotron3:latest", "docker.io/ai/nemotron3:latest"],
+            "id": "nemotron-3.5-lightning:latest",
+            "model": "nemotron-3.5-lightning:latest",
+            "api_model": "nemotron-3.5-lightning:latest",
+            "aliases": ["nemotron-3.5-lightning"],
         }
 
         tags = model_service_tags(entry)
 
-        self.assertIn("model:docker.io/ai/nemotron3:latest", tags)
-        self.assertIn("model:docker.io/ai/nemotron3", tags)
-        self.assertIn("model-id:docker.io/ai/nemotron3:latest", tags)
-        self.assertIn("model-id:docker.io/ai/nemotron3", tags)
-        self.assertIn("nemotron3", model_match_keys("docker.io/ai/nemotron3:latest"))
+        self.assertIn("model:nemotron-3.5-lightning:latest", tags)
+        self.assertIn("model:nemotron-3.5-lightning", tags)
+        self.assertIn("model-id:nemotron-3.5-lightning:latest", tags)
+        self.assertIn("model-id:nemotron-3.5-lightning", tags)
+        self.assertIn("nemotron-3.5-lightning", model_match_keys("nemotron-3.5-lightning:latest"))
 
     def test_is_git_repo_url_accepts_common_remote_forms(self):
         self.assertTrue(is_git_repo_url("https://github.com/MirrorNeuronLab/otterdesk-blueprints.git"))
@@ -598,13 +598,13 @@ class TestBlueprintServices(unittest.TestCase):
         mock_record,
     ):
         mock_catalog.return_value = {
-            "nemotron3:latest": {
-                "id": "nemotron3:latest",
-                "model": "docker.io/docker.io/ai/nemotron3:latest",
-                "api_model": "docker.io/docker.io/ai/nemotron3:latest",
+            "nemotron-3.5-lightning:latest": {
+                "id": "nemotron-3.5-lightning:latest",
+                "model": "nemotron-3.5-lightning:latest",
+                "api_model": "nemotron-3.5-lightning:latest",
                 "provider": "docker_model_runner",
                 "backend": "llama.cpp",
-                "aliases": ["nemotron3", "docker.io/docker.io/ai/nemotron3:latest"],
+                "aliases": ["nemotron-3.5-lightning"],
             }
         }
         mock_ledger.return_value = {"version": 2, "models": {}}
@@ -624,8 +624,8 @@ class TestBlueprintServices(unittest.TestCase):
                     "spark": {
                         "name": "spark",
                         "provider": "docker_model_runner",
-                        "model": "docker.io/docker.io/ai/nemotron3:latest",
-                        "api_model": "docker.io/docker.io/ai/nemotron3:latest",
+                        "model": "nemotron-3.5-lightning:latest",
+                        "api_model": "nemotron-3.5-lightning:latest",
                         "base_url": "http://192.168.4.173:12434/v1",
                         "api_key": "not-needed",
                         "node": "spark",
@@ -643,7 +643,7 @@ class TestBlueprintServices(unittest.TestCase):
                     "models": {
                         "primary": {
                             "provider": "docker_model_runner",
-                            "model": "nemotron3:latest",
+                            "model": "nemotron-3.5-lightning:latest",
                             "api_base": "auto",
                             "backend": "llama.cpp",
                         }
@@ -659,11 +659,11 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertEqual(summary["models"][0]["endpoint"]["api_base"], "http://192.168.4.173:12434/v1")
         mock_sync.assert_called_once()
         self.assertEqual(
-            observed["upstream"]["nemotron3:latest"]["api_base"],
+            observed["upstream"]["nemotron-3.5-lightning:latest"]["api_base"],
             "http://192.168.4.173:12434/v1",
         )
         self.assertEqual(
-            json.loads(summary["env"]["MN_MODEL_ENDPOINTS_JSON"])["nemotron3:latest"]["api_base"],
+            json.loads(summary["env"]["MN_MODEL_ENDPOINTS_JSON"])["nemotron-3.5-lightning:latest"]["api_base"],
             "http://mn-litellm-proxy:4000/v1",
         )
         mock_installed.assert_not_called()
@@ -686,13 +686,13 @@ class TestBlueprintServices(unittest.TestCase):
                 "backend": "llama.cpp",
                 "requirements": {"min_vram_gb": 8, "min_unified_memory_gb": 16},
             },
-            "nemotron3": {
-                "id": "nemotron3",
-                "model": "nemotron3",
-                "dmr_model": "docker.io/ai/nemotron3:latest",
-                "api_model": "docker.io/ai/nemotron3:latest",
+            "nemotron-3.5-lightning:latest": {
+                "id": "nemotron-3.5-lightning:latest",
+                "model": "nemotron-3.5-lightning:latest",
+                "dmr_model": "nemotron-3.5-lightning:latest",
+                "api_model": "nemotron-3.5-lightning:latest",
                 "provider": "docker_model_runner",
-                "aliases": ["medium", "nemotron3:latest"],
+                "aliases": ["medium", "nemotron-3.5-lightning:latest"],
                 "backend": "llama.cpp",
                 "fallback_model": "gemma4:e2b",
                 "requirements": {"min_vram_gb": 48, "min_unified_memory_gb": 48},
@@ -786,14 +786,14 @@ class TestBlueprintServices(unittest.TestCase):
         self, mock_ledger, mock_catalog, mock_sync
     ):
         mock_catalog.return_value = {
-            "nemotron3": {
-                "id": "nemotron3",
-                "model": "nemotron3",
-                "dmr_model": "docker.io/ai/nemotron3:latest",
-                "api_model": "docker.io/ai/nemotron3:latest",
+            "nemotron-3.5-lightning:latest": {
+                "id": "nemotron-3.5-lightning:latest",
+                "model": "nemotron-3.5-lightning:latest",
+                "dmr_model": "nemotron-3.5-lightning:latest",
+                "api_model": "nemotron-3.5-lightning:latest",
                 "provider": "docker_model_runner",
-                "aliases": ["medium", "nemotron3:latest"],
-                "route_aliases": ["nemotron3"],
+                "aliases": ["medium", "nemotron-3.5-lightning:latest"],
+                "route_aliases": ["nemotron-3.5-lightning:latest"],
                 "backend": "llama.cpp",
                 "requirements": {"min_vram_gb": 48, "min_unified_memory_gb": 48},
             }
@@ -828,8 +828,8 @@ class TestBlueprintServices(unittest.TestCase):
         remote_runtime = unittest.mock.Mock()
         remote_runtime.prepare_runtime_model.return_value = json.dumps({
             "status": "installed",
-            "docker_model": "docker.io/ai/nemotron3:latest",
-            "endpoint": {"model": "docker.io/ai/nemotron3:latest", "runtime_model": "docker.io/ai/nemotron3:latest"},
+            "docker_model": "nemotron-3.5-lightning:latest",
+            "endpoint": {"model": "nemotron-3.5-lightning:latest", "runtime_model": "nemotron-3.5-lightning:latest"},
         })
         remote_runtime.sync_litellm_gateway.return_value = json.dumps({"status": "running"})
         with (
@@ -2053,7 +2053,7 @@ def test_launch_model_policy_is_deferred_without_installing():
     install.assert_not_called()
     assert summary["deferred"] is True
     assert summary["models"][0]["selection_policy"] == [
-        "nemotron3",
+        "nemotron-3.5-lightning:latest",
         "gemma4:e2b",
     ]
     assert summary["env"]["MN_RUNTIME_MODEL_MANAGED"] == "1"
