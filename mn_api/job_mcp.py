@@ -109,6 +109,12 @@ def _response_service_declared(blueprint: Mapping[str, Any]) -> bool:
     return isinstance(value, Mapping) and value.get("enabled") is True
 
 
+def _response_agent_declared(blueprint: Mapping[str, Any]) -> bool:
+    response = blueprint.get("response_service")
+    agent = response.get("agent") if isinstance(response, Mapping) else None
+    return isinstance(agent, Mapping) and agent.get("kind") == "bounded_mcp"
+
+
 def _response_service_enabled(job: Mapping[str, Any], blueprint: Mapping[str, Any]) -> bool:
     projected = job.get("response_service")
     if isinstance(projected, Mapping):
@@ -357,6 +363,9 @@ class JobContextProvider:
             raise JobMCPUnavailableError("The job blueprint is temporarily unavailable.") from error
         descriptor = _mcp_descriptor(blueprint)
         descriptor["response_enabled"] = _response_service_enabled(job, blueprint)
+        descriptor["response_agent_enabled"] = bool(
+            descriptor["response_enabled"] and _response_agent_declared(blueprint)
+        )
         if not descriptor["enabled"] and not descriptor["response_enabled"]:
             raise JobMCPNotFoundError("The requested job MCP is unavailable.")
         return job, blueprint, descriptor
@@ -367,6 +376,12 @@ class JobContextProvider:
     def response_enabled(self, job_id: str) -> bool:
         _job, _blueprint, descriptor = self._job_and_blueprint(job_id)
         return bool(descriptor.get("response_enabled"))
+
+    def response_mode(self, job_id: str) -> str:
+        _job, _blueprint, descriptor = self._job_and_blueprint(job_id)
+        if descriptor.get("response_agent_enabled"):
+            return "agent"
+        return "response" if descriptor.get("response_enabled") else "context"
 
     def get_context(self, job_id: str, *, evidence_limit: int = MAX_EVIDENCE_RECORDS) -> dict[str, Any]:
         bounded_limit = max(1, min(MAX_EVIDENCE_RECORDS, int(evidence_limit or MAX_EVIDENCE_RECORDS)))
@@ -491,6 +506,22 @@ class JobContextProvider:
         if not self.response_enabled(job_id):
             raise JobMCPNotFoundError("The requested job response service is unavailable.")
         context = self.get_context(job_id)
+        if self.response_mode(job_id) == "agent":
+            job, _blueprint, _descriptor = self._job_and_blueprint(job_id)
+            service = self._service()
+            try:
+                run_records = _recent_run_records(service, job, job_id)
+            except Exception:
+                run_records = []
+            if run_records:
+                public_run_id = _first_text(
+                    run_records[0].get("run_id"),
+                    run_records[0].get("id"),
+                    job.get("latest_run_id"),
+                )
+                context["_active_service_run_id"] = _runtime_output_id(
+                    run_records[0], public_run_id
+                )
         try:
             return self._service().query_job_response(
                 job_id,
@@ -504,18 +535,37 @@ class JobContextProvider:
         except Exception as error:
             if _is_request_conflict_error(error):
                 raise ValueError("request_id was already used for a different question") from error
-            return _fallback_job_answer(
+            fallback = _fallback_job_answer(
                 question,
                 context,
                 conversation_id=conversation_id,
                 request_id=request_id,
             )
+            if self.response_mode(job_id) == "agent":
+                fallback["schema_version"] = "mn.mcp.job_answer.v2"
+                fallback["turn"] = {
+                    "turn_id": str(uuid.uuid4()),
+                    "state": "completed",
+                    "updated_at": _now_iso(),
+                }
+                fallback["effects"] = []
+            return fallback
+
+    def get_job_turn(self, job_id: str, turn_id: str) -> dict[str, Any]:
+        if self.response_mode(job_id) != "agent":
+            raise JobMCPNotFoundError("The requested job response agent is unavailable.")
+        try:
+            turn_id = str(uuid.UUID(str(turn_id)))
+        except (ValueError, TypeError, AttributeError) as error:
+            raise ValueError("turn_id must be a UUID") from error
+        return self._service().get_job_response_turn(job_id, turn_id)
 
 
 class JobMCPGuard:
-    def __init__(self, base_app, enhanced_app, provider: JobContextProvider) -> None:
+    def __init__(self, base_app, enhanced_app, agent_app, provider: JobContextProvider) -> None:
         self.base_app = base_app
         self.enhanced_app = enhanced_app
+        self.agent_app = agent_app
         self.provider = provider
 
     async def __call__(self, scope, receive, send) -> None:
@@ -541,7 +591,7 @@ class JobMCPGuard:
 
         job_id = _first_text(scope.get("path_params", {}).get("job_id"))
         try:
-            enhanced = await anyio.to_thread.run_sync(self.provider.response_enabled, job_id)
+            response_mode = await anyio.to_thread.run_sync(self.provider.response_mode, job_id)
         except JobMCPNotFoundError as error:
             response = problem_response(
                 status_code=404,
@@ -567,7 +617,10 @@ class JobMCPGuard:
 
         token = _current_job_id.set(job_id)
         try:
-            selected_app = self.enhanced_app if enhanced else self.base_app
+            selected_app = {
+                "agent": self.agent_app,
+                "response": self.enhanced_app,
+            }.get(response_mode, self.base_app)
             await selected_app(scope, receive, send)
         finally:
             _current_job_id.reset(token)
@@ -593,6 +646,10 @@ def create_job_mcp(provider: JobContextProvider | None = None) -> tuple[list[Fas
     enhanced_server = new_server(
         "MirrorNeuron real-time job response",
         "Read safe context or ask grounded, multi-turn questions about the job bound by the MCP URL.",
+    )
+    agent_server = new_server(
+        "MirrorNeuron bounded job agent",
+        "Ask the Job's bounded conversational agent for grounded answers, status, explicit simulation control, or explicit learning.",
     )
 
     def bound_job_id() -> str:
@@ -628,6 +685,7 @@ def create_job_mcp(provider: JobContextProvider | None = None) -> tuple[list[Fas
 
     register_context_tools(base_server)
     register_context_tools(enhanced_server)
+    register_context_tools(agent_server)
 
     @enhanced_server.tool(
         name="ask_job",
@@ -649,10 +707,39 @@ def create_job_mcp(provider: JobContextProvider | None = None) -> tuple[list[Fas
             request_id=request_id,
         )
 
-    servers = [base_server, enhanced_server]
+    @agent_server.tool(
+        name="ask_job",
+        description=(
+            "Ask the bounded Job agent a grounded question or an explicit simulation command. "
+            "This never starts or resumes a Run."
+        ),
+        structured_output=True,
+    )
+    def ask_agent_job(
+        question: str,
+        conversation_id: str | None = None,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        return context_provider.ask_job(
+            bound_job_id(),
+            question,
+            conversation_id=conversation_id,
+            request_id=request_id,
+        )
+
+    @agent_server.tool(
+        name="get_job_turn",
+        description="Poll one accepted bounded-agent turn until its observed operation reaches a terminal state.",
+        structured_output=True,
+    )
+    def get_job_turn(turn_id: str) -> dict[str, Any]:
+        return context_provider.get_job_turn(bound_job_id(), turn_id)
+
+    servers = [base_server, enhanced_server, agent_server]
     return servers, JobMCPGuard(
         base_server.streamable_http_app(),
         enhanced_server.streamable_http_app(),
+        agent_server.streamable_http_app(),
         context_provider,
     )
 
@@ -666,9 +753,12 @@ def job_mcp_lifespan(servers: FastMCP | list[FastMCP]):
             async with resolved_servers[0].session_manager.run():
                 yield
             return
-        async with resolved_servers[0].session_manager.run():
-            async with resolved_servers[1].session_manager.run():
-                yield
+        from contextlib import AsyncExitStack
+
+        async with AsyncExitStack() as stack:
+            for server in resolved_servers:
+                await stack.enter_async_context(server.session_manager.run())
+            yield
 
     return lifespan
 

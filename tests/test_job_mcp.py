@@ -53,8 +53,27 @@ class MCPRuntime:
                 "status": "active",
                 "response_service": {"state": "disabled"},
             },
+            "job-agent": {
+                "job_id": "job-agent",
+                "blueprint_id": "agent-blueprint",
+                "status": "active",
+                "latest_run_id": "run-agent",
+                "response_service": {"state": "ready"},
+            },
         }
-        self.runs: dict[str, list[dict]] = {"job-1": [], "job-2": [], "job-response": []}
+        self.runs: dict[str, list[dict]] = {
+            "job-1": [],
+            "job-2": [],
+            "job-response": [],
+            "job-agent": [
+                {
+                    "job_id": "job-agent",
+                    "run_id": "run-agent",
+                    "runtime_run_id": "runtime-run-agent",
+                    "status": "running",
+                }
+            ],
+        }
         self.queries: list[dict] = []
 
     def get_job(self, job_id):
@@ -99,6 +118,25 @@ class MCPRuntime:
             }
         )
 
+    def get_job_response_turn(self, job_id, turn_id):
+        return json.dumps(
+            {
+                "schema_version": "mn.mcp.job_answer.v2",
+                "answer": "Reached Zone A.",
+                "conversation_id": "57a8b9f2-23c-4eef-8e2d-14806fb63739",
+                "request_id": "request-agent",
+                "job_id": job_id,
+                "state": {"job": "running", "latest_run": None},
+                "citations": [],
+                "warnings": [],
+                "service": {"state": "ready"},
+                "model": {"used": False, "fallback": False},
+                "conversation_persisted": True,
+                "turn": {"turn_id": turn_id, "state": "completed"},
+                "effects": [{"kind": "robot_control", "state": "completed"}],
+            }
+        )
+
 def _blueprint(_config, blueprint_id):
     enabled = blueprint_id != "disabled-blueprint"
     blueprint = {
@@ -116,6 +154,11 @@ def _blueprint(_config, blueprint_id):
     }
     if blueprint_id == "response-blueprint":
         blueprint["response_service"] = {"enabled": True}
+    if blueprint_id == "agent-blueprint":
+        blueprint["response_service"] = {
+            "enabled": True,
+            "agent": {"kind": "bounded_mcp"},
+        }
     return "catalog", blueprint
 
 
@@ -272,6 +315,71 @@ def test_response_enabled_job_lists_ask_job_and_never_starts_a_run(monkeypatch):
     assert runtime.jobs["job-response"]["run_count"] == 0
     assert runtime.runs["job-response"] == []
     assert len(runtime.queries) == 1
+
+
+def test_agent_enabled_job_adds_turn_polling_and_preserves_internal_service_run_id(monkeypatch):
+    runtime = MCPRuntime()
+    _configure(monkeypatch, runtime)
+    turn_id = "fcb09ddb-35a7-4a40-9ce0-14f25093a6db"
+
+    original_query = runtime.query_job_response
+
+    def agent_query(job_id, question, **kwargs):
+        context = kwargs["context"]
+        assert context["_active_service_run_id"] == "runtime-run-agent"
+        payload = json.loads(original_query(job_id, question, **kwargs))
+        payload.update(
+            {
+                "schema_version": "mn.mcp.job_answer.v2",
+                "turn": {"turn_id": turn_id, "state": "accepted", "poll_after_ms": 1000},
+                "effects": [{"kind": "robot_control", "state": "accepted"}],
+            }
+        )
+        return json.dumps(payload)
+
+    runtime.query_job_response = agent_query
+
+    with TestClient(create_app()) as client:
+        assert _initialize(client, "job-agent").status_code == 200
+        listed = _mcp_request(
+            client,
+            "job-agent",
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+        ).json()
+        assert {tool["name"] for tool in listed["result"]["tools"]} == {
+            "ask_job",
+            "get_job_context",
+            "get_job_profile",
+            "get_job_turn",
+            "get_latest_run",
+        }
+        accepted = _mcp_request(
+            client,
+            "job-agent",
+            {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {
+                    "name": "ask_job",
+                    "arguments": {"question": "Move to Zone A", "request_id": "request-agent"},
+                },
+            },
+        ).json()["result"]["structuredContent"]
+        completed = _mcp_request(
+            client,
+            "job-agent",
+            {
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tools/call",
+                "params": {"name": "get_job_turn", "arguments": {"turn_id": turn_id}},
+            },
+        ).json()["result"]["structuredContent"]
+
+    assert accepted["schema_version"] == "mn.mcp.job_answer.v2"
+    assert accepted["turn"]["state"] == "accepted"
+    assert completed["answer"] == "Reached Zone A."
 
 
 def test_job_projection_is_authoritative_when_catalog_now_enables_responses(monkeypatch):
