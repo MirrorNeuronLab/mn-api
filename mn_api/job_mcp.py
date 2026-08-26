@@ -1,10 +1,17 @@
 from __future__ import annotations
 
 import contextvars
+import copy
 import hmac
+import json
+import logging
 import os
+import threading
+import time
 import uuid
+from collections import OrderedDict
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import Any, Mapping
 
 import anyio
@@ -38,7 +45,12 @@ from mn_sdk.job_context import (
 
 
 _ACTIVE_SCHEDULE_STATUSES = {"active", "enabled", "running", "scheduled"}
+_SNAPSHOT_FRESH_SECONDS = 2.0
+_SNAPSHOT_LAST_KNOWN_GOOD_SECONDS = 30.0
+_SNAPSHOT_INITIAL_WAIT_SECONDS = 2.0
+_SNAPSHOT_MAX_ENTRIES = 100
 _current_job_id: contextvars.ContextVar[str] = contextvars.ContextVar("job_mcp_job_id", default="")
+LOGGER = logging.getLogger(__name__)
 
 
 class JobMCPNotFoundError(RuntimeError):
@@ -47,6 +59,28 @@ class JobMCPNotFoundError(RuntimeError):
 
 class JobMCPUnavailableError(RuntimeError):
     pass
+
+
+@dataclass
+class _BaseSnapshot:
+    job: dict[str, Any]
+    blueprint: dict[str, Any]
+    descriptor: dict[str, Any]
+    loaded_at: float
+    fingerprint: str
+
+
+@dataclass
+class _ContextSnapshot:
+    context: dict[str, Any]
+    active_service_run_id: str
+    loaded_at: float
+
+
+@dataclass
+class _RefreshState:
+    event: threading.Event
+    error: Exception | None = None
 
 
 def _as_record(value: Any) -> dict[str, Any]:
@@ -172,18 +206,9 @@ def _schedules_for_job(job: Mapping[str, Any], job_id: str) -> list[dict[str, An
 
 
 def _recent_run_records(service: RuntimeService, job: Mapping[str, Any], job_id: str) -> list[dict[str, Any]]:
-    recent_ids = job.get("recent_run_ids")
-    if isinstance(recent_ids, list) and recent_ids:
-        records_by_id: list[dict[str, Any]] = []
-        for run_id in recent_ids[:MAX_RECENT_RUNS]:
-            if _first_text(run_id):
-                try:
-                    record = _as_record(service.get_run(str(run_id)))
-                except Exception:
-                    continue
-                if record:
-                    records_by_id.append(record)
-        return [item for item in records_by_id if item][:MAX_RECENT_RUNS]
+    # Prefer one bounded list call over fetching every recent_run_id. A Job can
+    # contain stale historic ids, and retrying each one amplifies a partial Core
+    # outage into hundreds of GetRun calls during one conversation turn.
     # Keep the internal staged-artifact reference intact until it has been
     # resolved. The generic public projection intentionally removes `version`
     # fields, which would make a valid `mn.staged_artifact/v1` reference
@@ -340,6 +365,27 @@ def _json_bytes(value: Any) -> bytes:
 
 
 class JobContextProvider:
+    def __init__(
+        self,
+        *,
+        fresh_seconds: float = _SNAPSHOT_FRESH_SECONDS,
+        last_known_good_seconds: float = _SNAPSHOT_LAST_KNOWN_GOOD_SECONDS,
+        initial_wait_seconds: float = _SNAPSHOT_INITIAL_WAIT_SECONDS,
+        max_entries: int = _SNAPSHOT_MAX_ENTRIES,
+        clock=time.monotonic,
+    ) -> None:
+        self._fresh_seconds = max(0.0, float(fresh_seconds))
+        self._last_known_good_seconds = max(self._fresh_seconds, float(last_known_good_seconds))
+        self._initial_wait_seconds = max(0.0, float(initial_wait_seconds))
+        self._max_entries = max(1, int(max_entries))
+        self._clock = clock
+        self._cache_lock = threading.RLock()
+        self._base_cache: OrderedDict[str, _BaseSnapshot] = OrderedDict()
+        self._context_cache: OrderedDict[str, _ContextSnapshot] = OrderedDict()
+        self._base_locks: dict[str, threading.Lock] = {}
+        self._refreshes: dict[str, _RefreshState] = {}
+        self._last_errors: dict[str, str] = {}
+
     def _service(self) -> RuntimeService:
         return RuntimeService(state.client)
 
@@ -370,26 +416,208 @@ class JobContextProvider:
             raise JobMCPNotFoundError("The requested job MCP is unavailable.")
         return job, blueprint, descriptor
 
+    def invalidate(self, job_id: str) -> None:
+        """Invalidate one Job after identity, configuration, or lifecycle mutation."""
+
+        with self._cache_lock:
+            self._base_cache.pop(job_id, None)
+            self._context_cache.pop(job_id, None)
+            self._last_errors.pop(job_id, None)
+
+    def _trim_cache(self, cache: OrderedDict[str, Any]) -> None:
+        while len(cache) > self._max_entries:
+            evicted_job_id, _value = cache.popitem(last=False)
+            self._last_errors.pop(evicted_job_id, None)
+
+    def _base_snapshot(self, job_id: str) -> _BaseSnapshot:
+        now = self._clock()
+        with self._cache_lock:
+            cached = self._base_cache.get(job_id)
+            if cached is not None and now - cached.loaded_at <= self._fresh_seconds:
+                self._base_cache.move_to_end(job_id)
+                return cached
+            lock = self._base_locks.setdefault(job_id, threading.Lock())
+        with lock:
+            now = self._clock()
+            with self._cache_lock:
+                cached = self._base_cache.get(job_id)
+                if cached is not None and now - cached.loaded_at <= self._fresh_seconds:
+                    self._base_cache.move_to_end(job_id)
+                    return cached
+            try:
+                lookup_started = self._clock()
+                job, blueprint, descriptor = self._job_and_blueprint(job_id)
+                LOGGER.info(
+                    "job_context.stage",
+                    extra={
+                        "job_id": job_id,
+                        "stage": "job_lookup",
+                        "duration_ms": round((self._clock() - lookup_started) * 1000),
+                        "state": "ready",
+                    },
+                )
+            except JobMCPNotFoundError:
+                self.invalidate(job_id)
+                raise
+            except JobMCPUnavailableError:
+                with self._cache_lock:
+                    cached = self._base_cache.get(job_id)
+                    if cached is not None and now - cached.loaded_at <= self._last_known_good_seconds:
+                        return cached
+                raise
+            fingerprint = json.dumps(
+                {
+                    "job": job,
+                    "blueprint_id": blueprint.get("id") or _first_text(
+                        (
+                            blueprint.get("metadata")
+                            if isinstance(blueprint.get("metadata"), Mapping)
+                            else {}
+                        ).get("blueprint_id")
+                    ),
+                    "blueprint_version": blueprint.get("version"),
+                    "response_service": blueprint.get("response_service"),
+                },
+                sort_keys=True,
+                default=str,
+                separators=(",", ":"),
+            )
+            snapshot = _BaseSnapshot(job, blueprint, descriptor, self._clock(), fingerprint)
+            with self._cache_lock:
+                previous = self._base_cache.get(job_id)
+                if previous is not None and previous.fingerprint != fingerprint:
+                    self._context_cache.pop(job_id, None)
+                    self._last_errors.pop(job_id, None)
+                self._base_cache[job_id] = snapshot
+                self._base_cache.move_to_end(job_id)
+                self._trim_cache(self._base_cache)
+            return snapshot
+
+    @staticmethod
+    def _profile_for_base(job_id: str, base: _BaseSnapshot, state_name: str) -> dict[str, Any]:
+        job, blueprint, descriptor = base.job, base.blueprint, base.descriptor
+        blueprint_id = _first_text(job.get("blueprint_id"), job.get("blueprintId"))
+        identity = _identity(job_id, blueprint_id, descriptor)
+        return {
+            "identity": identity,
+            "name": _safe_text(_first_text(
+                job.get("display_name"),
+                _blueprint_field(blueprint, "name"),
+                job.get("job_name"),
+                blueprint_id,
+            )),
+            "mission": _safe_text(_first_text(
+                _blueprint_field(
+                    blueprint,
+                    "mission",
+                    "business_goal",
+                    "businessGoal",
+                    "description",
+                    "summary",
+                    "tagline",
+                )
+            )),
+            "capabilities": safe_context_value(_blueprint_field(blueprint, "capabilities") or []),
+            "expected_output": _safe_text(_first_text(
+                _blueprint_field(blueprint, "output", "expected_output", "expectedOutput")
+            )),
+            "configuration": safe_context_value(
+                job.get("resolved_configuration") or job.get("resolvedConfiguration") or {}
+            ),
+            "archived": state_name == "archived",
+        }
+
+    def _refresh_context(self, job_id: str, refresh: _RefreshState) -> None:
+        started = self._clock()
+        try:
+            base = self._base_snapshot(job_id)
+            snapshot = self._load_context_snapshot(job_id, base)
+            with self._cache_lock:
+                self._context_cache[job_id] = snapshot
+                self._context_cache.move_to_end(job_id)
+                self._last_errors.pop(job_id, None)
+                self._trim_cache(self._context_cache)
+            LOGGER.info(
+                "job_context.refresh",
+                extra={"job_id": job_id, "duration_ms": round((self._clock() - started) * 1000), "state": "ready"},
+            )
+        except Exception as error:  # noqa: BLE001 - stale snapshot remains available by contract
+            refresh.error = error
+            safe_error = type(error).__name__
+            with self._cache_lock:
+                self._last_errors[job_id] = safe_error
+                if isinstance(error, JobMCPNotFoundError):
+                    self._base_cache.pop(job_id, None)
+                    self._context_cache.pop(job_id, None)
+            LOGGER.warning(
+                "job_context.refresh_failed",
+                extra={"job_id": job_id, "duration_ms": round((self._clock() - started) * 1000), "error": safe_error},
+            )
+        finally:
+            with self._cache_lock:
+                self._refreshes.pop(job_id, None)
+            refresh.event.set()
+
+    def _start_refresh(self, job_id: str) -> _RefreshState:
+        with self._cache_lock:
+            active = self._refreshes.get(job_id)
+            if active is not None:
+                return active
+            refresh = _RefreshState(event=threading.Event())
+            self._refreshes[job_id] = refresh
+        threading.Thread(
+            target=self._refresh_context,
+            args=(job_id, refresh),
+            name=f"job-context-{job_id[:32]}",
+            daemon=True,
+        ).start()
+        return refresh
+
+    def _context_snapshot(
+        self,
+        job_id: str,
+    ) -> tuple[_ContextSnapshot | None, str, str, bool, str]:
+        now = self._clock()
+        with self._cache_lock:
+            cached = self._context_cache.get(job_id)
+            age = now - cached.loaded_at if cached is not None else float("inf")
+            error = self._last_errors.get(job_id, "")
+            refreshing = job_id in self._refreshes
+            if cached is not None and age <= self._fresh_seconds:
+                self._context_cache.move_to_end(job_id)
+                return cached, "fresh", "cache", refreshing, error
+        refresh = self._start_refresh(job_id)
+        if cached is not None and age <= self._last_known_good_seconds:
+            return cached, "last_known_good", "cache", True, error
+        refresh.event.wait(self._initial_wait_seconds)
+        with self._cache_lock:
+            loaded = self._context_cache.get(job_id)
+            if loaded is not None and self._clock() - loaded.loaded_at <= self._last_known_good_seconds:
+                return loaded, "fresh", "live", False, ""
+            error = self._last_errors.get(job_id, type(refresh.error).__name__ if refresh.error else "")
+        if isinstance(refresh.error, JobMCPNotFoundError):
+            raise refresh.error
+        return None, "unavailable", "live", not refresh.event.is_set(), error
+
     def validate(self, job_id: str) -> None:
-        self._job_and_blueprint(job_id)
+        self._base_snapshot(job_id)
 
     def response_enabled(self, job_id: str) -> bool:
-        _job, _blueprint, descriptor = self._job_and_blueprint(job_id)
-        return bool(descriptor.get("response_enabled"))
+        return bool(self._base_snapshot(job_id).descriptor.get("response_enabled"))
 
     def response_mode(self, job_id: str) -> str:
-        _job, _blueprint, descriptor = self._job_and_blueprint(job_id)
+        descriptor = self._base_snapshot(job_id).descriptor
         if descriptor.get("response_agent_enabled"):
             return "agent"
         return "response" if descriptor.get("response_enabled") else "context"
 
-    def get_context(self, job_id: str, *, evidence_limit: int = MAX_EVIDENCE_RECORDS) -> dict[str, Any]:
-        bounded_limit = max(1, min(MAX_EVIDENCE_RECORDS, int(evidence_limit or MAX_EVIDENCE_RECORDS)))
-        job, blueprint, descriptor = self._job_and_blueprint(job_id)
+    def _load_context_snapshot(self, job_id: str, base: _BaseSnapshot) -> _ContextSnapshot:
+        job, descriptor = base.job, base.descriptor
         service = self._service()
         blueprint_id = _first_text(job.get("blueprint_id"), job.get("blueprintId"))
         warnings: list[str] = []
         schedules = _schedules_for_job(job, job_id)
+        run_lookup_started = self._clock()
         try:
             recent_run_records = _recent_run_records(service, job, job_id)
             run = recent_run_records[0] if recent_run_records else None
@@ -397,6 +625,15 @@ class JobContextProvider:
             recent_run_records = []
             run = None
             warnings.append("The latest run record is temporarily unavailable.")
+        LOGGER.info(
+            "job_context.stage",
+            extra={
+                "job_id": job_id,
+                "stage": "run_lookup",
+                "duration_ms": round((self._clock() - run_lookup_started) * 1000),
+                "state": "ready" if run is not None else "partial",
+            },
+        )
 
         latest: dict[str, Any] | None = None
         evidence: list[dict[str, Any]] = []
@@ -406,6 +643,7 @@ class JobContextProvider:
             runtime_run_id = _runtime_output_id(run, run_id)
             if run_id:
                 latest["run_id"] = run_id
+            workflow_started = self._clock()
             try:
                 workflow = public_value(runtime_job_routes._workflow_progress_snapshot_for_job(runtime_run_id))
                 latest["workflow"] = safe_context_value(
@@ -415,9 +653,19 @@ class JobContextProvider:
                         if workflow.get(key) is not None
                     }
                 )
-                evidence.extend(_evidence_from_workflow(workflow, bounded_limit))
+                evidence.extend(_evidence_from_workflow(workflow, MAX_EVIDENCE_RECORDS))
             except Exception:
                 warnings.append("Workflow evidence for the latest run is temporarily unavailable.")
+            LOGGER.info(
+                "job_context.stage",
+                extra={
+                    "job_id": job_id,
+                    "stage": "workflow_progress",
+                    "duration_ms": round((self._clock() - workflow_started) * 1000),
+                    "state": "partial" if warnings and "Workflow evidence" in warnings[-1] else "ready",
+                },
+            )
+            result_started = self._clock()
             try:
                 final_artifact = _final_artifact_for_run(run, runtime_run_id)
                 latest["result"] = safe_context_value(final_artifact)
@@ -433,29 +681,22 @@ class JobContextProvider:
             except Exception as error:
                 if not _is_not_found_error(error):
                     warnings.append("The final result for the latest run is temporarily unavailable.")
+            LOGGER.info(
+                "job_context.stage",
+                extra={
+                    "job_id": job_id,
+                    "stage": "final_result",
+                    "duration_ms": round((self._clock() - result_started) * 1000),
+                    "state": "ready" if "result" in latest else "absent",
+                },
+            )
 
         state_name = context_state(job, run, schedules)
         identity = _identity(job_id, blueprint_id, descriptor)
-        profile = {
-            "identity": identity,
-            "name": _safe_text(_first_text(
-                job.get("display_name"),
-                _blueprint_field(blueprint, "name"),
-                job.get("job_name"),
-                blueprint_id,
-            )),
-            "mission": _safe_text(_first_text(
-                _blueprint_field(blueprint, "mission", "business_goal", "businessGoal", "description", "summary", "tagline")
-            )),
-            "capabilities": safe_context_value(_blueprint_field(blueprint, "capabilities") or []),
-            "expected_output": _safe_text(_first_text(_blueprint_field(blueprint, "output", "expected_output", "expectedOutput"))),
-            "configuration": safe_context_value(job.get("resolved_configuration") or job.get("resolvedConfiguration") or {}),
-            "archived": state_name == "archived",
-        }
-        return assemble_job_context(
+        context = assemble_job_context(
             identity=identity,
             state=state_name,
-            profile=profile,
+            profile=self._profile_for_base(job_id, base, state_name),
             schedules=schedules,
             latest_run=latest,
             recent_runs=[_run_summary(item) for item in recent_run_records],
@@ -466,21 +707,102 @@ class JobContextProvider:
                 if isinstance(job.get("response_service"), Mapping)
                 else {"state": "disabled"}
             ),
-            evidence_limit=bounded_limit,
+            evidence_limit=MAX_EVIDENCE_RECORDS,
+            freshness={"state": "fresh", "source": "live", "age_ms": 0},
         )
+        active_service_run_id = ""
+        if run:
+            public_run_id = _first_text(
+                run.get("run_id"),
+                run.get("id"),
+                job.get("latest_run_id"),
+            )
+            active_service_run_id = _runtime_output_id(run, public_run_id)
+        return _ContextSnapshot(context, active_service_run_id, self._clock())
+
+    def _unavailable_context(
+        self,
+        job_id: str,
+        base: _BaseSnapshot,
+        error: str,
+        *,
+        refresh_in_progress: bool,
+    ) -> dict[str, Any]:
+        job = base.job
+        blueprint_id = _first_text(job.get("blueprint_id"), job.get("blueprintId"))
+        warning = "Live Job and Run details are temporarily unavailable."
+        return assemble_job_context(
+            identity=_identity(job_id, blueprint_id, base.descriptor),
+            state="unknown",
+            profile=self._profile_for_base(job_id, base, "unknown"),
+            schedules=_schedules_for_job(job, job_id),
+            latest_run=None,
+            warnings=[warning],
+            response_service=(
+                job.get("response_service")
+                if isinstance(job.get("response_service"), Mapping)
+                else {"state": "disabled"}
+            ),
+            freshness={
+                "state": "unavailable",
+                "source": "live",
+                "age_ms": 0,
+                "max_age_ms": int(self._last_known_good_seconds * 1000),
+                "last_error": error,
+                "refresh_in_progress": refresh_in_progress,
+            },
+        )
+
+    def _context_for_request(
+        self,
+        job_id: str,
+        *,
+        evidence_limit: int = MAX_EVIDENCE_RECORDS,
+    ) -> tuple[dict[str, Any], _ContextSnapshot | None]:
+        bounded_limit = max(1, min(MAX_EVIDENCE_RECORDS, int(evidence_limit or MAX_EVIDENCE_RECORDS)))
+        base = self._base_snapshot(job_id)
+        snapshot, freshness_state, source, refreshing, error = self._context_snapshot(job_id)
+        if snapshot is None:
+            return self._unavailable_context(
+                job_id,
+                base,
+                error,
+                refresh_in_progress=refreshing,
+            ), None
+        context = copy.deepcopy(snapshot.context)
+        age_ms = max(0, round((self._clock() - snapshot.loaded_at) * 1000))
+        context["freshness"] = {
+            "state": freshness_state,
+            "fetched_at": context.get("fetched_at"),
+            "age_ms": age_ms,
+            "max_age_ms": int(self._last_known_good_seconds * 1000),
+            "source": source,
+            "refresh_in_progress": refreshing,
+            **({"last_error": error} if error else {}),
+        }
+        evidence = context.get("evidence") if isinstance(context.get("evidence"), list) else []
+        if len(evidence) > bounded_limit:
+            context["evidence"] = evidence[-bounded_limit:]
+            context.setdefault("truncation", {})["truncated"] = True
+            context["truncation"]["evidence_returned"] = bounded_limit
+        return _fit_context(context), snapshot
+
+    def get_context(self, job_id: str, *, evidence_limit: int = MAX_EVIDENCE_RECORDS) -> dict[str, Any]:
+        context, _snapshot = self._context_for_request(job_id, evidence_limit=evidence_limit)
+        return context
 
     def get_profile(self, job_id: str) -> dict[str, Any]:
         context = self.get_context(job_id, evidence_limit=1)
         return {
             key: context[key]
-            for key in ("schema_version", "fetched_at", "identity", "state", "read_only", "response_service", "profile", "schedules", "warnings", "truncation")
+            for key in ("schema_version", "fetched_at", "freshness", "identity", "state", "read_only", "response_service", "profile", "schedules", "warnings", "truncation")
         }
 
     def get_latest_run(self, job_id: str) -> dict[str, Any]:
         context = self.get_context(job_id)
         return {
             key: context[key]
-            for key in ("schema_version", "fetched_at", "identity", "state", "read_only", "response_service", "latest_run", "recent_runs", "evidence", "warnings", "truncation")
+            for key in ("schema_version", "fetched_at", "freshness", "identity", "state", "read_only", "response_service", "latest_run", "recent_runs", "evidence", "warnings", "truncation")
         }
 
     def ask_job(
@@ -503,33 +825,33 @@ class JobContextProvider:
                 raise ValueError("conversation_id must be a UUID") from error
         if request_id is not None and len(str(request_id)) > 128:
             raise ValueError("request_id must not exceed 128 characters")
-        if not self.response_enabled(job_id):
+        base = self._base_snapshot(job_id)
+        descriptor = base.descriptor
+        if not descriptor.get("response_enabled"):
             raise JobMCPNotFoundError("The requested job response service is unavailable.")
-        context = self.get_context(job_id)
-        if self.response_mode(job_id) == "agent":
-            job, _blueprint, _descriptor = self._job_and_blueprint(job_id)
-            service = self._service()
-            try:
-                run_records = _recent_run_records(service, job, job_id)
-            except Exception:
-                run_records = []
-            if run_records:
-                public_run_id = _first_text(
-                    run_records[0].get("run_id"),
-                    run_records[0].get("id"),
-                    job.get("latest_run_id"),
-                )
-                context["_active_service_run_id"] = _runtime_output_id(
-                    run_records[0], public_run_id
-                )
+        context, snapshot = self._context_for_request(job_id)
+        agent_mode = bool(descriptor.get("response_agent_enabled"))
+        if agent_mode and snapshot is not None and snapshot.active_service_run_id:
+            context["_active_service_run_id"] = snapshot.active_service_run_id
+        started = self._clock()
         try:
-            return self._service().query_job_response(
+            response = self._service().query_job_response(
                 job_id,
                 question,
                 context=context,
                 conversation_id=conversation_id or "",
                 request_id=request_id or "",
             )
+            LOGGER.info(
+                "job_context.response",
+                extra={
+                    "job_id": job_id,
+                    "request_id": request_id or "",
+                    "duration_ms": round((self._clock() - started) * 1000),
+                    "state": "ready",
+                },
+            )
+            return response
         except (ValueError, TypeError):
             raise
         except Exception as error:
@@ -541,7 +863,7 @@ class JobContextProvider:
                 conversation_id=conversation_id,
                 request_id=request_id,
             )
-            if self.response_mode(job_id) == "agent":
+            if agent_mode:
                 fallback["schema_version"] = "mn.mcp.job_answer.v2"
                 fallback["turn"] = {
                     "turn_id": str(uuid.uuid4()),
@@ -552,7 +874,7 @@ class JobContextProvider:
             return fallback
 
     def get_job_turn(self, job_id: str, turn_id: str) -> dict[str, Any]:
-        if self.response_mode(job_id) != "agent":
+        if not self._base_snapshot(job_id).descriptor.get("response_agent_enabled"):
             raise JobMCPNotFoundError("The requested job response agent is unavailable.")
         try:
             turn_id = str(uuid.UUID(str(turn_id)))

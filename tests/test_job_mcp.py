@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from types import SimpleNamespace
 
 from fastapi import HTTPException
@@ -75,13 +76,17 @@ class MCPRuntime:
             ],
         }
         self.queries: list[dict] = []
+        self.get_job_calls = 0
+        self.list_run_calls = 0
 
     def get_job(self, job_id):
+        self.get_job_calls += 1
         if job_id not in self.jobs:
             raise HTTPException(status_code=404, detail="missing")
         return json.dumps(self.jobs[job_id])
 
     def list_runs(self, job_id, *, page_size=50, page_token=""):
+        self.list_run_calls += 1
         del page_size, page_token
         return json.dumps({"items": self.runs.get(job_id, [])})
 
@@ -548,6 +553,94 @@ def test_safe_context_value_removes_secret_and_path_keys_recursively():
         "generic_location": "<redacted-path>",
         "service_source": "<redacted-credential-url>",
     }
+
+
+def test_ask_job_reuses_one_job_and_run_snapshot(monkeypatch):
+    runtime = MCPRuntime()
+    _configure(monkeypatch, runtime)
+    provider = JobContextProvider()
+
+    response = provider.ask_job("job-agent", "Can you move to Zone B?")
+
+    assert response["schema_version"] == "mn.mcp.job_answer.v1"
+    assert runtime.get_job_calls == 1
+    assert runtime.list_run_calls == 1
+    assert runtime.queries[0]["context"]["_active_service_run_id"] == "runtime-run-agent"
+
+
+def test_context_returns_marked_last_known_good_while_one_refresh_runs(monkeypatch):
+    runtime = MCPRuntime()
+    runtime.jobs["job-1"]["latest_run_id"] = "run-1"
+    runtime.runs["job-1"] = [{"job_id": "job-1", "run_id": "run-1", "status": "running"}]
+    _configure(monkeypatch, runtime)
+    now = [0.0]
+    provider = JobContextProvider(clock=lambda: now[0], initial_wait_seconds=0.5)
+    first = provider.get_context("job-1")
+    assert first["freshness"]["state"] == "fresh"
+
+    release = threading.Event()
+    original_list_runs = runtime.list_runs
+
+    def blocked_list_runs(*args, **kwargs):
+        release.wait(1)
+        return original_list_runs(*args, **kwargs)
+
+    runtime.list_runs = blocked_list_runs
+    now[0] = 3.0
+    stale = provider.get_context("job-1")
+    second = provider.get_context("job-1")
+
+    assert stale["freshness"] == {
+        "state": "last_known_good",
+        "fetched_at": first["fetched_at"],
+        "age_ms": 3000,
+        "max_age_ms": 30_000,
+        "source": "cache",
+        "refresh_in_progress": True,
+    }
+    assert second["freshness"]["state"] == "last_known_good"
+    assert runtime.list_run_calls == 1
+    release.set()
+
+
+def test_initial_slow_snapshot_is_marked_unavailable_without_blocking(monkeypatch):
+    runtime = MCPRuntime()
+    _configure(monkeypatch, runtime)
+    release = threading.Event()
+    original_list_runs = runtime.list_runs
+
+    def blocked_list_runs(*args, **kwargs):
+        release.wait(1)
+        return original_list_runs(*args, **kwargs)
+
+    runtime.list_runs = blocked_list_runs
+    provider = JobContextProvider(initial_wait_seconds=0.01)
+
+    context = provider.get_context("job-1")
+
+    assert context["state"] == "unknown"
+    assert context["freshness"]["state"] == "unavailable"
+    assert context["freshness"]["refresh_in_progress"] is True
+    release.set()
+
+
+def test_job_configuration_change_invalidates_cached_context(monkeypatch):
+    runtime = MCPRuntime()
+    _configure(monkeypatch, runtime)
+    now = [0.0]
+    provider = JobContextProvider(clock=lambda: now[0])
+
+    first = provider.get_context("job-1")
+    assert first["profile"]["configuration"]["query"] == "safe"
+
+    runtime.jobs["job-1"]["resolved_configuration"]["query"] = "updated"
+    now[0] = 3.0
+    updated = provider.get_context("job-1")
+
+    assert updated["profile"]["configuration"]["query"] == "updated"
+    assert updated["freshness"]["state"] == "fresh"
+    assert runtime.get_job_calls == 2
+    assert runtime.list_run_calls == 2
 
 
 def test_lifecycle_state_projection_covers_running_failed_paused_and_waiting():
