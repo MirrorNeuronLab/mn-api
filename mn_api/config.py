@@ -13,6 +13,7 @@ for parent in Path(__file__).resolve().parents:
 
 from mn_sdk.blueprint_source import resolve_blueprint_source_config
 from mn_sdk.runtime_config import RuntimeConfig
+from mn_sdk.config.types import MISSING
 
 from mn_api.config_env import ConfigSource, load_config_source, normalize_mn_env
 from mn_api.config_schema import CONFIG_KEY_MAP, ConfigError, is_sensitive_key, redact_config_values
@@ -269,11 +270,11 @@ def config_optional_value(
     runtime_env: Mapping[str, str] | None = None,
 ) -> str | None:
     config_source = source or load_config_source()
-    value = _first_string(config_source.effective_env.get(name))
-    if value:
-        return value
-    value = _first_string((runtime_env or {}).get(name))
-    return value or None
+    if name in config_source.effective_env:
+        return str(config_source.effective_env[name]).strip() or None
+    if runtime_env is not None and name in runtime_env:
+        return str(runtime_env[name]).strip() or None
+    return None
 
 
 def subprocess_environment(extra: Mapping[str, str] | None = None) -> dict[str, str]:
@@ -294,7 +295,7 @@ def _parse_config_value(name: str, value: str) -> Any:
     if not value.strip():
         if key.required:
             raise ConfigError(f"{name} is required")
-        return "" if key.default in {None, ""} else key.parser(name, key.default)
+        return "" if key.default is MISSING or key.default in {None, ""} else key.parser(name, str(key.default))
     return key.parser(name, value)
 
 
@@ -306,15 +307,13 @@ def _raw_config_value(
     default: str,
 ) -> str:
     config_source = source or load_config_source()
-    value = _first_string(config_source.effective_env.get(name))
-    if value:
-        return value
-    value = _first_string((runtime_env or {}).get(name))
-    if value:
-        return value
+    if name in config_source.effective_env:
+        return str(config_source.effective_env[name]).strip()
+    if runtime_env is not None and name in runtime_env:
+        return str(runtime_env[name]).strip()
     key = CONFIG_KEY_MAP.get(name)
-    if key and key.default not in {None, ""}:
-        return key.default or ""
+    if key and key.default is not MISSING and key.default not in {None, ""}:
+        return str(key.default or "")
     return default
 
 

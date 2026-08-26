@@ -9,6 +9,7 @@ from fastapi import Depends, HTTPException
 import grpc
 from mn_sdk import (
     Client,
+    DEFAULT_FEDERATION_GRPC_PORTS,
     RuntimeConfig,
     RuntimeService,
     collect_runtime_status,
@@ -18,6 +19,7 @@ from mn_sdk import (
     litellm_gateway_health,
     join_federated_node,
     parse_duration_ms,
+    overall_status,
 )
 
 from mn_api import state
@@ -36,8 +38,7 @@ from mn_api.schemas import (
 )
 
 
-
-DEFAULT_NODE_ADD_GRPC_PORTS = (55051, 50051)
+DEFAULT_NODE_ADD_GRPC_PORTS = DEFAULT_FEDERATION_GRPC_PORTS
 
 
 def health():
@@ -433,7 +434,9 @@ def _foundation_component(name: str, probe: Callable[[], Any]) -> dict[str, Any]
             if status in {"passing", "warning", "critical"}:
                 component_status = status
             else:
-                component_status = "passing" if payload.get("ok") is True or payload.get("available") is True else "warning"
+                component_status = (
+                    "passing" if payload.get("ok") is True or payload.get("available") is True else "warning"
+                )
             return {"name": name, "status": component_status, "detail": payload}
         return {"name": name, "status": "passing", "detail": payload}
     except Exception as exc:
@@ -441,12 +444,7 @@ def _foundation_component(name: str, probe: Callable[[], Any]) -> dict[str, Any]
 
 
 def _overall_status(components: list[dict[str, Any]]) -> str:
-    statuses = {str(component.get("status")) for component in components}
-    if "critical" in statuses:
-        return "critical"
-    if "warning" in statuses:
-        return "warning"
-    return "passing"
+    return overall_status(components)
 
 
 def _strip_restart_history(value: Any) -> Any:
@@ -454,11 +452,7 @@ def _strip_restart_history(value: Any) -> Any:
         return [_strip_restart_history(item) for item in value]
     if not isinstance(value, dict):
         return value
-    return {
-        key: _strip_restart_history(item)
-        for key, item in value.items()
-        if not _restart_history_key(key)
-    }
+    return {key: _strip_restart_history(item) for key, item in value.items() if not _restart_history_key(key)}
 
 
 def _restart_history_key(key: object) -> bool:
@@ -466,8 +460,7 @@ def _restart_history_key(key: object) -> bool:
     return bool(
         normalized
         and (
-            normalized
-            in {"restarthistory", "restartreason", "restartexhaustedreason", "exhaustedreason"}
+            normalized in {"restarthistory", "restartreason", "restartexhaustedreason", "exhaustedreason"}
             or ("restart" in normalized and ("history" in normalized or "reason" in normalized))
         )
     )

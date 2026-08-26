@@ -169,8 +169,13 @@ IDs may be returned for diagnosis.
 - `MN_API_REQUEST_SIZE_LIMIT_BYTES` bounds declared request body size.
 - CORS is disabled unless origins are explicitly configured.
 - Artifact and bundle paths must remain within their permitted roots.
-- Configuration is loaded through `mn_api.config` and the declared schema.
-  Real environment variables override environment-file defaults.
+- `mn_api.config`, `mn_api.config_env`, and `mn_api.config_schema` remain
+  compatibility facades over SDK configuration loading and typed shared keys.
+  API-only keys are composed locally. Precedence is `environment >
+  .env.<profile> > .env > defaults`, including explicit blank environment
+  overrides.
+- `MN_MODEL_CATALOG_PATH` selects SDK-owned model defaults, entries, and
+  fallback links. The API carries no physical built-in model policy.
 - Sensitive configuration values are redacted based on schema metadata and
   secret-like key names.
 
@@ -183,6 +188,8 @@ Routes call shared clients and helpers rather than duplicating SDK business
 logic. External services are supplied through configured state/dependencies so
 tests can use fakes. Importing the package or constructing the app must not
 require live Core, Redis, Docker, OpenShell, or network access.
+Public workflow manifests and bounded job activity are projected by SDK
+helpers; routes only add HTTP transport concerns.
 
 ## Compatibility
 

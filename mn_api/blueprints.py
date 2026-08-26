@@ -23,6 +23,7 @@ from mn_sdk import (
     Client,
     ModelPrepareError,
     PayloadModelPackageError,
+    build_deferred_runtime_model_plan,
     build_prepare_runtime_model_request,
     call_prepare_runtime_model,
     cluster_provided_model,
@@ -34,6 +35,7 @@ from mn_sdk import (
     expand_manifest_model_service_requirements,
     is_manifest_source,
     load_model_catalog,
+    load_model_catalog_document,
     load_model_ownership,
     load_model_remotes,
     make_validation_report,
@@ -42,7 +44,6 @@ from mn_sdk import (
     blueprint_model_dependency_summary,
     install_model_entry,
     is_custom_model_requirement,
-    is_payload_model_requirement,
     gateway_endpoint_map,
     prepare_job_submission,
     reapply_selected_workflow_placement,
@@ -57,7 +58,6 @@ from mn_sdk import (
     resolve_custom_model_placement,
     resolve_cluster_model_placement,
     remote_runtime_model_endpoint,
-    resolve_requirement_entry,
     resolve_blueprint_payload_contract,
     resolve_model_endpoint,
     resolve_model_entry,
@@ -77,6 +77,7 @@ from mn_sdk.runtime_config import resolve_mn_home
 from mn_sdk.run_store import (
     write_blueprint_job_mapping as sdk_write_blueprint_job_mapping,
 )
+from mn_api.job_store import job_data_dir_from_id
 from mn_sdk.model_preparation import (
     config_with_auto_runtime_model_profile,
     config_with_runtime_model_endpoints,
@@ -104,6 +105,7 @@ from mn_sdk.blueprint_runtime import (
     with_shared_run_store_config as sdk_with_shared_run_store_config,
 )
 from mn_sdk.blueprint_source import (
+    DEFAULT_BLUEPRINT_REPO_CACHE,
     as_dict as sdk_as_dict,
     as_list as sdk_as_list,
     blueprint_bundle_root as sdk_blueprint_bundle_root,
@@ -174,7 +176,6 @@ RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,220}$")
 CATEGORY_SLUG_PATTERN = re.compile(r"[^a-z0-9]+")
 ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-9;]*m")
 DEFAULT_CATEGORY = "General"
-DEFAULT_BLUEPRINT_REPO_CACHE = "~/.cache/mirror-neuron/blueprint-repos"
 PRE_LAUNCH_SCRIPT = Path("scripts/pre-launch.sh")
 POST_LAUNCH_SCRIPT = Path("scripts/post-launch.sh")
 TERMINAL_JOB_STATUSES = {"completed", "failed", "cancelled"}
@@ -466,9 +467,7 @@ def install_blueprint_runtime_models(
     manifest = expand_blueprint_manifest_if_source(bundle_root, manifest)
     resolve_blueprint_payload_contract(manifest, bundle_root)
     package_payload_models_for_api(bundle_root, manifest)
-    base_config = load_blueprint_config(
-        bundle_root, config_overrides=config_overrides
-    ) or {}
+    base_config = load_blueprint_config(bundle_root, config_overrides=config_overrides) or {}
     service_results: list[dict[str, Any]] = []
     blueprint_id = str(blueprint.get("id") or "")
     blueprint_revision = str(blueprint.get("revision") or "")
@@ -530,17 +529,11 @@ def install_blueprint_runtime_models(
     if prepared_json:
         env["MN_PREPARED_RUNTIME_MODELS_JSON"] = prepared_json
     materialized_config = config_with_runtime_model_endpoints(config, summary)
-    materialized_config = config_with_runtime_model_fallbacks(
-        materialized_config, summary
-    )
+    materialized_config = config_with_runtime_model_fallbacks(materialized_config, summary)
     materialized_config = config_with_runtime_model_profile(materialized_config)
-    materialized_config = config_with_runtime_model_endpoints(
-        materialized_config, summary
-    )
+    materialized_config = config_with_runtime_model_endpoints(materialized_config, summary)
     if materialized_config != base_config:
-        env["MN_BLUEPRINT_CONFIG_JSON"] = json.dumps(
-            materialized_config, sort_keys=True
-        )
+        env["MN_BLUEPRINT_CONFIG_JSON"] = json.dumps(materialized_config, sort_keys=True)
         env.update(runtime_model_llm_environment(materialized_config))
     if blueprint_requests_default_llm(base_config):
         env["MN_LLM_MODEL"] = "default"
@@ -551,9 +544,7 @@ def install_blueprint_runtime_models(
         "services": service_results,
         "endpoints": endpoints,
         "env": env,
-        "config_overrides": (
-            materialized_config if materialized_config != base_config else None
-        ),
+        "config_overrides": (materialized_config if materialized_config != base_config else None),
         "errors": errors,
     }
 
@@ -595,98 +586,17 @@ def defer_blueprint_runtime_models(
             "config_overrides": None,
             "errors": [],
         }
-    catalog = load_model_catalog()
+    document = load_model_catalog_document()
+    catalog = document.models
     resource_report = runtime_resource_report()
-    models: list[dict[str, Any]] = []
-    errors: list[str] = []
-    seen: set[str] = set()
-    for requirement in required_blueprint_models(manifest, config, catalog=catalog):
-        requested = str(requirement.get("model") or requirement.get("name") or "").strip()
-        if not requested:
-            continue
-        try:
-            entry = resolve_requirement_entry(
-                requirement,
-                catalog=catalog,
-                catalog_resolver=resolve_model_entry,
-            )
-        except Exception as exc:
-            errors.append(f"Unknown runtime model {requested}: {exc}")
-            continue
-        key = str(entry.get("id") or requested).lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        if (
-            str(entry.get("provider") or "docker_model_runner")
-            == "docker_model_runner"
-            and isinstance(entry.get("requirements"), dict)
-            and entry.get("requirements")
-            and not deferred_runtime_model_is_feasible(
-                entry,
-                resource_report=resource_report,
-                catalog=catalog,
-            )
-        ):
-            errors.append(
-                "No healthy cluster node can run runtime model "
-                f"{entry.get('id') or requested} or its catalog fallback."
-            )
-        logical = (
-            "default"
-            if requirement.get("default") is True or requested.lower() == "default"
-            else requested
-        )
-        entry_provider = str(entry.get("provider") or "docker_model_runner").strip().lower().replace("-", "_")
-        policy = (
-            ["nemotron-3.5-lightning:latest", "gemma4:e2b"]
-            if logical == "default" and entry_provider == "docker_model_runner"
-            else [str(entry.get("id") or requested)]
-        )
-        models.append(
-            {
-                "id": logical,
-                "name": str(requirement.get("name") or logical),
-                "model": logical,
-                "runtime_model": str(entry.get("model") or requested),
-                "provider": str(entry.get("provider") or "docker_model_runner"),
-                "status": (
-                    "packaged_payload"
-                    if is_payload_model_requirement(requirement)
-                    else "deferred_runtime_install"
-                ),
-                "install_policy": (
-                    "payload"
-                    if is_payload_model_requirement(requirement)
-                    else "on_first_model_call"
-                ),
-                "selection_policy": policy,
-                "source": str(
-                    requirement.get("path")
-                    or requirement.get("manifest_path")
-                    or "config"
-                ),
-            }
-        )
-    env: dict[str, str] = {}
-    default_model = next(
-        (item for item in models if str(item.get("id") or "").strip().lower() == "default"),
-        None,
+    deferred = build_deferred_runtime_model_plan(
+        required_blueprint_models(manifest, config, catalog=catalog),
+        catalog=document,
+        resource_report=resource_report,
     )
-    default_provider = str((default_model or {}).get("provider") or "docker_model_runner").strip().lower().replace("-", "_")
-    if default_model is not None and default_provider == "docker_model_runner":
-        env.update(
-            {
-                "MN_RUNTIME_MODEL_MANAGED": "1",
-                "MN_LLM_PROVIDER": "docker_model_runner",
-                "LITELLM_PROVIDER": "docker_model_runner",
-                "MN_LLM_API_BASE": "auto",
-                "LITELLM_API_BASE": "auto",
-            }
-        )
-    if blueprint_requests_default_llm(config):
-        env["MN_LLM_MODEL"] = "default"
-        env["LITELLM_MODEL"] = "default"
+    models = deferred["models"]
+    errors = deferred["errors"]
+    env = deferred["env"]
     service_results: list[dict[str, Any]] = []
     if not errors and blueprint_requires_context_engine(manifest, config):
         if service_progress is not None:
@@ -711,26 +621,6 @@ def defer_blueprint_runtime_models(
     }
 
 
-def deferred_runtime_model_is_feasible(
-    entry: dict[str, Any],
-    *,
-    resource_report: dict[str, Any],
-    catalog: dict[str, dict[str, Any]],
-) -> bool:
-    if resolve_cluster_model_placement(entry, resource_report=resource_report):
-        return True
-    fallback_ref = str(entry.get("fallback_model") or "").strip()
-    if not fallback_ref:
-        return False
-    try:
-        fallback = resolve_model_entry(fallback_ref, catalog=catalog)
-    except Exception:
-        return False
-    return bool(
-        resolve_cluster_model_placement(fallback, resource_report=resource_report)
-    )
-
-
 def blueprint_requests_default_llm(config: dict[str, Any]) -> bool:
     llm = config.get("llm") if isinstance(config.get("llm"), dict) else {}
     return str(llm.get("model") or "").strip().lower() == "default"
@@ -739,8 +629,7 @@ def blueprint_requests_default_llm(config: dict[str, Any]) -> bool:
 def blueprint_uses_fake_llm(config: dict[str, Any]) -> bool:
     llm = config.get("llm") if isinstance(config.get("llm"), dict) else {}
     return any(
-        str(llm.get(key) or "").strip().lower()
-        in {"fake", "mock", "stub", "deterministic"}
+        str(llm.get(key) or "").strip().lower() in {"fake", "mock", "stub", "deterministic"}
         for key in ("mode", "provider")
     )
 
@@ -757,11 +646,7 @@ def sync_runtime_model_gateways_for_api(
     """
 
     upstream_endpoints = summary.get("endpoints")
-    upstream = (
-        dict(upstream_endpoints)
-        if isinstance(upstream_endpoints, dict)
-        else {}
-    )
+    upstream = dict(upstream_endpoints) if isinstance(upstream_endpoints, dict) else {}
     upstream.update(local_runtime_model_endpoints_for_api(summary))
     if not upstream:
         return {}
@@ -796,11 +681,7 @@ def local_runtime_model_endpoints_for_api(
             continue
         effective = item.get("effective") if isinstance(item.get("effective"), dict) else {}
         model_ref = str(
-            effective.get("id")
-            or effective.get("model")
-            or item.get("id")
-            or item.get("model")
-            or ""
+            effective.get("id") or effective.get("model") or item.get("id") or item.get("model") or ""
         ).strip()
         if not model_ref:
             continue
@@ -865,9 +746,7 @@ def fanout_runtime_model_gateways_for_api(
         native = native_sdk_grpc_for_api_node(node)
         target, _host = native_sdk_target_for_api_node(native)
         if not target:
-            raise RuntimeError(
-                f"runtime node {node_name} does not advertise native SDK gRPC for LiteLLM sync"
-            )
+            raise RuntimeError(f"runtime node {node_name} does not advertise native SDK gRPC for LiteLLM sync")
         runtime_client = Client(
             target=target,
             timeout=runtime_model_prepare_timeout_seconds(),
@@ -910,12 +789,8 @@ def api_gateway_sync_eligible_node(node: Any) -> bool:
 def native_sdk_grpc_for_api_node(node: dict[str, Any]) -> dict[str, Any]:
     for candidate in (
         node.get("native_sdk_grpc"),
-        (node.get("hardware") or {}).get("native_sdk_grpc")
-        if isinstance(node.get("hardware"), dict)
-        else None,
-        (node.get("node_info") or {}).get("native_sdk_grpc")
-        if isinstance(node.get("node_info"), dict)
-        else None,
+        (node.get("hardware") or {}).get("native_sdk_grpc") if isinstance(node.get("hardware"), dict) else None,
+        (node.get("node_info") or {}).get("native_sdk_grpc") if isinstance(node.get("node_info"), dict) else None,
     ):
         if isinstance(candidate, dict) and candidate:
             return candidate
@@ -975,9 +850,7 @@ def resolve_runtime_cluster_model_for_api(
         )
         return enrich_api_cluster_model_placement(placement, system_summary)
 
-    placement = resolve_cluster_model_placement(
-        entry, resource_report=resource_report
-    )
+    placement = resolve_cluster_model_placement(entry, resource_report=resource_report)
     if placement:
         return enrich_api_cluster_model_placement(placement, system_summary)
 
@@ -988,9 +861,7 @@ def resolve_runtime_cluster_model_for_api(
         fallback_entry = resolve_model_entry(fallback_ref)
     except Exception:
         return None
-    fallback_placement = resolve_cluster_model_placement(
-        fallback_entry, resource_report=resource_report
-    )
+    fallback_placement = resolve_cluster_model_placement(fallback_entry, resource_report=resource_report)
     if not fallback_placement:
         return None
     resolved = enrich_api_cluster_model_placement(fallback_placement, system_summary)
@@ -1005,9 +876,7 @@ def resolve_runtime_cluster_model_for_api(
     return resolved
 
 
-def enrich_api_cluster_model_placement(
-    placement: dict[str, Any], system_summary: dict[str, Any]
-) -> dict[str, Any]:
+def enrich_api_cluster_model_placement(placement: dict[str, Any], system_summary: dict[str, Any]) -> dict[str, Any]:
     """Attach the target node's native gRPC and DMR-reachable host metadata."""
 
     node_name = str(placement.get("node") or "").strip()
@@ -1016,8 +885,7 @@ def enrich_api_cluster_model_placement(
         (
             node
             for node in nodes or []
-            if isinstance(node, dict)
-            and str(node.get("name") or node.get("node") or "").strip() == node_name
+            if isinstance(node, dict) and str(node.get("name") or node.get("node") or "").strip() == node_name
         ),
         {},
     )
@@ -1025,13 +893,9 @@ def enrich_api_cluster_model_placement(
         system_node = {}
     native = native_sdk_grpc_for_api_node(system_node)
     target, native_host = native_sdk_target_for_api_node(native)
-    advertised_host = str(
-        system_node.get("grpc_host") or system_node.get("address") or native_host or ""
-    ).strip()
+    advertised_host = str(system_node.get("grpc_host") or system_node.get("address") or native_host or "").strip()
     enriched = dict(placement)
-    enriched["local"] = bool(
-        system_node.get("self") is True or system_node.get("self?") is True
-    )
+    enriched["local"] = bool(system_node.get("self") is True or system_node.get("self?") is True)
     if native:
         enriched["native_sdk_grpc"] = {
             **native,
@@ -1069,9 +933,7 @@ def install_runtime_cluster_model_for_api(
         runtime_client = state.client
     else:
         if not target or not host:
-            raise RuntimeError(
-                "runtime model placement returned incomplete native SDK gRPC metadata"
-            )
+            raise RuntimeError("runtime model placement returned incomplete native SDK gRPC metadata")
         current_config = state.refresh_config_from_env()
         runtime_client = Client(
             target=target,
@@ -1109,7 +971,9 @@ def install_runtime_cluster_model_for_api(
     }
 
 
-def resolve_runtime_model_endpoint_for_api(*, requirement: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any] | None:
+def resolve_runtime_model_endpoint_for_api(
+    *, requirement: dict[str, Any], entry: dict[str, Any]
+) -> dict[str, Any] | None:
     model = str(requirement.get("model") or entry.get("id") or "").strip()
     config = requirement.get("config") if isinstance(requirement.get("config"), dict) else {}
     services = resolve_model_services_for_requirement(entry)
@@ -1307,7 +1171,11 @@ def local_blueprint_from_path(path: str) -> tuple[Path, Dict[str, Any]]:
 
     metadata = as_dict(manifest.get("metadata"))
     identity = as_dict(manifest.get("identity"))
-    workflow_manifest = manifest.get("apiVersion") == "mn.workflow/v1" or manifest.get("kind") == "Workflow" or isinstance(manifest.get("workflow"), dict)
+    workflow_manifest = (
+        manifest.get("apiVersion") == "mn.workflow/v1"
+        or manifest.get("kind") == "Workflow"
+        or isinstance(manifest.get("workflow"), dict)
+    )
     raw_id = (
         metadata.get("blueprint_id")
         or identity.get("blueprint_id")
@@ -1349,7 +1217,9 @@ def run_mn_blueprint_validate(bundle_root: Path, *, timeout_seconds: int = 120) 
             timeout=timeout_seconds,
         )
     except FileNotFoundError:
-        return validation_failure_report("mn CLI was not found. Install mn or run the API from the monorepo environment.")
+        return validation_failure_report(
+            "mn CLI was not found. Install mn or run the API from the monorepo environment."
+        )
     except subprocess.TimeoutExpired:
         return validation_failure_report(f"mn blueprint validate timed out after {timeout_seconds}s.")
 
@@ -1491,13 +1361,10 @@ def load_blueprint_bundle(
     )
     manifest = shared_preparation.manifest
     runtime_env = shared_preparation.runtime_environment
-    selected_runtime_node = str(
-        preparation_env.get("MN_SELECTED_RUNTIME_NODE") or ""
-    ).strip()
+    selected_runtime_node = str(preparation_env.get("MN_SELECTED_RUNTIME_NODE") or "").strip()
     placement_mode = workflow_placement_mode(manifest, env=preparation_env)
     if selected_runtime_node and (
-        placement_mode == "single_node"
-        or (placement_mode is None and workflow_requires_single_node(manifest))
+        placement_mode == "single_node" or (placement_mode is None and workflow_requires_single_node(manifest))
     ):
         # A caller may be resubmitting a durable job already owned by a remote
         # federation node. Preserve that ownership while rebuilding its bundle;
@@ -1535,16 +1402,12 @@ def load_blueprint_bundle(
     placement = None
     placement_env = {**os.environ, **string_env_values(env_overrides)}
     placement_mode = workflow_placement_mode(manifest, env=placement_env)
-    if placement_mode == "single_node" or (
-        placement_mode is None and workflow_requires_single_node(manifest)
-    ):
+    if placement_mode == "single_node" or (placement_mode is None and workflow_requires_single_node(manifest)):
         try:
             resource_report = json.loads(state.client.get_resource())
             system_summary = json.loads(state.client.get_system_summary())
         except Exception as exc:
-            raise RuntimeError(
-                f"could not inspect runtime nodes for workflow placement: {exc}"
-            ) from exc
+            raise RuntimeError(f"could not inspect runtime nodes for workflow placement: {exc}") from exc
         placement = resolve_and_apply_workflow_placement(
             manifest,
             resource_report=resource_report if isinstance(resource_report, dict) else {},
@@ -1555,9 +1418,7 @@ def load_blueprint_bundle(
     if placement:
         selected_node = str(placement["selected_node"])
         runtime_env["MN_SELECTED_RUNTIME_NODE"] = selected_node
-        inject_node_environment(
-            manifest, {"MN_SELECTED_RUNTIME_NODE": selected_node}
-        )
+        inject_node_environment(manifest, {"MN_SELECTED_RUNTIME_NODE": selected_node})
         if progress_callback:
             progress_callback(
                 "Workflow placement resolved.",
@@ -1576,9 +1437,7 @@ def load_blueprint_bundle(
         prepare_hostlocal_python_environments_for_submission(
             bundle_root,
             manifest,
-            selected_runtime_node=str(
-                runtime_env.get("MN_SELECTED_RUNTIME_NODE") or ""
-            ),
+            selected_runtime_node=str(runtime_env.get("MN_SELECTED_RUNTIME_NODE") or ""),
         )
 
     payloads = stage_payload_assets(
@@ -1619,9 +1478,7 @@ def hostlocal_python_environment_nodes(manifest: dict[str, Any]) -> list[dict[st
         if config.get("runner_module") != "MirrorNeuron.Runner.HostLocal":
             continue
         python_environment = (
-            config.get("python_environment")
-            if isinstance(config.get("python_environment"), dict)
-            else {}
+            config.get("python_environment") if isinstance(config.get("python_environment"), dict) else {}
         )
         packages = [
             str(package).strip()
@@ -1690,9 +1547,7 @@ def prepare_hostlocal_python_environments_for_submission(
         )
         runtime_path = str(response.get("runtime_path") or "").strip()
         if not runtime_path:
-            raise RuntimeError(
-                f"{node_id}: HostLocal Python environment preparation did not return a runtime path"
-            )
+            raise RuntimeError(f"{node_id}: HostLocal Python environment preparation did not return a runtime path")
         python_environment["path"] = runtime_path
         prepared.append(
             {
@@ -1751,25 +1606,16 @@ def hostlocal_requirements_content(
     try:
         requirement_file.relative_to(payload_root)
     except ValueError as exc:
-        raise RuntimeError(
-            f"{node_id}: python_environment.requirements must be relative inside payloads/"
-        ) from exc
+        raise RuntimeError(f"{node_id}: python_environment.requirements must be relative inside payloads/") from exc
     if not requirement_file.is_file():
-        raise RuntimeError(
-            f"{node_id}: python_environment requirements file not found: payloads/{requirements}"
-        )
+        raise RuntimeError(f"{node_id}: python_environment requirements file not found: payloads/{requirements}")
     return requirement_file.read_text(encoding="utf-8")
 
 
 def hostlocal_blueprint_id(bundle_root: Path, manifest: dict[str, Any]) -> str:
     metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
     mn_cli = metadata.get("mn_cli") if isinstance(metadata.get("mn_cli"), dict) else {}
-    return str(
-        metadata.get("blueprint_id")
-        or mn_cli.get("blueprint_id")
-        or bundle_root.name
-        or "blueprint"
-    )
+    return str(metadata.get("blueprint_id") or mn_cli.get("blueprint_id") or bundle_root.name or "blueprint")
 
 
 def hostlocal_selected_runtime_node(
@@ -1780,22 +1626,12 @@ def hostlocal_selected_runtime_node(
 ) -> str:
     policies = node.get("policies") if isinstance(node.get("policies"), dict) else {}
     scheduler = policies.get("scheduler") if isinstance(policies.get("scheduler"), dict) else {}
-    explicit = str(
-        scheduler.get("preferred_node")
-        or scheduler.get("preferredNode")
-        or ""
-    ).strip()
+    explicit = str(scheduler.get("preferred_node") or scheduler.get("preferredNode") or "").strip()
     if explicit:
         return explicit
     metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
-    placement = (
-        metadata.get("mn_workflow_placement")
-        if isinstance(metadata.get("mn_workflow_placement"), dict)
-        else {}
-    )
-    return str(
-        placement.get("selected_node") or selected_runtime_node or ""
-    ).strip()
+    placement = metadata.get("mn_workflow_placement") if isinstance(metadata.get("mn_workflow_placement"), dict) else {}
+    return str(placement.get("selected_node") or selected_runtime_node or "").strip()
 
 
 def hostlocal_runtime_client(selected_node: str):
@@ -1806,23 +1642,18 @@ def hostlocal_runtime_client(selected_node: str):
     try:
         summary = json.loads(state.client.get_system_summary())
     except Exception as exc:
-        raise RuntimeError(
-            f"could not inspect runtime nodes for HostLocal environment preparation: {exc}"
-        ) from exc
+        raise RuntimeError(f"could not inspect runtime nodes for HostLocal environment preparation: {exc}") from exc
     nodes = summary.get("nodes") if isinstance(summary, dict) else []
     selected = next(
         (
             node
             for node in nodes or []
-            if isinstance(node, dict)
-            and str(node.get("name") or node.get("node") or "").strip() == selected_node
+            if isinstance(node, dict) and str(node.get("name") or node.get("node") or "").strip() == selected_node
         ),
         None,
     )
     if not selected:
-        raise RuntimeError(
-            f"runtime node {selected_node} was not found for HostLocal environment preparation"
-        )
+        raise RuntimeError(f"runtime node {selected_node} was not found for HostLocal environment preparation")
     if selected.get("self?") is True or selected.get("self") is True:
         return state.client
 
@@ -1832,18 +1663,14 @@ def hostlocal_runtime_client(selected_node: str):
         candidates.append(nested.get("native_sdk_grpc"))
     native = next((candidate for candidate in candidates if isinstance(candidate, dict) and candidate), None)
     if not native or native.get("enabled") is False:
-        raise RuntimeError(
-            f"runtime node {selected_node} does not advertise an enabled native SDK gRPC endpoint"
-        )
+        raise RuntimeError(f"runtime node {selected_node} does not advertise an enabled native SDK gRPC endpoint")
     target = str(native.get("target") or "").strip()
     host = str(native.get("host") or "").strip()
     port = str(native.get("port") or "").strip()
     if not target and host and port:
         target = f"{host}:{port}"
     if not target:
-        raise RuntimeError(
-            f"runtime node {selected_node} advertises incomplete native SDK gRPC metadata"
-        )
+        raise RuntimeError(f"runtime node {selected_node} advertises incomplete native SDK gRPC metadata")
     current_config = state.refresh_config_from_env()
     return Client(
         target=target,
@@ -2099,9 +1926,7 @@ def build_openshell_sandbox_image(source_path: Path) -> str:
     return ANSI_ESCAPE_PATTERN.sub("", matches[-1])
 
 
-def render_agent_templates_for_submission(
-    manifest: Dict[str, Any], *, bundle_root: Path | None = None
-) -> None:
+def render_agent_templates_for_submission(manifest: Dict[str, Any], *, bundle_root: Path | None = None) -> None:
     nodes = manifest_agent_nodes(manifest)
     if not nodes or not any(isinstance(node, dict) and "uses" in node for node in nodes):
         return
@@ -2254,7 +2079,9 @@ def wait_for_pre_launch_ready(run_dir: Path, process: subprocess.Popen[Any], rea
             return
         poll = getattr(process, "poll", None)
         if callable(poll) and poll() is not None:
-            raise RuntimeError(f"Blueprint pre-launch hook exited before becoming ready. See {run_dir / 'pre_launch.log'}.")
+            raise RuntimeError(
+                f"Blueprint pre-launch hook exited before becoming ready. See {run_dir / 'pre_launch.log'}."
+            )
         time.sleep(0.1)
     raise RuntimeError(f"Blueprint pre-launch hook timed out after {timeout:g}s. See {run_dir / 'pre_launch.log'}.")
 
@@ -2531,10 +2358,7 @@ def port_listener_is_cleanup_owned(pid: int, recorded_pids: set[int], recorded_g
     if process_group_id is not None and process_group_id in recorded_groups:
         return True
     command = command_for_pid(pid)
-    owns_video_watch_artifacts = (
-        "video_watch_assistant" in command
-        or "/tmp/video_watch_assistant_mediamtx." in command
-    )
+    owns_video_watch_artifacts = "video_watch_assistant" in command or "/tmp/video_watch_assistant_mediamtx." in command
     if not owns_video_watch_artifacts:
         return False
     return any(token in command for token in ("mediamtx", "rtsp-simple-server", "ffmpeg", "pre-launch.sh"))
@@ -2601,7 +2425,11 @@ def post_launch_env(run_dir: Path, hook_info: Dict[str, Any], *, reason: str) ->
     ready_path = Path(ready_value) if isinstance(ready_value, str) and ready_value else run_dir / "pre_launch.ready"
     pre_launch_process_value = hook_info.get("pre_launch_process_file")
     state_value = hook_info.get("state_file")
-    pre_launch_process_path = Path(pre_launch_process_value) if isinstance(pre_launch_process_value, str) and pre_launch_process_value else run_dir / "pre_launch_process.json"
+    pre_launch_process_path = (
+        Path(pre_launch_process_value)
+        if isinstance(pre_launch_process_value, str) and pre_launch_process_value
+        else run_dir / "pre_launch_process.json"
+    )
     env = {
         "MN_RUN_ID": str(hook_info.get("run_id") or run_dir.name),
         "MN_RUN_DIR": str(run_dir),

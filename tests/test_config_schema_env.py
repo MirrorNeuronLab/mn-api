@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from mn_api.config import config_string
 from mn_api.config_env import load_config_source, parse_dotenv_line, profile_name, read_dotenv
 from mn_api.config_schema import (
     ConfigError,
@@ -82,3 +83,19 @@ def test_read_dotenv_and_load_config_source_layer_values(tmp_path):
     assert source.effective_env["B"] == "profile"
     assert source.effective_env["C"] == "real"
     assert source.loaded_files == (tmp_path / ".env", tmp_path / ".env.prod")
+
+
+def test_explicit_blank_environment_suppresses_runtime_state(tmp_path):
+    source = load_config_source(
+        env={"MN_API_TOKEN": ""},
+        env_dir=tmp_path,
+    )
+
+    assert (
+        config_string(
+            "MN_API_TOKEN",
+            source=source,
+            runtime_env={"MN_API_TOKEN": "stale-runtime-token"},
+        )
+        == ""
+    )

@@ -60,9 +60,10 @@ http://localhost:54001
 
 ## Configuration
 
-Configuration is loaded by `mn_api.config` and shared by API, web UI server,
-and child CLI/runtime processes. Real environment variables always override
-values from `.env` files. Loading order is:
+Configuration is loaded through the source-compatible `mn_api.config` facade,
+while dotenv parsing, profile normalization, shared defaults, typed parsers,
+redaction, and bootstrapping are owned by `mn_sdk.config`. API-only HTTP/Web UI
+keys are composed with that SDK schema. Loading order is:
 
 ```text
 real environment variables
@@ -73,7 +74,12 @@ real environment variables
 
 If `MN_ENV` is unset it defaults to `dev`. `MN_ENV=development` loads
 `.env.dev`; `MN_ENV=prod` and `MN_ENV=production` load `.env.prod` when that
-file exists. Production does not require any `.env` file.
+file exists. Production does not require any `.env` file. An explicitly blank
+process-environment value overrides the corresponding dotenv value.
+
+Set `MN_MODEL_CATALOG_PATH` in `.env` to select the final operator model catalog.
+That catalog contains semantic defaults and fallback links; the API defines no
+physical built-in model list or separate preferred/fallback variables.
 
 Development example:
 

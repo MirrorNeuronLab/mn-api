@@ -23,6 +23,7 @@ from mn_sdk import (
     list_runtime_models,
     load_model_catalog,
     merge_catalog_and_installed_models,
+    model_name_candidates as sdk_model_name_candidates,
     provider_registration,
     registered_model_records,
     remove_litellm_gateway_route,
@@ -64,7 +65,9 @@ def list_model_catalog(_auth=Depends(require_auth)):
 
 def list_remote_models(_auth=Depends(require_auth)):
     try:
-        remotes = [_remote_projection(record) for record in registered_model_records() if record.get("source") == "rest_remote"]
+        remotes = [
+            _remote_projection(record) for record in registered_model_records() if record.get("source") == "rest_remote"
+        ]
         return {"remotes": remotes, "path": str(default_model_registry_path())}
     except Exception as exc:
         return handle_grpc_error(exc)
@@ -247,7 +250,9 @@ def _resolve_entry_or_external(
     try:
         entry = resolve_model_entry(model, catalog=catalog)
         if not (docker_model_match_keys(docker_model_name(entry)) & installed_model_keys):
-            for installed_entry in merge_catalog_and_installed_models(catalog=catalog, installed_models=installed_models):
+            for installed_entry in merge_catalog_and_installed_models(
+                catalog=catalog, installed_models=installed_models
+            ):
                 if not (docker_model_match_keys(docker_model_name(installed_entry)) & installed_model_keys):
                     continue
                 if requested_keys & entry_lookup_keys(installed_entry):
@@ -526,14 +531,7 @@ def _parse_model_list(output: str) -> set[str]:
 
 
 def _model_name_candidates(item: dict[str, Any]) -> set[str]:
-    names: set[str] = set()
-    for key, value in item.items():
-        lowered = key.lower()
-        if lowered in {"name", "model", "id", "ref", "repository"} and isinstance(value, str):
-            names.add(value)
-        elif lowered in {"tags", "names"} and isinstance(value, list):
-            names.update(str(tag) for tag in value if tag)
-    return names
+    return sdk_model_name_candidates(item)
 
 
 def _docker(args: list[str], *, timeout: float) -> subprocess.CompletedProcess[str]:

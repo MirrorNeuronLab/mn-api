@@ -6,31 +6,24 @@ import re
 import threading
 import time
 import urllib.parse
-import base64
 from collections import Counter, deque
 from pathlib import Path
 from typing import Any
 
-import grpc
 from fastapi import Depends, HTTPException, Query
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 from mn_sdk import (
     BlueprintWorkflowProgress,
     ManifestConversionError,
     RuntimeService,
     expand_manifest_source,
-    make_validation_report,
-    run_hardware_requirements_validation,
-    run_input_validation,
-    validate_input_validation_spec_issues,
-    validate_requirements_spec_issues,
-    validate_resource_spec_issues,
     failure_from_event,
     is_lowered_runtime_projection as _is_lowered_runtime_projection,
     is_manifest_source,
     manifest_form,
     matches_public_workflow_contract as _matches_public_workflow_contract,
     normalize_error,
+    public_workflow_manifest_from_job,
     workflow_progress_snapshot,
     workflow_step_ids as _workflow_step_ids,
 )
@@ -48,13 +41,10 @@ from mn_api.agent_graph import build_agent_graph
 from mn_api.artifacts import artifact_ref, list_artifact_files
 from mn_api.blueprints import (
     blueprint_bundle_root,
-    cleanup_blueprint_processes_for_job,
     find_blueprint,
-    runtime_resource_report,
 )
-from mn_api.bundles import load_uploaded_bundle
 from mn_api.dependencies import require_auth
-from mn_api.errors import handle_grpc_error, validation_problem_response
+from mn_api.errors import handle_grpc_error
 from mn_api.job_store import job_data_dir_from_id
 from mn_api.job_activity import compact_event as _compact_event
 from mn_api.job_activity import compact_value as _compact_value
@@ -66,7 +56,6 @@ from mn_api.run_store import read_jsonl_file as _read_jsonl_file
 from mn_api.run_store import run_dir_from_id as _run_dir_from_id
 from mn_api.run_store import runs_root as _runs_root
 from mn_api.run_store import stream_jsonl_files as _stream_jsonl_files
-from mn_api.schemas import RestoreJobBackupRequest, SubmitJobRequest
 
 
 # These helpers are retained as internal projections used by the v1 run
@@ -101,9 +90,6 @@ _IMMEDIATE_PROGRESS_EVENTS = {
 }
 
 
-
-
-
 def _decode_manifest(manifest_json: str, *, root_dir: Path | None = None) -> dict:
     try:
         manifest = json.loads(manifest_json)
@@ -119,7 +105,6 @@ def _decode_manifest(manifest_json: str, *, root_dir: Path | None = None) -> dic
     return manifest
 
 
-
 def _nested_get(value: dict[str, Any], path: list[str]) -> Any:
     cursor: Any = value
     for key in path:
@@ -127,9 +112,6 @@ def _nested_get(value: dict[str, Any], path: list[str]) -> Any:
             return None
         cursor = cursor.get(key)
     return cursor
-
-
-
 
 
 def start_operation(kind: str, options: dict[str, Any] | None = None, _auth=Depends(require_auth)):
@@ -166,7 +148,7 @@ def stream_operation_events(
                 prefix = f"id: {event_id}\n" if isinstance(event_id, int) else ""
                 yield f"{prefix}event: {event_name}\ndata: {json.dumps(event)}\n\n"
         except Exception:
-            yield "event: error\ndata: {\"error\": \"MN_OPERATION_STREAM_FAILED\"}\n\n"
+            yield 'event: error\ndata: {"error": "MN_OPERATION_STREAM_FAILED"}\n\n'
 
     return StreamingResponse(event_source(), media_type="text/event-stream")
 
@@ -175,7 +157,6 @@ def _start_operation(kind: str, options: dict[str, Any] | None = None) -> dict[s
     payload = json.loads(state.client.start_operation(kind, options or {}))
     payload.setdefault("version", 2)
     return payload
-
 
 
 def unfinished_jobs(_auth=Depends(require_auth)):
@@ -603,7 +584,7 @@ def _workflow_progress_snapshot_for_job(job_id: str) -> dict[str, Any]:
     )
     observability_summary = _read_json_file(run_dir / "observability_summary.json") if run_dir else {}
     manifest = _manifest_with_public_agent_bindings(
-        _manifest_from_job_details(details, run_dir=run_dir),
+        _manifest_from_job_details(details, run_dir=run_dir, events=events),
         job,
         summary,
     )
@@ -659,16 +640,21 @@ def _summary_from_details(details: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
-def _manifest_from_job_details(details: dict[str, Any], *, run_dir: Path | None = None) -> dict[str, Any]:
+def _manifest_from_job_details(
+    details: dict[str, Any],
+    *,
+    run_dir: Path | None = None,
+    events: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     job = _job_from_details(details)
     summary = _summary_from_details(details)
-    public_manifest = _public_workflow_manifest_from_job(job, summary)
+    public_manifest = _public_workflow_manifest_from_job(job, summary, events=events)
     run_manifest = _manifest_from_run_dir(run_dir)
     blueprint_manifest = _blueprint_manifest_from_run_mapping(run_dir)
     for candidate in (run_manifest, blueprint_manifest):
-        if _matches_public_workflow_contract(
-            candidate, public_manifest
-        ) or _is_lowered_runtime_projection(public_manifest, candidate):
+        if _matches_public_workflow_contract(candidate, public_manifest) or _is_lowered_runtime_projection(
+            public_manifest, candidate
+        ):
             return candidate
 
     direct_manifests = (
@@ -677,9 +663,9 @@ def _manifest_from_job_details(details: dict[str, Any], *, run_dir: Path | None 
         summary.get("manifest"),
     )
     for candidate in direct_manifests:
-        if _matches_public_workflow_contract(
-            candidate, public_manifest
-        ) or _is_lowered_runtime_projection(public_manifest, candidate):
+        if _matches_public_workflow_contract(candidate, public_manifest) or _is_lowered_runtime_projection(
+            public_manifest, candidate
+        ):
             return candidate
 
     manifest_ref = job.get("manifest_ref")
@@ -699,9 +685,9 @@ def _manifest_from_job_details(details: dict[str, Any], *, run_dir: Path | None 
                     break
             except OSError:
                 continue
-    if _matches_public_workflow_contract(
-        ref_manifest, public_manifest
-    ) or _is_lowered_runtime_projection(public_manifest, ref_manifest):
+    if _matches_public_workflow_contract(ref_manifest, public_manifest) or _is_lowered_runtime_projection(
+        public_manifest, ref_manifest
+    ):
         return ref_manifest
 
     if public_manifest:
@@ -719,9 +705,7 @@ def _manifest_from_job_details(details: dict[str, Any], *, run_dir: Path | None 
         "apiVersion": "mn.workflow/v1",
         "kind": "Workflow",
         "id": workflow_id,
-        "name": _first_string(
-            job.get("job_name"), summary.get("job_name"), workflow_id
-        ),
+        "name": _first_string(job.get("job_name"), summary.get("job_name"), workflow_id),
         "workflow": {
             "workflow_id": workflow_id,
             "steps": [],
@@ -782,136 +766,14 @@ def _blueprint_manifest_from_run_mapping(run_dir: Path | None) -> dict[str, Any]
 
 
 def _public_workflow_manifest_from_job(
-    job: dict[str, Any], summary: dict[str, Any]
+    job: dict[str, Any],
+    summary: dict[str, Any],
+    *,
+    events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     """Rebuild the source-facing workflow contract from the runtime ledger."""
 
-    workflow_state = _workflow_state_from_job(job, summary)
-    steps_by_id = (
-        workflow_state.get("steps")
-        if isinstance(workflow_state, dict) and isinstance(workflow_state.get("steps"), dict)
-        else {}
-    )
-    step_order = (
-        workflow_state.get("step_order")
-        if isinstance(workflow_state, dict) and isinstance(workflow_state.get("step_order"), list)
-        else []
-    )
-    step_ids = [str(step_id) for step_id in step_order if str(step_id) in steps_by_id]
-    if not step_ids:
-        step_ids = [str(step_id) for step_id in steps_by_id if str(step_id).strip()]
-    if not step_ids:
-        step_ids = _public_step_ids_from_topology(job)
-    if not step_ids:
-        return None
-
-    edges = _public_workflow_edges(workflow_state, job, step_ids)
-    outgoing: dict[str, list[tuple[str, str]]] = {}
-    for edge in edges:
-        source = str(edge.get("from") or "")
-        target = str(edge.get("to") or "")
-        event_name = str(edge.get("event") or edge.get("message_type") or "")
-        if source and target and event_name:
-            outgoing.setdefault(source, []).append((event_name, target))
-
-    steps: list[dict[str, Any]] = []
-    for index, step_id in enumerate(step_ids):
-        record = steps_by_id.get(step_id)
-        record = record if isinstance(record, dict) else {}
-        transitions = {event_name: target for event_name, target in outgoing.get(step_id, [])}
-        steps.append(
-            {
-                "id": step_id,
-                "label": str(record.get("label") or _humanize_identifier(step_id)),
-                "goal": str(record.get("goal") or ""),
-                "run": str(record.get("run") or f"{step_id}__start"),
-                "emits": _step_emit_name(step_id, outgoing.get(step_id, [])),
-                "on": transitions,
-                "needs": [
-                    str(edge.get("from"))
-                    for edge in edges
-                    if str(edge.get("to") or "") == step_id
-                ],
-                "dynamic_instance": record.get("dynamic_instance") is True,
-                "template_id": record.get("template_id"),
-                "region_id": record.get("region_id"),
-                "kind": "source" if index == 0 else "sink" if index == len(step_ids) - 1 else "stage",
-            }
-        )
-
-    workflow_id = str(
-        workflow_state.get("workflow_id")
-        if isinstance(workflow_state, dict) and workflow_state.get("workflow_id")
-        else job.get("workflow_id")
-        or summary.get("workflow_id")
-        or job.get("graph_id")
-        or summary.get("graph_id")
-        or job.get("job_id")
-        or "workflow"
-    )
-    job_type = str(job.get("job_type") or job.get("type") or summary.get("job_type") or summary.get("type") or "")
-    return {
-        "apiVersion": "mn.workflow/v1",
-        "kind": "Workflow",
-        "id": str(job.get("graph_id") or summary.get("graph_id") or workflow_id),
-        "name": str(job.get("job_name") or summary.get("job_name") or workflow_id),
-        "description": str(summary.get("description") or job.get("description") or ""),
-        "policies": {"stream_mode": "live"} if job_type.lower() == "service" else {},
-        "workflow": {
-            "workflow_id": workflow_id,
-            "mode": str(
-                workflow_state.get("mode") or "static_dag"
-                if isinstance(workflow_state, dict)
-                else "static_dag"
-            ),
-            "graph_revision": int(
-                workflow_state.get("graph_revision") or 0
-                if isinstance(workflow_state, dict)
-                else 0
-            ),
-            "dynamic": _public_dynamic_workflow_state(workflow_state),
-            "entrypoint": step_ids[0],
-            "source": step_ids[0],
-            "sink": step_ids[-1],
-            "steps": steps,
-            "edges": edges,
-        },
-        "runtime": {"bindings": {}},
-    }
-
-
-def _public_dynamic_workflow_state(
-    workflow_state: dict[str, Any] | None,
-) -> dict[str, Any] | None:
-    if (
-        not isinstance(workflow_state, dict)
-        or workflow_state.get("dynamic_enabled") is not True
-    ):
-        return None
-    regions = workflow_state.get("dynamic_regions")
-    public_regions = []
-    if isinstance(regions, dict):
-        for region in regions.values():
-            if isinstance(region, dict):
-                public_regions.append(
-                    {
-                        key: region[key]
-                        for key in (
-                            "id",
-                            "strategy",
-                            "controller",
-                            "exit",
-                            "templates",
-                            "mutable_edges",
-                        )
-                        if key in region
-                    }
-                )
-    return {
-        "enabled": True,
-        "apply_at": "between_steps",
-        "regions": public_regions,
-    }
+    return public_workflow_manifest_from_job(job, summary, events=events)
 
 
 def _workflow_state_from_job(job: dict[str, Any], summary: dict[str, Any]) -> dict[str, Any] | None:
@@ -920,119 +782,6 @@ def _workflow_state_from_job(job: dict[str, Any], summary: dict[str, Any]) -> di
         if isinstance(workflow_state, dict):
             return workflow_state
     return None
-
-
-def _public_step_ids_from_topology(job: dict[str, Any]) -> list[str]:
-    topology = job.get("runtime_topology") if isinstance(job.get("runtime_topology"), dict) else {}
-    nodes = topology.get("nodes") if isinstance(topology.get("nodes"), list) else []
-    step_ids: list[str] = []
-    for node in nodes:
-        if not isinstance(node, dict):
-            continue
-        node_id = str(node.get("node_id") or node.get("id") or "")
-        node_types = {str(node.get(key) or "").strip().lower() for key in ("agent_type", "node_type", "type")}
-        if "step_source" not in node_types or not node_id.endswith("__start"):
-            continue
-        step_id = node_id.removesuffix("__start")
-        if step_id and step_id not in step_ids:
-            step_ids.append(step_id)
-    return step_ids
-
-
-def _public_workflow_edges(
-    workflow_state: dict[str, Any] | None,
-    job: dict[str, Any],
-    step_ids: list[str],
-) -> list[dict[str, Any]]:
-    raw_edges = workflow_state.get("edges") if isinstance(workflow_state, dict) else None
-    if not isinstance(raw_edges, list) or not raw_edges:
-        topology = job.get("runtime_topology") if isinstance(job.get("runtime_topology"), dict) else {}
-        raw_edges = topology.get("edges") if isinstance(topology.get("edges"), list) else []
-    known_steps = set(step_ids)
-    adjacency: dict[str, list[tuple[str, dict[str, Any]]]] = {}
-
-    def public_node_id(node_id: str) -> str | None:
-        if node_id in known_steps:
-            return node_id
-        for suffix in ("__start", "__end"):
-            if node_id.endswith(suffix) and node_id.removesuffix(suffix) in known_steps:
-                return node_id.removesuffix(suffix)
-        return None
-
-    for raw_edge in raw_edges:
-        if not isinstance(raw_edge, dict):
-            continue
-        raw_source = str(
-            raw_edge.get("from")
-            or raw_edge.get("from_node")
-            or raw_edge.get("source")
-            or raw_edge.get("source_id")
-            or ""
-        )
-        raw_target = str(
-            raw_edge.get("to")
-            or raw_edge.get("to_node")
-            or raw_edge.get("target")
-            or raw_edge.get("target_id")
-            or ""
-        )
-        if not raw_source or not raw_target:
-            continue
-        source = public_node_id(raw_source) or raw_source
-        target = public_node_id(raw_target) or raw_target
-        adjacency.setdefault(source, []).append((target, raw_edge))
-
-    edges: list[dict[str, Any]] = []
-    emitted_edges: set[tuple[str, str, str]] = set()
-    for source in step_ids:
-        queue: deque[tuple[str, dict[str, Any], int]] = deque(
-            (target, edge, 1) for target, edge in adjacency.get(source, [])
-        )
-        visited_hidden_nodes: set[str] = set()
-        while queue:
-            target, first_edge, distance = queue.popleft()
-            if target in known_steps:
-                event_name = str(
-                    first_edge.get("event")
-                    or first_edge.get("message_type")
-                    or first_edge.get("label")
-                    or first_edge.get("type")
-                    or f"{source}_completed"
-                )
-                edge_key = (source, target, event_name)
-                if target == source or edge_key in emitted_edges:
-                    continue
-                emitted_edges.add(edge_key)
-                direct = distance == 1
-                edges.append(
-                    {
-                        "id": str(
-                            first_edge.get("id")
-                            or first_edge.get("edge_id")
-                            or f"{source}_to_{target}"
-                        ) if direct else f"{source}_to_{target}",
-                        "from": source,
-                        "to": target,
-                        "event": event_name,
-                    }
-                )
-                continue
-            if target in visited_hidden_nodes:
-                continue
-            visited_hidden_nodes.add(target)
-            queue.extend(
-                (next_target, first_edge, distance + 1)
-                for next_target, _edge in adjacency.get(target, [])
-            )
-    return edges
-
-
-def _step_emit_name(step_id: str, transitions: list[tuple[str, str]]) -> str:
-    return transitions[0][0] if transitions else f"{step_id}_completed"
-
-
-def _humanize_identifier(value: str) -> str:
-    return " ".join(part.capitalize() for part in value.replace("-", "_").split("_") if part)
 
 
 def _manifest_with_public_agent_bindings(
@@ -1064,11 +813,15 @@ def _manifest_with_public_agent_bindings(
 
         ledger_record = ledger_steps.get(step_id)
         ledger_record = ledger_record if isinstance(ledger_record, dict) else {}
-        ledger_agent_ids = [
-            public_id
-            for agent_id in ledger_record.get("agent_ids", [])
-            if (public_id := _public_agent_id(step_id, agent_id))
-        ] if isinstance(ledger_record.get("agent_ids"), list) else []
+        ledger_agent_ids = (
+            [
+                public_id
+                for agent_id in ledger_record.get("agent_ids", [])
+                if (public_id := _public_agent_id(step_id, agent_id))
+            ]
+            if isinstance(ledger_record.get("agent_ids"), list)
+            else []
+        )
         normalized_binding = dict(binding)
         if ledger_agent_ids:
             workers = binding.get("workers")
@@ -1309,7 +1062,7 @@ def stream_job_workflow_progress(
         events, stream_error = _stream_job_events(job_id, limit=_MAX_STATUS_RUNTIME_EVENTS)
         run_dir = _run_dir_for_details(details, events, job_id=job_id)
         manifest = _manifest_with_public_agent_bindings(
-            _manifest_from_job_details(details, run_dir=run_dir),
+            _manifest_from_job_details(details, run_dir=run_dir, events=events),
             job,
             summary,
         )
@@ -1464,5 +1217,3 @@ def replay_job_dead_letter(job_id: str, index: int, _auth=Depends(require_auth))
             "message": "core replay is available in-process; gRPC replay will be added to expose it over REST",
         },
     )
-
-
