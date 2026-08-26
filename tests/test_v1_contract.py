@@ -233,7 +233,7 @@ def test_job_manifest_decoder_selects_both_v1_forms_and_rejects_retired_versions
     assert internal_jobs._decode_manifest(json.dumps(executable)) == executable
 
     try:
-        internal_jobs._decode_manifest(json.dumps({"apiVersion": "mn.workflow/v2"}))
+        internal_jobs._decode_manifest(json.dumps({"apiVersion": "mn.workflow/unsupported"}))
     except HTTPException as exc:
         assert exc.status_code == 400
         assert "mn.workflow/v1" in str(exc.detail)
