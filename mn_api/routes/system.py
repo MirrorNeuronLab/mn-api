@@ -6,10 +6,8 @@ import socket
 from typing import Any, Callable
 
 from fastapi import Depends, HTTPException
-import grpc
 from mn_sdk import (
     Client,
-    DEFAULT_FEDERATION_GRPC_PORTS,
     RuntimeConfig,
     RuntimeService,
     collect_runtime_status,
@@ -29,16 +27,12 @@ from mn_api.dependencies import require_auth
 from mn_api.errors import handle_grpc_error
 from mn_api.schemas import (
     ClusterNodeAddRequest,
-    ClusterNodeRemoveRequest,
     NodeDrainRequest,
     NodeMaintenanceRequest,
     NodeReconcileRequest,
     NodeUndrainRequest,
     ResourceSetRequest,
 )
-
-
-DEFAULT_NODE_ADD_GRPC_PORTS = DEFAULT_FEDERATION_GRPC_PORTS
 
 
 def health():
@@ -142,7 +136,7 @@ def add_cluster_node(req: ClusterNodeAddRequest, _auth=Depends(require_auth)):
             state.client,
             host=host,
             token=token,
-            grpc_ports=candidate_grpc_ports(req.grpc_port),
+            grpc_port=normalize_grpc_port(req.grpc_port),
             local_host=local_host,
         )
         node_name = normalize_node_name(result.get("node_name") or f"mirror_neuron@{host}")
@@ -169,22 +163,6 @@ def local_core_advertised_host(client: Any) -> str:
         nodes[0] if len(nodes) == 1 else {},
     )
     return str(node.get("grpc_host") or "").strip()
-
-
-def remove_cluster_node(req: ClusterNodeRemoveRequest, _auth=Depends(require_auth)):
-    try:
-        node_name = normalize_node_name(req.node_name)
-        status = state.client.remove_node(node_name)
-        return {
-            "ok": True,
-            "node_name": node_name,
-            "status": status,
-            "message": f"{node_name} was removed from this box.",
-        }
-    except HTTPException:
-        raise
-    except Exception as exc:
-        return handle_grpc_error(exc)
 
 
 def reconcile_node(node_name: str, req: NodeReconcileRequest | None = None, _auth=Depends(require_auth)):
@@ -295,43 +273,6 @@ def normalize_grpc_port(value: int | None) -> int:
     if port < 1 or port > 65535:
         raise HTTPException(status_code=422, detail="Remote gRPC port must be a valid TCP port.")
     return port
-
-
-def candidate_grpc_ports(value: int | None) -> list[int]:
-    if value is not None:
-        return [normalize_grpc_port(value)]
-    return list(DEFAULT_NODE_ADD_GRPC_PORTS)
-
-
-def network_handshake_with_fallback(
-    *,
-    host: str,
-    token: str,
-    grpc_ports: list[int],
-    local_host: str,
-    remote_client_factory: Callable[..., Any] | None = None,
-) -> dict[str, Any]:
-    client_factory = remote_client_factory or Client
-    last_error: Exception | None = None
-    for grpc_port in grpc_ports:
-        try:
-            remote = client_factory(target=f"{host}:{grpc_port}", auth_token="", timeout=10)
-            return remote.network_handshake(
-                token,
-                node_name=network_node_name(local_host),
-                node_info=handshake_node_info(local_host),
-            )
-        except Exception as exc:
-            last_error = exc
-            if not is_grpc_unavailable(exc):
-                raise
-    if last_error:
-        raise last_error
-    raise HTTPException(status_code=422, detail="Remote gRPC port must be a valid TCP port.")
-
-
-def is_grpc_unavailable(error: Exception) -> bool:
-    return isinstance(error, grpc.RpcError) and error.code() == grpc.StatusCode.UNAVAILABLE
 
 
 def loopback_host(value: str) -> bool:

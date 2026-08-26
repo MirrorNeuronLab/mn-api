@@ -17,7 +17,17 @@ def build_agent_graph(
 ) -> dict[str, Any]:
     agents = details.get("agents", []) or []
     job = details.get("job", {}) or {}
-    manifest = job.get("topology") or load_manifest_for_job(job)
+    topology = job.get("topology")
+    if isinstance(topology, dict):
+        manifest = {
+            "agents": {
+                "nodes": topology.get("nodes", []),
+                "edges": topology.get("edges", []),
+            },
+            "metadata": topology.get("metadata", {}),
+        }
+    else:
+        manifest = load_manifest_for_job(job)
     agent_by_id = _collect_graph_agents(agents, manifest)
     edge_counts: dict[tuple[str, str, str], dict[str, Any]] = {}
     _add_manifest_edges(edge_counts, agent_by_id, manifest)
@@ -210,9 +220,6 @@ def _manifest_agent_nodes(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     agents = manifest.get("agents") if isinstance(manifest.get("agents"), dict) else {}
     agent_nodes = agents.get("nodes") if isinstance(agents.get("nodes"), list) else []
     nodes.extend(node for node in agent_nodes if isinstance(node, dict))
-    root_nodes = manifest.get("nodes")
-    if isinstance(root_nodes, list):
-        nodes.extend(node for node in root_nodes if isinstance(node, dict))
     metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
     templates = metadata.get("agent_templates") if isinstance(metadata.get("agent_templates"), dict) else {}
     template_nodes = templates.get("nodes") if isinstance(templates.get("nodes"), list) else []
@@ -225,12 +232,7 @@ def _manifest_agent_edges(manifest: dict[str, Any]) -> list[dict[str, Any]]:
         return []
     agents = manifest.get("agents") if isinstance(manifest.get("agents"), dict) else {}
     agent_edges = agents.get("edges") if isinstance(agents.get("edges"), list) else []
-    if agent_edges:
-        return [edge for edge in agent_edges if isinstance(edge, dict)]
-    root_edges = manifest.get("edges")
-    if isinstance(root_edges, list):
-        return [edge for edge in root_edges if isinstance(edge, dict)]
-    return []
+    return [edge for edge in agent_edges if isinstance(edge, dict)]
 
 
 def event_message_summary(event: dict[str, Any]) -> dict[str, Any] | None:

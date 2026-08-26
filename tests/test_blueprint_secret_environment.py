@@ -92,7 +92,15 @@ def test_secret_environment_is_injected_only_into_matching_runtime_nodes_and_red
 def test_secret_environment_rejects_missing_worker_or_invalid_environment_shape():
     with pytest.raises(HTTPException, match="no executable worker"):
         inject_declared_secret_environment(
-            json.dumps({"nodes": [{"node_id": "worker", "config": {"pass_env": []}}]}),
+            json.dumps(
+                {
+                    "agents": {
+                        "nodes": [
+                            {"node_id": "worker", "config": {"pass_env": []}}
+                        ]
+                    }
+                }
+            ),
             {"DECLARED_SECRET": "value"},
         )
 
@@ -100,12 +108,17 @@ def test_secret_environment_rejects_missing_worker_or_invalid_environment_shape(
         inject_declared_secret_environment(
             json.dumps(
                 {
-                    "nodes": [
-                        {
-                            "node_id": "worker",
-                            "config": {"pass_env": ["DECLARED_SECRET"], "environment": "invalid"},
-                        }
-                    ]
+                    "agents": {
+                        "nodes": [
+                            {
+                                "node_id": "worker",
+                                "config": {
+                                    "pass_env": ["DECLARED_SECRET"],
+                                    "environment": "invalid",
+                                },
+                            }
+                        ]
+                    }
                 }
             ),
             {"DECLARED_SECRET": "value"},

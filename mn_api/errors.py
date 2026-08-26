@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from typing import Any, Mapping
 
 import grpc
@@ -81,10 +80,6 @@ def app_error_response(app_error: AppError, *, request: Request | None = None, c
 
 
 def handle_grpc_error(error: Exception):
-    legacy = _legacy_validation_response(error)
-    if legacy is not None:
-        _log_exception(error, normalize_exception(error), {"handler": "handle_grpc_error", "legacy_validation": True})
-        return legacy
     app_error = normalize_exception(error)
     _log_exception(error, app_error, {"handler": "handle_grpc_error"})
     return app_error_response(app_error)
@@ -135,113 +130,6 @@ async def unexpected_exception_handler(request: Request, exc: Exception):
     app_error = normalize_exception(exc)
     _log_exception(exc, app_error, _request_context(request))
     return app_error_response(app_error, request=request)
-
-
-def _legacy_validation_response(error: Exception):
-    if isinstance(error, grpc.RpcError) and error.code() == grpc.StatusCode.RESOURCE_EXHAUSTED:
-        detail = str(error.details())
-        if detail.startswith("resource_overloaded"):
-            return JSONResponse(
-                status_code=503,
-                content={
-                    "type": "https://mirrorneuron.io/problems/resource_overloaded",
-                    "title": "Resource overloaded",
-                    "status": 503,
-                    "detail": detail,
-                    "instance": "",
-                    "code": "resource_overloaded",
-                    "request_id": "",
-                },
-                media_type="application/problem+json",
-            )
-    if isinstance(error, grpc.RpcError) and error.code() == grpc.StatusCode.FAILED_PRECONDITION:
-        detail = str(error.details())
-        if "MN_SERVICE_RUN_EXISTS" in detail:
-            return problem_response(
-                status_code=409,
-                error="service_run_exists",
-                title="Service run already exists",
-                detail=(
-                    "This service job already has a run. Resume, pause, cancel, delete, "
-                    "or explicitly replace the existing run."
-                ),
-            )
-        if "coordination_store_mismatch" in detail:
-            return problem_response(
-                status_code=412,
-                error="coordination_store_mismatch",
-                title="Coordination store mismatch",
-                detail=detail,
-            )
-        if "single_node_manifest_spans_multiple_nodes" in detail:
-            return problem_response(
-                status_code=412,
-                error="single_node_placement_failed",
-                title="Single-node placement failed",
-                detail=detail,
-            )
-        error_name = "requirements_not_met" if detail.startswith("requirements_not_met:") else "failed_precondition"
-        validation = _validation_report_from_prefixed_detail(str(detail), "requirements_not_met:")
-        return problem_response(
-            status_code=412,
-            error=error_name,
-            title="Runtime requirements not met",
-            detail=_human_detail(str(detail), "requirements_not_met:"),
-            validation=validation,
-        )
-    if isinstance(error, grpc.RpcError) and error.code() == grpc.StatusCode.INVALID_ARGUMENT:
-        detail = error.details()
-        if str(detail).startswith("input_validation_failed:"):
-            validation = _validation_report_from_prefixed_detail(str(detail), "input_validation_failed:")
-            return validation_problem_response(
-                validation or _legacy_report(str(detail), "input_validation_failed:"),
-                detail=_human_detail(str(detail), "input_validation_failed:"),
-            )
-    return None
-
-
-def _validation_report_from_prefixed_detail(detail: str, prefix: str) -> dict | None:
-    if not detail.startswith(prefix):
-        return None
-    payload = detail[len(prefix):].strip()
-    if not payload.startswith("{"):
-        return _legacy_report(detail, prefix)
-    try:
-        decoded = json.loads(payload)
-    except json.JSONDecodeError:
-        return None
-    return decoded if isinstance(decoded, dict) else _legacy_report(detail, prefix)
-
-
-def _legacy_report(detail: str, prefix: str) -> dict:
-    message = _human_detail(detail, prefix)
-    return {
-        "schema_version": "validation.report/v2",
-        "ok": False,
-        "status": "failed",
-        "error_count": 1,
-        "errors": [message],
-        "issues": [
-            {
-                "code": prefix.rstrip(":") or "validation_failed",
-                "message": message,
-                "help": "Review the validation details and retry.",
-                "severity": "error",
-            }
-        ],
-        "results": [],
-    }
-
-
-def _human_detail(detail: str, prefix: str) -> str:
-    if detail.startswith(prefix):
-        stripped = detail[len(prefix):].strip()
-        if stripped.startswith("{"):
-            report = _validation_report_from_prefixed_detail(detail, prefix)
-            if report and report.get("errors"):
-                return "; ".join(str(error) for error in report["errors"])
-        return stripped
-    return detail
 
 
 def _title_from_code(code: str) -> str:

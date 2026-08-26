@@ -101,10 +101,6 @@ class ClusterNodeAddRequest(BaseModel):
     grpc_port: Optional[int] = None
 
 
-class ClusterNodeRemoveRequest(BaseModel):
-    node_name: str
-
-
 class NodeActionRequest(BaseModel):
     reason: str = ""
 

@@ -108,33 +108,14 @@ def safe_context_value(value: Any, *, depth: int = 0) -> Any:
     return sdk_safe_context_value(value, depth=depth)
 
 
-def _descriptor_sources(blueprint: Mapping[str, Any]) -> list[Mapping[str, Any]]:
-    metadata = blueprint.get("metadata") if isinstance(blueprint.get("metadata"), Mapping) else {}
-    product_value = blueprint.get("product") or metadata.get("product")
-    product = product_value if isinstance(product_value, Mapping) else {}
-    sources: list[Mapping[str, Any]] = []
-    for owner in (blueprint, metadata, product):
-        for key in ("mcpCollaboration", "mcp_collaboration"):
-            value = owner.get(key)
-            if isinstance(value, Mapping):
-                sources.append(value)
-    return sources
-
-
-def _mcp_descriptor(blueprint: Mapping[str, Any]) -> dict[str, Any]:
-    descriptor = next(iter(_descriptor_sources(blueprint)), {})
-    service_name = _first_text(descriptor.get("service_name"), descriptor.get("serviceName"), "mn-job-collaboration")
-    transport = _first_text(descriptor.get("transport"), "streamable-http")
-    path = _first_text(descriptor.get("path"), "/mcp")
-    enabled = bool(
-        descriptor.get("enabled") is True
-        and service_name == "mn-job-collaboration"
-        and transport == "streamable-http"
-        and path == "/mcp"
+def _response_descriptor(blueprint: Mapping[str, Any]) -> dict[str, Any]:
+    descriptor = (
+        blueprint.get("response_service")
+        if isinstance(blueprint.get("response_service"), Mapping)
+        else {}
     )
     return {
-        "enabled": enabled,
-        "goal_id": _first_text(descriptor.get("goal_id"), descriptor.get("goalId")) or None,
+        "goal_id": _first_text(descriptor.get("goal_id")) or None,
     }
 
 
@@ -407,12 +388,12 @@ class JobContextProvider:
             if _is_not_found_error(error):
                 raise JobMCPNotFoundError("The requested job MCP is unavailable.") from error
             raise JobMCPUnavailableError("The job blueprint is temporarily unavailable.") from error
-        descriptor = _mcp_descriptor(blueprint)
+        descriptor = _response_descriptor(blueprint)
         descriptor["response_enabled"] = _response_service_enabled(job, blueprint)
         descriptor["response_agent_enabled"] = bool(
             descriptor["response_enabled"] and _response_agent_declared(blueprint)
         )
-        if not descriptor["enabled"] and not descriptor["response_enabled"]:
+        if not descriptor["response_enabled"]:
             raise JobMCPNotFoundError("The requested job MCP is unavailable.")
         return job, blueprint, descriptor
 

@@ -89,7 +89,6 @@ from mn_sdk.model_preparation import (
     runtime_model_llm_environment,
 )
 from mn_sdk.blueprint_runtime import (
-    add_mn_llm_aliases as sdk_add_mn_llm_aliases,
     adjust_llm_environment_for_node as sdk_adjust_llm_environment_for_node,
     apply_manifest_config_bindings as sdk_apply_manifest_config_bindings,
     blueprint_runtime_environment as sdk_blueprint_runtime_environment,
@@ -537,7 +536,6 @@ def install_blueprint_runtime_models(
         env.update(runtime_model_llm_environment(materialized_config))
     if blueprint_requests_default_llm(base_config):
         env["MN_LLM_MODEL"] = "default"
-        env["LITELLM_MODEL"] = "default"
     return {
         "ok": not errors,
         "models": models,
@@ -3011,10 +3009,6 @@ def inject_node_environment(manifest: Dict[str, Any], env: Dict[str, str]) -> No
 
 def merge_path_values(*values: str) -> str:
     return sdk_merge_path_values(*values)
-
-
-def add_mn_llm_aliases(environment: Dict[str, Any]) -> None:
-    sdk_add_mn_llm_aliases(environment)
 
 
 def adjust_llm_environment_for_node(environment: Dict[str, Any], node: Dict[str, Any]) -> None:

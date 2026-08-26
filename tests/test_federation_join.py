@@ -44,7 +44,7 @@ def test_node_create_waits_on_shared_federation_orchestrator(monkeypatch):
     assert response.json()["status"] == "federated"
     assert "auth_token" not in response.text
     assert len(calls) == 1
-    assert calls[0][1]["grpc_ports"] == [55051]
+    assert calls[0][1]["grpc_port"] == 55051
 
 
 def test_node_create_returns_sanitized_503_when_reciprocal_readiness_fails(monkeypatch):

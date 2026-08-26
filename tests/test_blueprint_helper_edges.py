@@ -246,9 +246,18 @@ def test_manifest_config_and_environment_helpers(monkeypatch, tmp_path):
     env = blueprints.config_to_environment(config)
     assert env["VIDEO_SOURCE_URI"] == "rtsp://camera"
     assert env["MN_LLM_MODEL"] == "gpt"
-    assert env["LITELLM_MAX_TOKENS"] == "100"
+    assert env["MN_LLM_MAX_TOKENS"] == "100"
 
-    manifest = {"nodes": [{"node_id": "worker", "config": {"environment": {"PYTHONPATH": "a"}}}]}
+    manifest = {
+        "agents": {
+            "nodes": [
+                {
+                    "node_id": "worker",
+                    "config": {"environment": {"PYTHONPATH": "a"}},
+                }
+            ]
+        }
+    }
     blueprints.apply_manifest_config_bindings(
         manifest,
         {
@@ -259,18 +268,13 @@ def test_manifest_config_and_environment_helpers(monkeypatch, tmp_path):
             ],
         },
     )
-    assert manifest["nodes"][0]["config"]["enabled"] == "true"
+    assert manifest["agents"]["nodes"][0]["config"]["enabled"] == "true"
 
     node_env = {"PYTHONPATH": "b", "MN_LLM_PROVIDER": "docker_model_runner", "MN_LLM_API_BASE": "http://localhost:12434/v1"}
     blueprints.inject_node_environment(manifest, node_env)
-    environment = manifest["nodes"][0]["config"]["environment"]
+    environment = manifest["agents"]["nodes"][0]["config"]["environment"]
     assert environment["PYTHONPATH"] == os.pathsep.join(["a", "b"])
     assert "host.docker.internal" in environment["MN_LLM_API_BASE"] or "localhost" not in environment["MN_LLM_API_BASE"]
-    environment["LITELLM_MODEL"] = "legacy"
-    blueprints.add_mn_llm_aliases(environment)
-    assert environment["MN_LLM_MODEL"] == "legacy"
-
-
 def test_config_loading_and_json_helpers(tmp_path):
     bundle = tmp_path / "bundle"
     (bundle / "config").mkdir(parents=True)

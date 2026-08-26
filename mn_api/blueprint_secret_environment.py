@@ -63,7 +63,7 @@ def validate_blueprint_secret_environment(manifest: Mapping[str, Any], environme
 def executable_manifest_nodes(manifest: Mapping[str, Any]) -> list[dict[str, Any]]:
     agents = manifest.get("agents") if isinstance(manifest.get("agents"), Mapping) else {}
     flow = manifest.get("flow") if isinstance(manifest.get("flow"), Mapping) else {}
-    candidates = [manifest.get("nodes"), flow.get("nodes"), agents.get("nodes"), agents.get("extra_nodes")]
+    candidates = [flow.get("nodes"), agents.get("nodes"), agents.get("extra_nodes")]
     nodes: list[dict[str, Any]] = []
     seen: set[int] = set()
     for candidate in candidates:

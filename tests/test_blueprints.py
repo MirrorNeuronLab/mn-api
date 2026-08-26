@@ -71,6 +71,11 @@ def _single_node_resource_report(node_name: str = "test-runtime-node") -> str:
                     "status": "healthy",
                     "scheduling_eligible": True,
                     "self": True,
+                    "coordination_store": {
+                        "identity": "test-store",
+                        "writable_primary": True,
+                        "healthy": True,
+                    },
                 }
             ]
         }
@@ -689,7 +694,7 @@ class TestBlueprintServices(unittest.TestCase):
             "nemotron-3.5-lightning:latest": {
                 "id": "nemotron-3.5-lightning:latest",
                 "model": "nemotron-3.5-lightning:latest",
-                "dmr_model": "nemotron-3.5-lightning:latest",
+                "tag_name": "nemotron-3.5-lightning:latest",
                 "api_model": "nemotron-3.5-lightning:latest",
                 "provider": "docker_model_runner",
                 "aliases": ["medium", "nemotron-3.5-lightning:latest"],
@@ -789,7 +794,7 @@ class TestBlueprintServices(unittest.TestCase):
             "nemotron-3.5-lightning:latest": {
                 "id": "nemotron-3.5-lightning:latest",
                 "model": "nemotron-3.5-lightning:latest",
-                "dmr_model": "nemotron-3.5-lightning:latest",
+                "tag_name": "nemotron-3.5-lightning:latest",
                 "api_model": "nemotron-3.5-lightning:latest",
                 "provider": "docker_model_runner",
                 "aliases": ["medium", "nemotron-3.5-lightning:latest"],
@@ -994,7 +999,7 @@ class TestBlueprintServices(unittest.TestCase):
                     "manifest_config_bindings": [
                         {
                             "config_path": "vl_model.model",
-                            "manifest_path": "nodes.worker.config.environment.CUSTOM_MODEL",
+                            "manifest_path": "agents.nodes.worker.config.environment.CUSTOM_MODEL",
                         }
                     ],
                 })
@@ -1003,14 +1008,17 @@ class TestBlueprintServices(unittest.TestCase):
             (bundle / "manifest.json").write_text(
                 json.dumps(
                     {
-                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
-                        "graph_id": "worker_graph",
-                        "nodes": [
+                        "apiVersion": "mn.workflow/v1",
+                        "kind": "Workflow",
+                        "id": "test-workflow",
+                        "contract": {},
+                        "agents": {"nodes": [
                             {
                                 "node_id": "worker",
-                                "config": {"environment": {"LITELLM_MODEL": "ollama/test"}},
+                                "config": {"environment": {"MN_LLM_MODEL": "ollama/test"}},
                             }
-                        ],
+                        ]},
+                        "runtime": {},
                         "metadata": "replace-me",
                     }
                 )
@@ -1105,15 +1113,17 @@ class TestBlueprintServices(unittest.TestCase):
             (bundle / "manifest.json").write_text(
                 json.dumps(
                     {
-                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
-                        "graph_id": "worker_graph",
-                        "nodes": [
+                        "apiVersion": "mn.workflow/v1",
+                        "kind": "Workflow",
+                        "id": "test-workflow",
+                        "contract": {},
+                        "agents": {"nodes": [
                             {
                                 "node_id": "worker",
                                 "config": {"runner_module": "MirrorNeuron.Runner.DockerWorker"},
                             }
-                        ],
-                        "edges": [],
+                        ], "edges": []},
+                        "runtime": {},
                     }
                 ),
                 encoding="utf-8",
@@ -1255,10 +1265,7 @@ class TestBlueprintServices(unittest.TestCase):
                         "kind": "Workflow",
                         "id": "test-workflow",
                         "contract": {},
-                        "agents": {},
-                        "runtime": {"placement": {"mode": "distributed"}},
-                        "graph_id": "host_worker",
-                        "nodes": [
+                        "agents": {"nodes": [
                             {
                                 "node_id": "worker",
                                 "config": {
@@ -1269,7 +1276,8 @@ class TestBlueprintServices(unittest.TestCase):
                                     },
                                 },
                             }
-                        ],
+                        ]},
+                        "runtime": {"placement": {"mode": "distributed"}},
                     }
                 ),
                 encoding="utf-8",
@@ -1293,6 +1301,11 @@ class TestBlueprintServices(unittest.TestCase):
                                 "name": "worker-a",
                                 "status": "healthy",
                                 "scheduling_eligible": True,
+                                "coordination_store": {
+                                    "identity": "test-store",
+                                    "writable_primary": True,
+                                    "healthy": True,
+                                },
                             }
                         ]
                     }
@@ -1308,6 +1321,11 @@ class TestBlueprintServices(unittest.TestCase):
                                 "status": "healthy",
                                 "scheduling_eligible": True,
                                 "self": True,
+                                "coordination_store": {
+                                    "identity": "test-store",
+                                    "writable_primary": True,
+                                    "healthy": True,
+                                },
                             }
                         ]
                     }
@@ -1397,9 +1415,11 @@ class TestBlueprintServices(unittest.TestCase):
             (bundle / "manifest.json").write_text(
                 json.dumps(
                     {
-                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
-                        "graph_id": "vc_assistant",
-                        "nodes": [
+                        "apiVersion": "mn.workflow/v1",
+                        "kind": "Workflow",
+                        "id": "test-workflow",
+                        "contract": {},
+                        "agents": {"nodes": [
                             {
                                 "node_id": "worker",
                                 "config": {
@@ -1408,7 +1428,8 @@ class TestBlueprintServices(unittest.TestCase):
                                     "image": "mirror-neuron/vc-assistant:test",
                                 },
                             }
-                        ],
+                        ]},
+                        "runtime": {},
                         "agent_dependencies": [
                             {
                                 "type": "pip",
@@ -1490,9 +1511,11 @@ class TestBlueprintServices(unittest.TestCase):
             (bundle / "manifest.json").write_text(
                 json.dumps(
                     {
-                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
-                        "graph_id": "worker_graph",
-                        "nodes": [
+                        "apiVersion": "mn.workflow/v1",
+                        "kind": "Workflow",
+                        "id": "test-workflow",
+                        "contract": {},
+                        "agents": {"nodes": [
                             {
                                 "node_id": "worker",
                                 "config": {
@@ -1500,7 +1523,8 @@ class TestBlueprintServices(unittest.TestCase):
                                     "environment": {},
                                 },
                             }
-                        ],
+                        ]},
+                        "runtime": {},
                     }
                 )
             )
@@ -1559,14 +1583,17 @@ class TestBlueprintServices(unittest.TestCase):
             (bundle / "manifest.json").write_text(
                 json.dumps(
                     {
-                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
-                        "graph_id": "tax_worker",
-                        "nodes": [
+                        "apiVersion": "mn.workflow/v1",
+                        "kind": "Workflow",
+                        "id": "test-workflow",
+                        "contract": {},
+                        "agents": {"nodes": [
                             {
                                 "node_id": "document_intake_agent",
                                 "config": {"environment": {}},
                             }
-                        ],
+                        ]},
+                        "runtime": {},
                         "metadata": {},
                     }
                 )
@@ -1633,9 +1660,11 @@ class TestBlueprintServices(unittest.TestCase):
             (sandbox / "Dockerfile").write_text("FROM alpine\n")
             (bundle / "manifest.json").write_text(
                 json.dumps({
-                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
-                    "graph_id": "worker_graph",
-                    "nodes": [
+                    "apiVersion": "mn.workflow/v1",
+                    "kind": "Workflow",
+                    "id": "test-workflow",
+                    "contract": {},
+                    "agents": {"nodes": [
                         {
                             "node_id": "worker",
                             "config": {
@@ -1643,7 +1672,8 @@ class TestBlueprintServices(unittest.TestCase):
                                 "custom_openshell_image": "worker/openshell_sandbox",
                             },
                         }
-                    ],
+                    ]},
+                    "runtime": {},
                     "metadata": {},
                 })
             )
@@ -1677,13 +1707,17 @@ class TestBlueprintServices(unittest.TestCase):
             (bundle / "manifest.json").write_text(
                 json.dumps(
                     {
-                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
-                        "nodes": [
+                        "apiVersion": "mn.workflow/v1",
+                        "kind": "Workflow",
+                        "id": "test-workflow",
+                        "contract": {},
+                        "agents": {"nodes": [
                             {
                                 "node_id": "worker",
                                 "config": {"environment": {}},
                             }
-                        ]
+                        ]},
+                        "runtime": {},
                     }
                 )
             )
@@ -1738,11 +1772,11 @@ class TestBlueprintServices(unittest.TestCase):
                         "manifest_config_bindings": [
                             {
                                 "config_path": "vl_model.wrong_name",
-                                "manifest_path": "nodes.worker.config.environment.CUSTOM_MODEL",
+                                "manifest_path": "agents.nodes.worker.config.environment.CUSTOM_MODEL",
                             },
                             {
                                 "config_path": "vl_model.model",
-                                "manifest_path": "nodes.missing_worker.config.environment.NEW_MODEL",
+                                "manifest_path": "agents.nodes.missing_worker.config.environment.NEW_MODEL",
                             },
                         ],
                     }
@@ -1751,13 +1785,17 @@ class TestBlueprintServices(unittest.TestCase):
             (bundle / "manifest.json").write_text(
                 json.dumps(
                     {
-                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
-                        "nodes": [
+                        "apiVersion": "mn.workflow/v1",
+                        "kind": "Workflow",
+                        "id": "test-workflow",
+                        "contract": {},
+                        "agents": {"nodes": [
                             {
                                 "node_id": "worker",
                                 "config": {"environment": {"CUSTOM_MODEL": "keep"}},
                             }
-                        ]
+                        ]},
+                        "runtime": {},
                     }
                 )
             )

@@ -105,12 +105,6 @@ def create_node(request: NodeCreate, response: Response, _principal=Depends(requ
     return public_value(result)
 
 
-@router.delete("/nodes/{node_id}", status_code=status.HTTP_204_NO_CONTENT, operation_id="delete_node", tags=["nodes"])
-def delete_node(node_id: str, _principal=Depends(require_auth)):
-    state.client.remove_node(legacy_system.normalize_node_name(node_id))
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-
 @router.put("/nodes/{node_id}/drain", status_code=status.HTTP_202_ACCEPTED, operation_id="create_node_drain", tags=["nodes"])
 def create_node_drain(node_id: str, request: NodeDrain, _principal=Depends(require_auth)):
     operation = start_operation("drain_node", {"node": node_id, **request.model_dump()})

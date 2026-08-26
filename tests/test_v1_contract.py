@@ -29,7 +29,7 @@ class CanonicalRuntime:
         self.calls.append(("create_job", kwargs))
         return json.dumps({"version": 2, "job_id": kwargs.get("job_id") or "job-1", "status": "active", "revision": 1})
 
-    def list_jobs(self, *, include_archived=False, page_size=50, page_token=""):
+    def list_jobs(self, *, include_archived=False, page_size=50, page_token="", local_only=False):
         self.calls.append(("list_jobs", include_archived))
         offset = int(page_token or 0)
         values = [
@@ -125,9 +125,6 @@ class CanonicalRuntime:
 
     def set_resource(self, payload):
         return json.dumps(payload)
-
-    def remove_node(self, node_id):
-        self.calls.append(("remove_node", node_id))
 
     def cancel_node_drain(self, node_id, **_kwargs):
         return json.dumps({"node": node_id, "draining": False})
@@ -802,8 +799,6 @@ def test_canonical_resource_happy_paths(monkeypatch):
     assert client.delete("/api/v1/nodes/node-1/drain").status_code == 204
     assert client.patch("/api/v1/nodes/node-1", json={"maintenance": True}).status_code == 200
     assert client.post("/api/v1/nodes/node-1/reconciliations", json={}).status_code == 202
-    assert client.delete("/api/v1/nodes/node-1").status_code == 204
-
     addition = client.post(
         "/api/v1/blueprints/worker-1/additions",
         headers={"Idempotency-Key": "add-1"},

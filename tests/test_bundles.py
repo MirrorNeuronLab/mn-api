@@ -1,11 +1,30 @@
+import asyncio
+from io import BytesIO
 import json
 import tempfile
 import unittest
 from pathlib import Path
+import zipfile
 
-from fastapi import HTTPException
+from fastapi import HTTPException, UploadFile
+import pytest
 
-from mn_api.bundles import find_bundle_root, load_uploaded_bundle, restore_exported_rag_db, safe_extract_path
+from mn_api.bundles import (
+    find_bundle_root,
+    load_uploaded_bundle,
+    restore_exported_rag_db,
+    safe_extract_path,
+    save_uploaded_bundle,
+)
+
+
+def _uploaded_zip(files: dict[str, str], *, filename: str = "bundle.zip") -> UploadFile:
+    archive = BytesIO()
+    with zipfile.ZipFile(archive, "w") as output:
+        for path, content in files.items():
+            output.writestr(path, content)
+    archive.seek(0)
+    return UploadFile(filename=filename, file=archive)
 
 
 class TestBundleServices(unittest.TestCase):
@@ -16,7 +35,7 @@ class TestBundleServices(unittest.TestCase):
             payloads = bundle_root / "payloads" / "nested"
             payloads.mkdir(parents=True)
             (bundle_root / "manifest.json").write_text(
-                '{"apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {}, "graph_id": "g"}'
+                '{"apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {}, "workflow": {}}'
             )
             (payloads / "a.txt").write_bytes(b"hello")
 
@@ -24,7 +43,7 @@ class TestBundleServices(unittest.TestCase):
 
         self.assertEqual(
             manifest_json,
-            '{"apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {}, "graph_id": "g"}',
+            '{"apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {}, "workflow": {}}',
         )
         self.assertEqual(payload_bytes, {"nested/a.txt": b"hello"})
 
@@ -93,3 +112,46 @@ class TestBundleServices(unittest.TestCase):
             self.assertEqual(result["path"], str(expected_db))
             self.assertEqual(expected_db.read_bytes(), b"milvus-lite-cache")
             self.assertEqual(Path(f"{expected_db}-wal").read_bytes(), b"wal")
+
+
+def test_save_uploaded_bundle_accepts_current_bundle(tmp_path):
+    bundle = _uploaded_zip(
+        {
+            "current/manifest.json": json.dumps(
+                {
+                    "apiVersion": "mn.workflow/v1",
+                    "kind": "Workflow",
+                    "id": "current-workflow",
+                    "contract": {},
+                    "agents": {},
+                    "runtime": {},
+                    "workflow": {},
+                }
+            ),
+            "current/payloads/worker.py": "print('current')\n",
+        }
+    )
+
+    result = asyncio.run(save_uploaded_bundle(bundle, tmp_path))
+
+    saved = tmp_path / result["bundle_id"] / "current"
+    assert (saved / "manifest.json").is_file()
+    assert (saved / "payloads" / "worker.py").read_text() == "print('current')\n"
+    assert not (tmp_path / result["bundle_id"] / "bundle.zip").exists()
+
+
+def test_save_uploaded_bundle_rejects_non_zip_and_incomplete_bundle(tmp_path):
+    not_zip = UploadFile(filename="bundle.txt", file=BytesIO(b"not a zip"))
+    try:
+        with pytest.raises(HTTPException, match="must be a .zip"):
+            asyncio.run(save_uploaded_bundle(not_zip, tmp_path))
+
+        incomplete = _uploaded_zip(
+            {
+                "manifest.json": '{"apiVersion":"mn.workflow/v1","kind":"Workflow"}',
+            }
+        )
+        with pytest.raises(HTTPException, match="manifest.json and payloads"):
+            asyncio.run(save_uploaded_bundle(incomplete, tmp_path))
+    finally:
+        not_zip.file.close()

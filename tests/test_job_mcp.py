@@ -157,11 +157,8 @@ def _blueprint(_config, blueprint_id):
         "name": "Queue Reviewer",
         "description": "Review the account queue and explain the latest result.",
         "capabilities": ["Review", "Explain"],
-        "mcp_collaboration": {
+        "response_service": {
             "enabled": enabled,
-            "service_name": "mn-job-collaboration",
-            "transport": "streamable-http",
-            "path": "/mcp",
             "goal_id": "goal-1",
         },
     }
@@ -228,6 +225,7 @@ def test_protocol_lists_only_stable_read_tools_and_reads_never_run_context(monke
             {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
         ).json()
         assert {tool["name"] for tool in listed["result"]["tools"]} == {
+            "ask_job",
             "get_job_context",
             "get_job_profile",
             "get_latest_run",
@@ -408,18 +406,7 @@ def test_job_projection_is_authoritative_when_catalog_now_enables_responses(monk
     _configure(monkeypatch, runtime)
 
     with TestClient(create_app()) as client:
-        assert _initialize(client, "job-response-disabled").status_code == 200
-        listed = _mcp_request(
-            client,
-            "job-response-disabled",
-            {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
-        ).json()
-
-    assert {tool["name"] for tool in listed["result"]["tools"]} == {
-        "get_job_context",
-        "get_job_profile",
-        "get_latest_run",
-    }
+        assert _initialize(client, "job-response-disabled").status_code == 404
 
 
 def test_ask_job_preserves_idempotency_conflicts_instead_of_falling_back(monkeypatch):

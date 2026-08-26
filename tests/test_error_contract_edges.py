@@ -19,16 +19,16 @@ class RpcError(grpc.RpcError):
         return self._detail
 
 
-def test_resource_overloaded_uses_problem_details():
+def test_resource_overloaded_uses_current_app_error_contract():
     response = handle_grpc_error(
         RpcError(grpc.StatusCode.RESOURCE_EXHAUSTED, "resource_overloaded: memory=0.99 threshold=0.95")
     )
 
     assert response.status_code == 503
-    assert json.loads(response.body)["code"] == "resource_overloaded"
+    assert json.loads(response.body)["code"] == "MN_RESOURCE_EXHAUSTED"
 
 
-def test_failed_precondition_validation_problem_parses_json_report():
+def test_failed_precondition_does_not_parse_detail_encoded_validation_reports():
     response = handle_grpc_error(
         RpcError(
             grpc.StatusCode.FAILED_PRECONDITION,
@@ -38,9 +38,8 @@ def test_failed_precondition_validation_problem_parses_json_report():
 
     body = json.loads(response.body)
     assert response.status_code == 412
-    assert body["code"] == "requirements_not_met"
-    assert body["detail"] == "gpu missing"
-    assert body["errors"] == [{"code": "gpu", "message": "missing"}]
+    assert body["code"] == "MN_FAILED_PRECONDITION"
+    assert "errors" not in body
 
 
 def test_coordination_store_mismatch_preserves_machine_readable_error():
@@ -53,8 +52,8 @@ def test_coordination_store_mismatch_preserves_machine_readable_error():
 
     body = json.loads(response.body)
     assert response.status_code == 412
-    assert body["code"] == "coordination_store_mismatch"
-    assert "coordination_store_mismatch" in body["detail"]
+    assert body["code"] == "MN_COORDINATION_STORE_MISMATCH"
+    assert "legacy" not in body["detail"].lower()
 
 
 def test_service_run_exists_is_a_stable_conflict():
@@ -67,16 +66,16 @@ def test_service_run_exists_is_a_stable_conflict():
 
     body = json.loads(response.body)
     assert response.status_code == 409
-    assert body["code"] == "service_run_exists"
-    assert "replace" in body["detail"].lower()
+    assert body["code"] == "MN_SERVICE_RUN_EXISTS"
+    assert body["detail"] == "This service job already has a run."
 
 
-def test_invalid_argument_validation_problem_builds_legacy_report_for_plain_detail():
+def test_invalid_argument_does_not_build_validation_report_from_plain_detail():
     response = handle_grpc_error(
         RpcError(grpc.StatusCode.INVALID_ARGUMENT, "input_validation_failed: missing input document")
     )
 
     body = json.loads(response.body)
     assert response.status_code == 422
-    assert body["code"] == "input_validation_failed"
-    assert body["errors"][0]["code"] == "input_validation_failed"
+    assert body["code"] == "MN_INVALID_ARGUMENT"
+    assert "errors" not in body

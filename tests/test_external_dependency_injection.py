@@ -6,75 +6,10 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-import grpc
-
 from mn_api.routes import models, system
 
 
 class TestExternalDependencyInjection(unittest.TestCase):
-    def test_network_handshake_uses_injected_remote_client_factory(self):
-        class UnavailableRpcError(grpc.RpcError):
-            def code(self):
-                return grpc.StatusCode.UNAVAILABLE
-
-        first_remote = SimpleNamespace(
-            network_handshake=Mock(side_effect=UnavailableRpcError())
-        )
-        second_remote = SimpleNamespace(
-            network_handshake=Mock(
-                return_value={
-                    "node_name": "mirror_neuron@10.0.0.42",
-                    "grpc_port": 50051,
-                }
-            )
-        )
-        created_targets: list[str] = []
-        remotes = iter([first_remote, second_remote])
-
-        def fake_factory(**kwargs):
-            created_targets.append(kwargs["target"])
-            self.assertEqual(kwargs["auth_token"], "")
-            self.assertEqual(kwargs["timeout"], 10)
-            return next(remotes)
-
-        handshake = system.network_handshake_with_fallback(
-            host="10.0.0.42",
-            token="join-token",
-            grpc_ports=[55051, 50051],
-            local_host="192.168.1.9",
-            remote_client_factory=fake_factory,
-        )
-
-        self.assertEqual(handshake["node_name"], "mirror_neuron@10.0.0.42")
-        self.assertEqual(created_targets, ["10.0.0.42:55051", "10.0.0.42:50051"])
-        second_remote.network_handshake.assert_called_once_with(
-            "join-token",
-            node_name="mirror_neuron@192.168.1.9",
-            node_info={
-                "node_name": "mirror_neuron@192.168.1.9",
-                "display_name": system.handshake_node_info("192.168.1.9")["display_name"],
-                "hostname": system.handshake_node_info("192.168.1.9")["hostname"],
-            },
-        )
-
-    def test_network_handshake_does_not_fallback_on_non_unavailable_errors(self):
-        created_targets: list[str] = []
-
-        def fake_factory(**kwargs):
-            created_targets.append(kwargs["target"])
-            return SimpleNamespace(network_handshake=Mock(side_effect=RuntimeError("bad token")))
-
-        with self.assertRaisesRegex(RuntimeError, "bad token"):
-            system.network_handshake_with_fallback(
-                host="10.0.0.42",
-                token="join-token",
-                grpc_ports=[55051, 50051],
-                local_host="192.168.1.9",
-                remote_client_factory=fake_factory,
-            )
-
-        self.assertEqual(created_targets, ["10.0.0.42:55051"])
-
     def test_stream_chat_benchmark_uses_injected_opener_and_clock(self):
         opened_requests = []
 

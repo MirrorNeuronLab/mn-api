@@ -174,7 +174,7 @@ When an existing `job_id` is supplied, the API installs the freshly prepared
 bundle before starting the run; job data, schedules, and prior run history are
 preserved.
 
-Legacy blueprints that enable `mcp_collaboration` expose the stable three-tool
+Blueprints that enable `response_service` expose the stable three-tool
 Job MCP at `/api/v1/jobs/{job_id}/mcp`. Blueprints that instead declare the
 top-level `response_service: {"enabled": true}` expose the same context tools
 plus `ask_job(question, conversation_id?, request_id?)`. The responder is

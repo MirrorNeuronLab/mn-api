@@ -240,7 +240,6 @@ def _resolve_entry_or_external(
         candidates = {
             str(entry.get("id") or ""),
             str(entry.get("model") or ""),
-            str(entry.get("dmr_model") or ""),
             str(entry.get("api_model") or ""),
             str(entry.get("docker_model") or ""),
             *[str(alias) for alias in entry.get("aliases") or []],
