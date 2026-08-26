@@ -126,7 +126,7 @@ class MCPRuntime:
     def get_job_response_turn(self, job_id, turn_id):
         return json.dumps(
             {
-                "schema_version": "mn.mcp.job_answer.v2",
+                "schema_version": "mn.mcp.job_answer.v3",
                 "answer": "Reached Zone A.",
                 "conversation_id": "57a8b9f2-23c-4eef-8e2d-14806fb63739",
                 "request_id": "request-agent",
@@ -138,7 +138,15 @@ class MCPRuntime:
                 "model": {"used": False, "fallback": False},
                 "conversation_persisted": True,
                 "turn": {"turn_id": turn_id, "state": "completed"},
-                "effects": [{"kind": "robot_control", "state": "completed"}],
+                "effects": [
+                    {
+                        "kind": "bounded_tool",
+                        "tool": "process_item",
+                        "effect": "write",
+                        "arguments": {"item_id": "item-1"},
+                        "state": "completed",
+                    }
+                ],
             }
         )
 
@@ -335,9 +343,17 @@ def test_agent_enabled_job_adds_turn_polling_and_preserves_internal_service_run_
         payload = json.loads(original_query(job_id, question, **kwargs))
         payload.update(
             {
-                "schema_version": "mn.mcp.job_answer.v2",
+                "schema_version": "mn.mcp.job_answer.v3",
                 "turn": {"turn_id": turn_id, "state": "accepted", "poll_after_ms": 1000},
-                "effects": [{"kind": "robot_control", "state": "accepted"}],
+                "effects": [
+                    {
+                        "kind": "bounded_tool",
+                        "tool": "process_item",
+                        "effect": "write",
+                        "arguments": {"item_id": "item-1"},
+                        "state": "accepted",
+                    }
+                ],
             }
         )
         return json.dumps(payload)
@@ -382,7 +398,7 @@ def test_agent_enabled_job_adds_turn_polling_and_preserves_internal_service_run_
             },
         ).json()["result"]["structuredContent"]
 
-    assert accepted["schema_version"] == "mn.mcp.job_answer.v2"
+    assert accepted["schema_version"] == "mn.mcp.job_answer.v3"
     assert accepted["turn"]["state"] == "accepted"
     assert completed["answer"] == "Reached Zone A."
 
@@ -425,6 +441,21 @@ def test_ask_job_preserves_idempotency_conflicts_instead_of_falling_back(monkeyp
         assert "different question" in str(error)
     else:
         raise AssertionError("Expected request_id conflict to be preserved")
+
+
+def test_agent_failure_returns_generic_v3_fallback(monkeypatch):
+    runtime = MCPRuntime()
+    _configure(monkeypatch, runtime)
+
+    def unavailable(*_args, **_kwargs):
+        raise RuntimeError("response unavailable")
+
+    runtime.query_job_response = unavailable
+    response = JobContextProvider().ask_job("job-agent", "What is the current status?")
+
+    assert response["schema_version"] == "mn.mcp.job_answer.v3"
+    assert response["turn"]["state"] == "completed"
+    assert response["effects"] == []
 
 
 def test_context_states_latest_result_partial_warning_and_bounds(monkeypatch):

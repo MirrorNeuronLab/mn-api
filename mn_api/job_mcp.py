@@ -864,7 +864,7 @@ class JobContextProvider:
                 request_id=request_id,
             )
             if agent_mode:
-                fallback["schema_version"] = "mn.mcp.job_answer.v2"
+                fallback["schema_version"] = "mn.mcp.job_answer.v3"
                 fallback["turn"] = {
                     "turn_id": str(uuid.uuid4()),
                     "state": "completed",
