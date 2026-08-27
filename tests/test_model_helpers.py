@@ -121,18 +121,18 @@ def test_resolve_entry_or_external_uses_internal_normalization_for_aliases_with_
 
 def test_resolve_entry_or_external_normalizes_installed_hf_domain_alias():
     catalog = {
-        "huggingface.co/jinaai/jina-embeddings-v5-text-small-retrieval:Q4_K_M": {
-            "id": "huggingface.co/jinaai/jina-embeddings-v5-text-small-retrieval:Q4_K_M",
-            "model": "huggingface.co/jinaai/jina-embeddings-v5-text-small-retrieval:Q4_K_M",
+        "huggingface.co/zenmagnets/Nemotron-3-Embed-1B-Q4_K_M-GGUF:Q4_K_M": {
+            "id": "huggingface.co/zenmagnets/Nemotron-3-Embed-1B-Q4_K_M-GGUF:Q4_K_M",
+            "model": "huggingface.co/zenmagnets/Nemotron-3-Embed-1B-Q4_K_M-GGUF:Q4_K_M",
             "provider": "docker_model_runner",
         }
     }
-    installed_models = {"hf.co/jinaai/jina-embeddings-v5-text-small-retrieval:Q4_K_M"}
+    installed_models = {"hf.co/zenmagnets/Nemotron-3-Embed-1B-Q4_K_M-GGUF:Q4_K_M"}
 
     resolved = models._resolve_entry_or_external(
-        "huggingface.co/jinaai/jina-embeddings-v5-text-small-retrieval:Q4_K_M",
+        "huggingface.co/zenmagnets/Nemotron-3-Embed-1B-Q4_K_M-GGUF:Q4_K_M",
         catalog=catalog,
         installed_models=installed_models,
     )
 
-    assert resolved["model"] == "huggingface.co/jinaai/jina-embeddings-v5-text-small-retrieval:Q4_K_M"
+    assert resolved["model"] == "huggingface.co/zenmagnets/Nemotron-3-Embed-1B-Q4_K_M-GGUF:Q4_K_M"
