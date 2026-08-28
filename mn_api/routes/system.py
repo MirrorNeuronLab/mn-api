@@ -7,7 +7,6 @@ from typing import Any, Callable
 
 from fastapi import Depends, HTTPException
 from mn_sdk import (
-    Client,
     RuntimeConfig,
     RuntimeService,
     collect_runtime_status,

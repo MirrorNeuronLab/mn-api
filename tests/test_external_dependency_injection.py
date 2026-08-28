@@ -3,10 +3,8 @@ from __future__ import annotations
 import json
 import subprocess
 import unittest
-from types import SimpleNamespace
-from unittest.mock import Mock
 
-from mn_api.routes import models, system
+from mn_api.routes import models
 
 
 class TestExternalDependencyInjection(unittest.TestCase):

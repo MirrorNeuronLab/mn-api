@@ -293,7 +293,7 @@ class TestBlueprintServices(unittest.TestCase):
             bundle = repo / "worker_one"
             bundle.mkdir()
             (bundle / "manifest.json").write_text(json.dumps({
-                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
+                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {},
                 "metadata": {"blueprint_id": "worker_one"},
                 "nodes": [],
                 "edges": [],
@@ -364,7 +364,7 @@ class TestBlueprintServices(unittest.TestCase):
                 }
             }))
             (bundle / "manifest.json").write_text(json.dumps({
-                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
+                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {},
                 "metadata": {"blueprint_id": "worker_one"},
                 "nodes": [],
                 "edges": [],
@@ -512,7 +512,7 @@ class TestBlueprintServices(unittest.TestCase):
             bundle = repo / "worker_one"
             bundle.mkdir()
             (bundle / "manifest.json").write_text(json.dumps({
-                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
+                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {},
                 "metadata": {"blueprint_id": "worker_one"},
                 "nodes": [],
                 "edges": [],
@@ -562,7 +562,7 @@ class TestBlueprintServices(unittest.TestCase):
             bundle = repo / "worker_one"
             bundle.mkdir()
             (bundle / "manifest.json").write_text(json.dumps({
-                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
+                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {},
                 "metadata": {"blueprint_id": "worker_one"},
                 "nodes": [],
                 "edges": [],
@@ -640,7 +640,7 @@ class TestBlueprintServices(unittest.TestCase):
             bundle = repo / "vc_assistant"
             bundle.mkdir()
             (bundle / "manifest.json").write_text(json.dumps({
-                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
+                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {},
                 "metadata": {"blueprint_id": "vc_assistant"},
                 "nodes": [],
                 "edges": [],
@@ -751,7 +751,7 @@ class TestBlueprintServices(unittest.TestCase):
                 }
             }))
             (bundle / "manifest.json").write_text(json.dumps({
-                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
+                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {},
                 "metadata": {"blueprint_id": "vc_assistant"},
                 "nodes": [],
                 "edges": [],
@@ -850,7 +850,7 @@ class TestBlueprintServices(unittest.TestCase):
             config_dir.mkdir(parents=True)
             (config_dir / "default.json").write_text(json.dumps({"llm": {"enabled": True, "model": "medium", "provider": "docker_model_runner"}}))
             (bundle / "manifest.json").write_text(json.dumps({
-                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
+                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {},
                 "metadata": {"blueprint_id": "vc_assistant"}, "nodes": [], "edges": [],
                 "runtime": {"models": {"primary": {"provider": "docker_model_runner", "model": "medium"}}},
             }))
@@ -1056,8 +1056,7 @@ class TestBlueprintServices(unittest.TestCase):
             (bundle / "manifest.json").write_text(
                 json.dumps(
                     {
-                        "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
-                        "kind": "Workflow",
+                        "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "runtime": {},
                         "workflow": {
                             "workflow_id": "worker_one_v2",
                             "steps": [{"id": "review", "run": "review"}],
@@ -2047,7 +2046,7 @@ def test_launch_model_policy_is_deferred_without_installing():
         (bundle / "manifest.json").write_text(
             json.dumps(
                 {
-                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
+                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {},
                     "runtime": {
                         "models": {
                             "primary": {
@@ -2115,7 +2114,7 @@ def test_launch_model_policy_keeps_provider_default_out_of_managed_dmr(tmp_path,
     (bundle / "manifest.json").write_text(
         json.dumps(
             {
-                "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
+                "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {},
                 "config": {"manifest_defaults": ["llm"]},
                 "llm": {
                     "model": "default",
@@ -2161,7 +2160,7 @@ def test_launch_model_policy_skips_runtime_models_for_fake_llm():
         (bundle / "manifest.json").write_text(
             json.dumps(
                 {
-                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
+                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {},
                     "runtime": {
                         "models": {
                             "primary": {
