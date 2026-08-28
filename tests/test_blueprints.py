@@ -1166,27 +1166,29 @@ class TestBlueprintServices(unittest.TestCase):
     def test_load_blueprint_bundle_preserves_requested_single_node_owner(self):
         owner = "mirror_neuron@10.0.4.26"
         local = "mirror_neuron@10.0.4.23"
-        node = lambda name, self: {
-            "name": name,
-            "status": "healthy",
-            "scheduling_eligible": True,
-            "self": self,
-            "connection_mode": "federated" if not self else "local",
-            "coordination_store": {
-                "identity": f"{name}-store",
-                "writable_primary": True,
-                "healthy": True,
-            },
-            "hardware": {
-                "cpu": {"logical_processors": 8},
-                "memory": {"total_mb": 16384},
-                "native_sdk_grpc": {
-                    "enabled": True,
-                    "target": f"{name}:55052",
-                    "capabilities": ["docker_worker_prepare_v1"],
+        def node(name, is_self):
+            return {
+                "name": name,
+                "status": "healthy",
+                "scheduling_eligible": True,
+                "self": is_self,
+                "connection_mode": "federated" if not is_self else "local",
+                "coordination_store": {
+                    "identity": f"{name}-store",
+                    "writable_primary": True,
+                    "healthy": True,
                 },
-            },
-        }
+                "hardware": {
+                    "cpu": {"logical_processors": 8},
+                    "memory": {"total_mb": 16384},
+                    "native_sdk_grpc": {
+                        "enabled": True,
+                        "target": f"{name}:55052",
+                        "capabilities": ["docker_worker_prepare_v1"],
+                    },
+                },
+            }
+
         report = json.dumps({"nodes": [node(local, True), node(owner, False)]})
 
         with tempfile.TemporaryDirectory() as tmpdir:
