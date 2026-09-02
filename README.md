@@ -144,7 +144,13 @@ All paths below are under `/api/v1`.
 `/job-ui-proxy/{job_id}/{port}/...`. It resolves the durable
 `/jobs/{job_id}/ui` handle through the authenticated API, then forwards only
 the dashboard host and explicitly declared companion ports recorded for that
-job. It is not a public API route or a general-purpose network proxy.
+job while the handle is running. Paused, stopped, cancelled, and failed
+services are rejected instead of forwarding to an unavailable upstream. It is
+not a public API route or a general-purpose network proxy.
+Job UI reads prefer the Web UI skill's cross-node handle under shared storage
+and fall back to the host-local job-data handle. This lets a DockerWorker on a
+federated owner publish its OS-selected listener while the browser continues to
+use only the submit host's `/jobs/{job_id}/ui` route.
 
 Workflow-progress snapshots expose source-facing `edges` and `layers`. When
 Core reports a lowered runtime graph, the API projects dependencies through

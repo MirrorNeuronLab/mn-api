@@ -231,3 +231,15 @@ def test_job_ui_target_allows_only_declared_http_and_websocket_ports():
     assert _job_ui_target_url(handle, port=9090, path="", query="", websocket=True) == "wss://10.0.4.26:9090/"
     with pytest.raises(JobUiProxyError, match="not declared"):
         _job_ui_target_url(handle, port=8090, path="mcp", query="")
+
+
+@pytest.mark.parametrize("status", ["paused", "stopped", "cancelled", "failed"])
+def test_job_ui_target_rejects_an_inactive_service(status):
+    handle = {
+        "url": "http://10.0.4.26:8088/",
+        "status": status,
+        "metadata": {"proxy": {"http_ports": [8088]}},
+    }
+
+    with pytest.raises(JobUiProxyError, match="not running"):
+        _job_ui_target_url(handle, port=8088, path="", query="")

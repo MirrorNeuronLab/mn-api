@@ -1,12 +1,29 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 
-from mn_api import state
+from mn_api import job_store, state
 from mn_api.routes import jobs
+
+
+def test_shared_job_ui_dir_uses_runtime_shared_storage(monkeypatch, tmp_path):
+    shared_root = tmp_path / "shared"
+    monkeypatch.setattr(
+        job_store.RuntimeConfig,
+        "from_env",
+        lambda: SimpleNamespace(runtime_shared_storage_root=str(shared_root)),
+    )
+
+    expected = shared_root / "job-ui" / "job-1"
+    assert job_store.shared_job_ui_dir_from_id("job-1", must_exist=False) == expected
+    assert job_store.shared_job_ui_dir_from_id("../job-1", must_exist=False) is None
+    assert job_store.shared_job_ui_dir_from_id("job-1") is None
+    expected.mkdir(parents=True)
+    assert job_store.shared_job_ui_dir_from_id("job-1") == expected
 
 
 def test_decode_manifest(monkeypatch):
@@ -123,6 +140,11 @@ def test_get_job_ui_reads_the_durable_job_data_directory(monkeypatch, tmp_path):
         json.dumps({"job_id": "job-1", "url": "http://127.0.0.1:61000"}), encoding="utf-8"
     )
     monkeypatch.setattr(jobs, "job_data_dir_from_id", lambda _job_id, must_exist=False: job_dir)
+    monkeypatch.setattr(
+        jobs,
+        "shared_job_ui_dir_from_id",
+        lambda _job_id, must_exist=False: tmp_path / "missing-shared",
+    )
 
     assert jobs.get_job_ui("job-1") == {
         "job_id": "job-1",
@@ -131,12 +153,43 @@ def test_get_job_ui_reads_the_durable_job_data_directory(monkeypatch, tmp_path):
     }
 
 
+def test_get_job_ui_prefers_the_cross_node_shared_handle(monkeypatch, tmp_path):
+    local_dir = tmp_path / "local" / "job-1"
+    shared_dir = tmp_path / "shared" / "job-1"
+    local_dir.mkdir(parents=True)
+    shared_dir.mkdir(parents=True)
+    for directory, port in ((local_dir, 61000), (shared_dir, 44161)):
+        (directory / "ui.json").write_text(
+            json.dumps({"job_id": "job-1", "title": "Example"}),
+            encoding="utf-8",
+        )
+        (directory / "web_ui.json").write_text(
+            json.dumps({"job_id": "job-1", "url": f"http://10.0.4.26:{port}"}),
+            encoding="utf-8",
+        )
+    monkeypatch.setattr(
+        jobs, "job_data_dir_from_id", lambda _job_id, must_exist=False: local_dir
+    )
+    monkeypatch.setattr(
+        jobs,
+        "shared_job_ui_dir_from_id",
+        lambda _job_id, must_exist=False: shared_dir,
+    )
+
+    assert jobs.get_job_ui("job-1")["web_ui"]["url"] == "http://10.0.4.26:44161"
+
+
 def test_get_job_ui_rejects_handles_owned_by_another_job(monkeypatch, tmp_path):
     job_dir = tmp_path / "job-1"
     job_dir.mkdir()
     (job_dir / "ui.json").write_text(json.dumps({"job_id": "job-2"}), encoding="utf-8")
     (job_dir / "web_ui.json").write_text(json.dumps({"job_id": "job-2"}), encoding="utf-8")
     monkeypatch.setattr(jobs, "job_data_dir_from_id", lambda _job_id, must_exist=False: job_dir)
+    monkeypatch.setattr(
+        jobs,
+        "shared_job_ui_dir_from_id",
+        lambda _job_id, must_exist=False: tmp_path / "missing-shared",
+    )
 
     with pytest.raises(HTTPException) as error:
         jobs.get_job_ui("job-1")

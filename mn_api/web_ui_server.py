@@ -317,6 +317,9 @@ def _job_ui_target_url(
     query: str,
     websocket: bool = False,
 ) -> str:
+    status = str(web_ui.get("status") or "").strip().lower()
+    if status in {"paused", "stopped", "cancelled", "canceled", "failed"}:
+        raise JobUiProxyError(409, "The job Web UI service is not running.")
     raw_url = web_ui.get("url")
     parsed = urllib.parse.urlsplit(str(raw_url or ""))
     if (
