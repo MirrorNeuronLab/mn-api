@@ -27,11 +27,11 @@ value only into matching executable workers and omits the values from resolved
 configuration and public monitor manifests.
 
 Blueprint launch preserves the `model_install` progress phase for compatibility
-but only validates and reports lazy policies. Automatic DMR preparation occurs
-inside the submitted job on the first LLM call, or when RAG/OCR skills pass
-their own model specifications to the shared SDK wrapper. Skill-owned models
-are not blueprint launch declarations. Explicit model-install endpoints remain
-eager and unchanged.
+and uses it as a blocking readiness gate. Every declared DMR model is selected,
+installed or reused, and published through LiteLLM before the job is submitted.
+The shared SDK still prepares dynamically requested RAG/OCR skill models on
+first use, and also rechecks a declared model if it is removed after launch.
+Explicit model-install endpoints remain eager and unchanged.
 
 ## Quick Start
 

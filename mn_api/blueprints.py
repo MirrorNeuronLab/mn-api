@@ -555,7 +555,7 @@ def defer_blueprint_runtime_models(
     force: bool = False,
     service_progress: Callable[[str, dict[str, Any] | None], None] | None = None,
 ) -> Dict[str, Any]:
-    """Validate model declarations and defer DMR preparation until first use."""
+    """Validate model declarations without side effects for validation-only callers."""
 
     bundle_root = validate_blueprint_bundle(repo_root, blueprint)
     try:
@@ -624,7 +624,19 @@ def defer_blueprint_runtime_models(
 
 def blueprint_requests_default_llm(config: dict[str, Any]) -> bool:
     llm = config.get("llm") if isinstance(config.get("llm"), dict) else {}
-    return str(llm.get("model") or "").strip().lower() == "default"
+    config_name = str(llm.get("default_config") or "primary")
+    configs = llm.get("configs") if isinstance(llm.get("configs"), dict) else {}
+    primary = (
+        configs.get(config_name) if isinstance(configs.get(config_name), dict) else {}
+    )
+    active_model = str(
+        primary.get("runtime_model")
+        or primary.get("model")
+        or llm.get("runtime_model")
+        or llm.get("model")
+        or ""
+    ).strip()
+    return active_model.lower() == "default"
 
 
 def blueprint_uses_fake_llm(config: dict[str, Any]) -> bool:

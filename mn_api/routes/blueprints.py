@@ -40,7 +40,6 @@ from mn_api.blueprints import (
     cleanup_blueprint_run_processes,
     cleanup_stale_blueprint_run_processes,
     deep_merge,
-    defer_blueprint_runtime_models,
     runtime_blueprint_environment_overrides,
     start_background_event_relay_if_needed,
     start_blueprint_pre_launch_hook,
@@ -1540,13 +1539,13 @@ def run_launch_preflight(
         progress_id,
         "model_install",
         "running",
-        "Validating lazy runtime model policies.",
+        "Preparing declared runtime models.",
         label="Prepare runtime models",
-        detail="Model selection and installation are deferred until the job first calls each model.",
-        expectation="The first LLM, RAG, or OCR call may wait while its model is installed on the best compatible node.",
+        detail="Selecting each declared model, installing any missing artifact, and publishing its LiteLLM route before the job starts.",
+        expectation="The job is held until every declared runtime model is ready on its selected compatible node.",
     )
     try:
-        model_install = defer_blueprint_runtime_models(
+        model_install = install_blueprint_runtime_models(
             repo_root,
             blueprint,
             force=force,
@@ -1558,16 +1557,16 @@ def run_launch_preflight(
             progress_id,
             "model_install",
             "failed",
-            "Runtime model policy validation failed.",
+            "Runtime model preparation failed.",
             label="Prepare runtime models",
-            detail="A runtime model declaration is invalid or the cluster cannot run it or its fallback.",
+            detail="A runtime model declaration is invalid, incompatible, or could not be prepared on the selected node.",
             severity="error",
         )
         record_launch_progress(
             progress_id,
             "launch",
             "failed",
-            "Blueprint launch failed during model policy validation.",
+            "Blueprint launch failed during runtime model preparation.",
             run_details,
         )
         raise
@@ -1578,14 +1577,14 @@ def run_launch_preflight(
             "failed",
             str(exc),
             label="Prepare runtime models",
-            detail="A runtime model declaration is invalid or cluster feasibility could not be confirmed.",
+            detail="A runtime model declaration is invalid, incompatible, or could not be prepared on the selected node.",
             severity="error",
         )
         record_launch_progress(
             progress_id,
             "launch",
             "failed",
-            "Blueprint launch failed during model policy validation.",
+            "Blueprint launch failed during runtime model preparation.",
             run_details,
         )
         raise
@@ -1594,17 +1593,17 @@ def run_launch_preflight(
             progress_id,
             "model_install",
             "failed",
-            "Runtime model policy validation failed.",
+            "Runtime model preparation failed.",
             {"model_install": model_install},
             label="Prepare runtime models",
-            detail="A runtime model declaration is invalid or the cluster cannot run it or its fallback.",
+            detail="A runtime model declaration is invalid, incompatible, or could not be prepared on the selected node.",
             severity="error",
         )
         record_launch_progress(
             progress_id,
             "launch",
             "failed",
-            "Blueprint launch failed during model policy validation.",
+            "Blueprint launch failed during runtime model preparation.",
             run_details,
         )
         return model_install_problem_response(
@@ -1621,7 +1620,7 @@ def run_launch_preflight(
         model_install_progress_message(model_install),
         {"model_install": model_install},
         label="Prepare runtime models",
-        detail="Runtime model declarations are valid; installation is deferred to first use.",
+        detail="Declared runtime models are ready and their LiteLLM routes are available before job submission.",
     )
     if not context_phase_seen:
         record_launch_progress(

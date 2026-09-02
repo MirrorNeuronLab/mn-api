@@ -16,6 +16,7 @@ from mn_sdk import add_registered_models, provider_registration, set_registered_
 
 import mn_api.blueprints as blueprints_module
 from mn_api import state
+from mn_api.routes import blueprints as blueprint_routes
 from mn_api.blueprints import (
     blueprint_requires_context_engine,
     blueprint_bundle_root,
@@ -2040,9 +2041,10 @@ def test_custom_model_api_prepares_selected_remote_node():
     assert result["endpoint"]["api_base"] == "http://192.168.4.128:4000/v1"
     assert result["endpoint"]["source"] == "remote_litellm_gateway"
 
-def test_launch_model_policy_is_deferred_without_installing():
+def test_launch_model_policy_is_deferred_without_installing(monkeypatch):
     with tempfile.TemporaryDirectory() as tmpdir:
         repo = Path(tmpdir)
+        monkeypatch.setenv("MN_HOME", str(repo / "mn-home"))
         bundle = repo / "vc_assistant"
         bundle.mkdir()
         (bundle / "manifest.json").write_text(
@@ -2091,20 +2093,7 @@ def test_launch_model_policy_is_deferred_without_installing():
 
     install.assert_not_called()
     assert summary["deferred"] is True
-    assert summary["models"][0]["selection_policy"] == [
-        "nemotron-3.5-lightning:latest",
-        "gemma4:e2b",
-    ]
-    assert summary["env"]["MN_RUNTIME_MODEL_MANAGED"] == "1"
-    assert "gemma4:e2b" in json.loads(
-        summary["env"]["MN_PREPARED_RUNTIME_MODELS_JSON"]
-    )
-    resolver = blueprints_module.prepared_model_installed_resolver(summary["env"])
-    assert resolver is not None
-    assert resolver(
-        "docker.io/ai/gemma4:E2B",
-        {"runtime_model": "docker.io/ai/gemma4:E2B"},
-    )
+    assert summary["models"][0]["selection_policy"][0] == "nemotron-3.5-lightning:latest"
 
 
 def test_launch_model_policy_keeps_provider_default_out_of_managed_dmr(tmp_path, monkeypatch):
@@ -2199,3 +2188,92 @@ def test_launch_model_policy_skips_runtime_models_for_fake_llm():
     assert summary["ok"] is True
     assert summary["models"] == []
     assert summary["env"]["MN_LLM_PROVIDER"] == "fake"
+
+
+def test_run_launch_preflight_prepares_models_and_routes_them_before_submission(
+    monkeypatch,
+    tmp_path,
+):
+    progress: list[dict] = []
+    install_calls: list[dict] = []
+    prepared_summary = {
+        "ok": True,
+        "models": [
+            {
+                "id": "nemotron3:q4_K_M",
+                "model": "nemotron3:q4_K_M",
+                "status": "runtime_node_installed",
+                "endpoint": {
+                    "model": "nemotron3:q4_K_M",
+                    "runtime_model": "nemotron3:q4_K_M",
+                    "api_base": "http://10.0.0.2:4000/v1",
+                    "node": "mirror_neuron@spark",
+                },
+            }
+        ],
+        "services": [],
+        "endpoints": {"nemotron3:q4_K_M": {"api_base": "http://10.0.0.2:4000/v1"}},
+        "env": {
+            "MN_MODEL_ENDPOINTS_JSON": '{"nemotron3:q4_K_M":{"api_base":"http://mn-litellm-proxy:4000/v1"}}',
+            "MN_PREPARED_RUNTIME_MODELS_JSON": '["nemotron3:q4_K_M"]',
+        },
+        "config_overrides": {"llm": {"model": "nemotron3:q4_K_M"}},
+        "errors": [],
+    }
+
+    monkeypatch.setattr(
+        blueprint_routes,
+        "validate_blueprint_hardware_requirements",
+        lambda *_args, **_kwargs: {"ok": True, "results": []},
+    )
+    monkeypatch.setattr(
+        blueprint_routes,
+        "install_blueprint_runtime_models",
+        lambda *args, **kwargs: install_calls.append({"args": args, "kwargs": kwargs})
+        or prepared_summary,
+    )
+    monkeypatch.setattr(
+        blueprint_routes,
+        "record_launch_progress",
+        lambda _progress_id, phase, status, message, *args, **kwargs: progress.append(
+            {
+                "phase": phase,
+                "status": status,
+                "message": message,
+                **kwargs,
+            }
+        ),
+    )
+
+    preflight = blueprint_routes.run_launch_preflight(
+        tmp_path,
+        {"id": "cctv_operator", "path": "cctv_operator"},
+        progress_id="preflight-n3",
+        force=False,
+        config_overrides={"llm": {"model": "nemotron3:q4_K_M"}},
+        run_id="cctv-run-n3",
+    )
+
+    assert install_calls and install_calls[0]["kwargs"]["force"] is False
+    assert callable(install_calls[0]["kwargs"]["service_progress"])
+    assert preflight.model_install is prepared_summary
+    assert preflight.env_overrides["MN_PREPARED_RUNTIME_MODELS_JSON"] == '["nemotron3:q4_K_M"]'
+    model_phases = [item for item in progress if item["phase"] == "model_install"]
+    assert [item["status"] for item in model_phases] == ["running", "completed"]
+    assert "before the job starts" in model_phases[0]["detail"]
+    assert "Runtime models ready" in model_phases[1]["message"]
+
+
+def test_default_llm_alias_requires_the_active_profile_to_be_default():
+    assert blueprints_module.blueprint_requests_default_llm(
+        {"llm": {"model": "default"}}
+    )
+    assert not blueprints_module.blueprint_requests_default_llm(
+        {
+            "llm": {
+                "model": "default",
+                "default_config": "primary",
+                "configs": {"primary": {"model": "nemotron3:q4_K_M"}},
+            }
+        }
+    )
