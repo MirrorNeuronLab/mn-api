@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from types import SimpleNamespace
+from urllib.request import Request
 
 import pytest
 from fastapi import HTTPException
@@ -15,7 +16,7 @@ def test_shared_job_ui_dir_uses_runtime_shared_storage(monkeypatch, tmp_path):
     monkeypatch.setattr(
         job_store.RuntimeConfig,
         "from_env",
-        lambda: SimpleNamespace(runtime_shared_storage_root=str(shared_root)),
+        lambda: SimpleNamespace(shared_storage_root=str(shared_root)),
     )
 
     expected = shared_root / "job-ui" / "job-1"
@@ -189,6 +190,91 @@ def test_get_job_ui_rejects_handles_owned_by_another_job(monkeypatch, tmp_path):
         jobs,
         "shared_job_ui_dir_from_id",
         lambda _job_id, must_exist=False: tmp_path / "missing-shared",
+    )
+
+    with pytest.raises(HTTPException) as error:
+        jobs.get_job_ui("job-1")
+    assert error.value.status_code == 404
+
+
+def test_get_job_ui_falls_back_to_its_federated_owner(monkeypatch, tmp_path):
+    remote_handle = {
+        "job_id": "job-1",
+        "ui": {"job_id": "job-1", "title": "Example"},
+        "web_ui": {"job_id": "job-1", "url": "http://10.0.4.26:45767"},
+    }
+
+    class FakeClient:
+        def get_job(self, _job_id):
+            return json.dumps({"owner_node": "mirror_neuron@10.0.4.26"})
+
+        def get_system_summary(self):
+            return json.dumps(
+                {
+                    "nodes": [
+                        {
+                            "name": "mirror_neuron@10.0.4.26",
+                            "address": "10.0.4.26",
+                            "self?": False,
+                        }
+                    ]
+                }
+            )
+
+    class FakeResponse:
+        def read(self):
+            return json.dumps(remote_handle).encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    seen: list[Request] = []
+    monkeypatch.setattr(state, "client", FakeClient())
+    monkeypatch.setattr(
+        state,
+        "refresh_config_from_env",
+        lambda: SimpleNamespace(port=54001, api_token=""),
+    )
+    monkeypatch.setattr(jobs, "job_data_dir_from_id", lambda *_args, **_kwargs: tmp_path / "missing")
+    monkeypatch.setattr(jobs, "shared_job_ui_dir_from_id", lambda *_args, **_kwargs: tmp_path / "also-missing")
+    monkeypatch.setattr(
+        jobs.urllib.request,
+        "urlopen",
+        lambda request, timeout: seen.append(request) or FakeResponse(),
+    )
+
+    assert jobs.get_job_ui("job-1") == remote_handle
+    assert seen[0].full_url == "http://10.0.4.26:54001/api/v1/jobs/job-1/ui"
+
+
+def test_get_job_ui_never_uses_an_untrusted_owner_address(monkeypatch, tmp_path):
+    class FakeClient:
+        def get_job(self, _job_id):
+            return json.dumps({"owner_node": "mirror_neuron@bad"})
+
+        def get_system_summary(self):
+            return json.dumps(
+                {
+                    "nodes": [
+                        {
+                            "name": "mirror_neuron@bad",
+                            "address": "http://untrusted.example/path",
+                            "self?": False,
+                        }
+                    ]
+                }
+            )
+
+    monkeypatch.setattr(state, "client", FakeClient())
+    monkeypatch.setattr(jobs, "job_data_dir_from_id", lambda *_args, **_kwargs: tmp_path / "missing")
+    monkeypatch.setattr(jobs, "shared_job_ui_dir_from_id", lambda *_args, **_kwargs: tmp_path / "also-missing")
+    monkeypatch.setattr(
+        jobs.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: pytest.fail("invalid owner host must not be requested"),
     )
 
     with pytest.raises(HTTPException) as error:

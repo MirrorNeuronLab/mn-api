@@ -6,6 +6,8 @@ import re
 import threading
 import time
 import urllib.parse
+import urllib.error
+import urllib.request
 from collections import Counter, deque
 from pathlib import Path
 from typing import Any
@@ -191,16 +193,115 @@ def get_job_ui(job_id: str, _auth=Depends(require_auth)):
         raise HTTPException(status_code=400, detail="invalid job id")
     shared_dir = shared_job_ui_dir_from_id(job_id, must_exist=False)
     for candidate in (shared_dir, job_dir):
-        if candidate is None or not candidate.is_dir():
-            continue
-        ui = _read_json_file(candidate / "ui.json")
-        web_ui = _read_json_file(candidate / "web_ui.json")
-        if not ui or not web_ui:
-            continue
-        if ui.get("job_id") != job_id or web_ui.get("job_id") != job_id:
-            continue
-        return {"job_id": job_id, "ui": ui, "web_ui": web_ui}
+        handle = _job_ui_handle_from_directory(candidate, job_id)
+        if handle is not None:
+            return handle
+
+    # A federation member owns its local job-data directory.  If the shared
+    # storage backend is node-local (or is still replicating), ask the owning
+    # node's authenticated API for the same durable handle.  The host is read
+    # only from the core's registered federation metadata; it is never supplied
+    # by the browser or the job payload.
+    remote_handle = _owner_node_job_ui_handle(job_id)
+    if remote_handle is not None:
+        return remote_handle
     raise HTTPException(status_code=404, detail="job UI not found")
+
+
+def _job_ui_handle_from_directory(candidate: Path | None, job_id: str) -> dict[str, Any] | None:
+    if candidate is None:
+        return None
+    try:
+        if not candidate.is_dir():
+            return None
+    except OSError:
+        return None
+    ui = _read_json_file(candidate / "ui.json")
+    web_ui = _read_json_file(candidate / "web_ui.json")
+    if not ui or not web_ui:
+        return None
+    if ui.get("job_id") != job_id or web_ui.get("job_id") != job_id:
+        return None
+    return {"job_id": job_id, "ui": ui, "web_ui": web_ui}
+
+
+def _owner_node_job_ui_handle(job_id: str) -> dict[str, Any] | None:
+    """Load a missing UI handle from the job's federated owner node."""
+
+    try:
+        raw_job = state.client.get_job(job_id)
+        job = _json_object(raw_job)
+        nested_job = job.get("job") if isinstance(job.get("job"), dict) else {}
+        owner_node = _first_string(job.get("owner_node"), nested_job.get("owner_node"))
+        if not owner_node:
+            return None
+        summary = _json_object(state.client.get_system_summary())
+        nodes = summary.get("nodes") if isinstance(summary.get("nodes"), list) else []
+        owner = next(
+            (
+                node
+                for node in nodes
+                if isinstance(node, dict)
+                and _first_string(node.get("name"), node.get("node_name"), node.get("id")) == owner_node
+            ),
+            None,
+        )
+        if not isinstance(owner, dict) or owner.get("self?") is True or owner.get("self") is True:
+            return None
+        host = _first_string(owner.get("address"), owner.get("grpc_host"), owner.get("hostname"))
+        if not _valid_owner_api_host(host):
+            return None
+        config = state.refresh_config_from_env()
+        port = int(getattr(config, "port", 54001))
+        if not 1 <= port <= 65_535:
+            return None
+        display_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
+        headers = {}
+        token = str(getattr(config, "api_token", "") or "").strip()
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        request = urllib.request.Request(
+            f"http://{display_host}:{port}/api/v1/jobs/{urllib.parse.quote(job_id, safe='-._')}/ui",
+            headers=headers,
+            method="GET",
+        )
+        with urllib.request.urlopen(request, timeout=3.0) as response:
+            remote = _json_object(response.read())
+    except (OSError, ValueError, urllib.error.URLError, urllib.error.HTTPError):
+        return None
+    except Exception:
+        return None
+
+    ui = remote.get("ui") if isinstance(remote, dict) else None
+    web_ui = remote.get("web_ui") if isinstance(remote, dict) else None
+    if not isinstance(ui, dict) or not isinstance(web_ui, dict):
+        return None
+    if ui.get("job_id") != job_id or web_ui.get("job_id") != job_id:
+        return None
+    return {"job_id": job_id, "ui": ui, "web_ui": web_ui}
+
+
+def _json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, bytes):
+        value = value.decode("utf-8")
+    if not isinstance(value, str):
+        return {}
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
+
+
+def _valid_owner_api_host(value: str) -> bool:
+    """Accept a registered node host, but never a URL or path fragment."""
+
+    host = str(value or "").strip()
+    if not host or "/" in host or "@" in host or any(char.isspace() for char in host):
+        return False
+    return bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]*", host))
 
 
 def get_job_snapshot(job_id: str, snapshot_kind: str, _auth=Depends(require_auth)):
