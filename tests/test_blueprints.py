@@ -2096,6 +2096,15 @@ def test_launch_model_policy_is_deferred_without_installing():
         "gemma4:e2b",
     ]
     assert summary["env"]["MN_RUNTIME_MODEL_MANAGED"] == "1"
+    assert "gemma4:e2b" in json.loads(
+        summary["env"]["MN_PREPARED_RUNTIME_MODELS_JSON"]
+    )
+    resolver = blueprints_module.prepared_model_installed_resolver(summary["env"])
+    assert resolver is not None
+    assert resolver(
+        "docker.io/ai/gemma4:E2B",
+        {"runtime_model": "docker.io/ai/gemma4:E2B"},
+    )
 
 
 def test_launch_model_policy_keeps_provider_default_out_of_managed_dmr(tmp_path, monkeypatch):

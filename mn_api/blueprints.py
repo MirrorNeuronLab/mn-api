@@ -594,7 +594,10 @@ def defer_blueprint_runtime_models(
     )
     models = deferred["models"]
     errors = deferred["errors"]
-    env = deferred["env"]
+    env = dict(deferred["env"])
+    prepared_json = sdk_prepared_runtime_models_json({"models": models})
+    if prepared_json:
+        env["MN_PREPARED_RUNTIME_MODELS_JSON"] = prepared_json
     service_results: list[dict[str, Any]] = []
     if not errors and blueprint_requires_context_engine(manifest, config):
         if service_progress is not None:
@@ -1016,15 +1019,25 @@ def prepared_model_installed_resolver(env: dict[str, str] | None):
     prepared = prepared_runtime_model_keys_from_env(env)
     if not prepared:
         return None
+    prepared_match_keys = {
+        match_key
+        for reference in prepared
+        for match_key in model_match_keys(reference)
+    }
 
     def resolver(model_name: str, requirement: dict[str, Any]) -> bool:
-        keys = {
+        references = {
             str(model_name or "").strip(),
             str(requirement.get("model") or "").strip(),
             str(requirement.get("runtime_model") or "").strip(),
             str(requirement.get("name") or "").strip(),
         }
-        if any(key and key in prepared for key in keys):
+        candidate_match_keys = {
+            match_key
+            for reference in references
+            for match_key in model_match_keys(reference)
+        }
+        if candidate_match_keys & prepared_match_keys:
             return True
         return docker_model_installed(model_name)
 
