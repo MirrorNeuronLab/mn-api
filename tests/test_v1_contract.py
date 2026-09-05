@@ -193,7 +193,9 @@ def _client(monkeypatch) -> tuple[TestClient, CanonicalRuntime]:
             "runtime": {},
         }
     )
-    monkeypatch.setattr(jobs, "load_uploaded_bundle", lambda *_args: (manifest, {}))
+    monkeypatch.setattr(jobs, "uploaded_bundle_root", lambda *_args: "/uploaded/package")
+    monkeypatch.setattr(jobs, "local_blueprint_from_path", lambda _path: ("/uploaded", {"id": "g"}))
+    monkeypatch.setattr(jobs, "load_blueprint_bundle", lambda *_args, **_kwargs: (manifest, {}))
     return TestClient(create_app()), runtime
 
 
@@ -993,3 +995,29 @@ def test_canonical_run_detail_and_operations(monkeypatch):
     assert remote.status_code == 201
     assert client.delete("/api/v1/model-remotes/remote-1", headers={"If-Match": remote.headers["etag"]}).status_code == 204
     assert client.post("/api/v1/model-proxies", json={"model_id": "proxy-1"}).status_code == 201
+
+
+def test_uploaded_job_uses_catalog_preparation_before_runtime_submission(monkeypatch):
+    client, runtime = _client(monkeypatch)
+    prepared = []
+
+    def prepare(root, blueprint, run_id, **kwargs):
+        prepared.append((root, blueprint, run_id, kwargs))
+        return '{"graph_id":"prepared-upload","flow":{"nodes":[]}}', {}
+
+    monkeypatch.setattr(jobs, "load_blueprint_bundle", prepare)
+    response = client.post(
+        "/api/v1/jobs",
+        json={"bundle_id": "bundle-1", "job_id": "upload-job", "resolved_configuration": {"sample": 3}},
+        headers={"Idempotency-Key": "upload-preparation"},
+    )
+    assert response.status_code == 201, response.text
+    assert len(prepared) == 1
+    root, blueprint, run_id, options = prepared[0]
+    assert root == "/uploaded"
+    assert blueprint == {"id": "g"}
+    assert run_id
+    assert options["stable_job_id"] == "upload-job"
+    assert options["config_overrides"] == {"sample": 3}
+    assert options["submission_id"]
+    assert runtime.calls[-1][0] == "create_job"

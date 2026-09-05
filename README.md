@@ -271,3 +271,7 @@ Blueprint folders and ZIP uploads use the SDK's canonical blueprint/v1 loader.
 maximum); extraction applies the same limit to their uncompressed contents.
 The ordinary `MN_API_REQUEST_SIZE_LIMIT_BYTES` limit continues to apply to other
 requests. Uploads validate documents without importing blueprint Python code.
+
+Uploaded Job definitions, bundle replacements, and catalog Job definitions pass through full
+blueprint preparation before submission, including configuration overrides,
+dependencies, topology lowering, and runtime staging.

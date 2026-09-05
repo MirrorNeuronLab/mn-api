@@ -30,8 +30,8 @@ from mn_api.api_models import (
     RunUpdate,
     ScheduleCreate,
 )
-from mn_api.blueprints import create_blueprint_run_id, find_blueprint, load_blueprint_bundle
-from mn_api.bundles import load_uploaded_bundle
+from mn_api.blueprints import create_blueprint_run_id, find_blueprint, load_blueprint_bundle, local_blueprint_from_path
+from mn_api.bundles import uploaded_bundle_root
 from mn_api.contracts import API_PREFIX, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 from mn_api.dependencies import require_auth
 from mn_api.http_semantics import require_if_match
@@ -187,28 +187,24 @@ def create_job(
         raise HTTPException(status_code=422, detail="Exactly one of blueprint_id or bundle_id is required.")
 
     def create():
-        stable_job_id = request.job_id
-        bundle_dir = None
         if request.blueprint_id:
             repo_root, blueprint = find_blueprint(state.refresh_config_from_env(), request.blueprint_id)
-            bootstrap_run_id = create_blueprint_run_id(request.blueprint_id)
-            stable_job_id = stable_job_id or generate_stable_job_id(request.blueprint_id)
-            manifest_json, payloads = load_blueprint_bundle(
-                repo_root,
-                blueprint,
-                bootstrap_run_id,
-                config_overrides=request.resolved_configuration,
-                stable_job_id=stable_job_id,
-                submission_id=generate_job_definition_submission_id(stable_job_id),
-                progress_callback=progress_reporter(progress_id),
-            )
         else:
-            with launch_activity(
-                progress_reporter(progress_id),
-                "Prepare uploaded blueprint.",
-                "Reading, compiling, and staging the uploaded package.",
-            ):
-                manifest_json, payloads = load_uploaded_bundle(str(request.bundle_id), state.BUNDLE_UPLOAD_ROOT)
+            bundle_root = uploaded_bundle_root(str(request.bundle_id), state.BUNDLE_UPLOAD_ROOT)
+            repo_root, blueprint = local_blueprint_from_path(str(bundle_root))
+        blueprint_id = str(blueprint["id"])
+        stable_job_id = request.job_id or generate_stable_job_id(blueprint_id)
+        # Both sources need dependency preparation, configuration, topology
+        # lowering, and staging before they can be submitted as prepared=True.
+        manifest_json, payloads = load_blueprint_bundle(
+            repo_root,
+            blueprint,
+            create_blueprint_run_id(blueprint_id),
+            config_overrides=request.resolved_configuration,
+            stable_job_id=stable_job_id,
+            submission_id=generate_job_definition_submission_id(stable_job_id),
+            progress_callback=progress_reporter(progress_id),
+        )
         with launch_activity(
             progress_reporter(progress_id, "submit"),
             "Submit job definition.",
@@ -217,7 +213,6 @@ def create_job(
             return _service().create_job(
                 manifest_json,
                 payloads,
-                bundle_dir=bundle_dir,
                 job_id=stable_job_id,
                 resolved_configuration=request.resolved_configuration,
                 storage=request.storage,
@@ -306,7 +301,15 @@ def replace_job_bundle(
 ):
     current = public_value(_service().get_job(job_id))
     require_if_match(if_match, current)
-    manifest_json, payloads = load_uploaded_bundle(request.bundle_id, state.BUNDLE_UPLOAD_ROOT)
+    bundle_root = uploaded_bundle_root(request.bundle_id, state.BUNDLE_UPLOAD_ROOT)
+    repo_root, blueprint = local_blueprint_from_path(str(bundle_root))
+    manifest_json, payloads = load_blueprint_bundle(
+        repo_root,
+        blueprint,
+        create_blueprint_run_id(str(blueprint["id"])),
+        stable_job_id=job_id,
+        config_overrides=current.get("resolved_configuration"),
+    )
     result = _service().update_job(
         job_id,
         {},
