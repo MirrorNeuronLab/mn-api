@@ -35,6 +35,7 @@ from mn_api.bundles import load_uploaded_bundle
 from mn_api.contracts import API_PREFIX, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 from mn_api.dependencies import require_auth
 from mn_api.http_semantics import require_if_match
+from mn_api.launch_progress import launch_activity, observe_submission, progress_reporter
 from mn_api.operations import encode_sse, sse_envelope, start_operation
 from mn_api.pagination import page, page_tokens
 from mn_api.public import decode, idempotent_response, public_value, records, resource_response
@@ -176,7 +177,11 @@ def create_job(
     request: JobCreate,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", max_length=255),
     principal: str = Depends(require_auth),
+    progress_id: str | None = Header(default=None, alias="X-Launch-Progress-ID", max_length=220),
 ):
+    from mn_api.routes.blueprints import validate_progress_id
+
+    progress_id = validate_progress_id(progress_id if isinstance(progress_id, str) else None)
     sources = int(bool(request.blueprint_id)) + int(bool(request.bundle_id))
     if sources != 1:
         raise HTTPException(status_code=422, detail="Exactly one of blueprint_id or bundle_id is required.")
@@ -195,20 +200,35 @@ def create_job(
                 config_overrides=request.resolved_configuration,
                 stable_job_id=stable_job_id,
                 submission_id=generate_job_definition_submission_id(stable_job_id),
+                progress_callback=progress_reporter(progress_id),
             )
         else:
-            manifest_json, payloads = load_uploaded_bundle(str(request.bundle_id), state.BUNDLE_UPLOAD_ROOT)
-        return _service().create_job(
-            manifest_json,
-            payloads,
-            bundle_dir=bundle_dir,
-            job_id=stable_job_id,
-            resolved_configuration=request.resolved_configuration,
-            storage=request.storage,
-            idempotency_key=idempotency_key or "",
-            prepared=True,
-            owner_node=request.owner_node,
-        )
+            with launch_activity(
+                progress_reporter(progress_id),
+                "Prepare uploaded blueprint.",
+                "Reading, compiling, and staging the uploaded package.",
+            ):
+                manifest_json, payloads = load_uploaded_bundle(str(request.bundle_id), state.BUNDLE_UPLOAD_ROOT)
+        with launch_activity(
+            progress_reporter(progress_id, "submit"),
+            "Submit job definition.",
+            "Waiting for the runtime to acknowledge the prepared definition.",
+        ):
+            return _service().create_job(
+                manifest_json,
+                payloads,
+                bundle_dir=bundle_dir,
+                job_id=stable_job_id,
+                resolved_configuration=request.resolved_configuration,
+                storage=request.storage,
+                idempotency_key=idempotency_key or "",
+                prepared=True,
+                owner_node=request.owner_node,
+            )
+
+    def observed_create():
+        with observe_submission(progress_id):
+            return create()
 
     body = request.model_dump()
     return idempotent_response(
@@ -216,7 +236,7 @@ def create_job(
         route=f"{API_PREFIX}/jobs",
         key=idempotency_key,
         body=body,
-        call=create,
+        call=observed_create,
         status_code=status.HTTP_201_CREATED,
         location=lambda result: f"{API_PREFIX}/jobs/{result.get('job_id') or result.get('id')}",
     )

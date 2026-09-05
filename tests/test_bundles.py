@@ -7,6 +7,7 @@ from pathlib import Path
 import zipfile
 
 from fastapi import HTTPException, UploadFile
+from mn_sdk.blueprints.authoring import write_blueprint_definition
 import pytest
 
 from mn_api.bundles import (
@@ -115,20 +116,25 @@ class TestBundleServices(unittest.TestCase):
 
 
 def test_save_uploaded_bundle_accepts_current_bundle(tmp_path):
+    source = tmp_path / "source"
+    write_blueprint_definition(
+        source,
+        {
+            "id": "current-workflow",
+            "name": "Current workflow",
+            "description": "Example",
+            "workflow": {"steps": [{"id": "run"}]},
+            "agents": {},
+            "runtime": {},
+        },
+    )
+    (source / "payloads").mkdir()
+    (source / "payloads/worker.py").write_text("print('current')\n")
     bundle = _uploaded_zip(
         {
-            "current/manifest.json": json.dumps(
-                {
-                    "apiVersion": "mn.workflow/v1",
-                    "kind": "Workflow",
-                    "id": "current-workflow",
-                    "contract": {},
-                    "agents": {},
-                    "runtime": {},
-                    "workflow": {},
-                }
-            ),
-            "current/payloads/worker.py": "print('current')\n",
+            "current/" + path.relative_to(source).as_posix(): path.read_text()
+            for path in source.rglob("*")
+            if path.is_file()
         }
     )
 
@@ -151,7 +157,26 @@ def test_save_uploaded_bundle_rejects_non_zip_and_incomplete_bundle(tmp_path):
                 "manifest.json": '{"apiVersion":"mn.workflow/v1","kind":"Workflow"}',
             }
         )
-        with pytest.raises(HTTPException, match="manifest.json and payloads"):
+        with pytest.raises(HTTPException, match="blueprint.schema"):
             asyncio.run(save_uploaded_bundle(incomplete, tmp_path))
     finally:
         not_zip.file.close()
+
+
+def test_uploaded_transport_does_not_occupy_an_asset_destination(tmp_path):
+    from mn_sdk.blueprints.authoring import write_blueprint_definition
+
+    source = tmp_path / "source"
+    write_blueprint_definition(
+        source, {"id": "transport", "workflow": {"steps": [{"id": "run"}]}, "agents": {}, "runtime": {}}
+    )
+    files = {path.relative_to(source).as_posix(): path.read_text() for path in source.rglob("*") if path.is_file()}
+    files["bundle.zip"] = "an ordinary declared package asset"
+    upload_root = tmp_path / "uploads"
+    bundle = _uploaded_zip(files)
+    try:
+        result = asyncio.run(save_uploaded_bundle(bundle, upload_root))
+    finally:
+        bundle.file.close()
+    assert (upload_root / result["bundle_id"] / "bundle.zip").read_text() == files["bundle.zip"]
+    assert not list(upload_root.glob(".upload-*"))

@@ -178,22 +178,28 @@ class TestBlueprintServices(unittest.TestCase):
             observed["which"] = {"command": command, "path": path}
             return "/docker/bin/docker" if command == "docker" and "/docker/bin" in str(path) else None
 
-        with patch.dict(os.environ, {"PATH": "/api/process/bin", "MN_HOME": "/api/mn-home"}, clear=True), patch.object(
-            blueprints_module,
-            "subprocess_environment",
-            return_value={"PATH": "/config/bin", "MN_HOME": "/config/mn-home"},
-        ), patch.object(
-            blueprints_module,
-            "sdk_runtime_path_environment",
-            side_effect=fake_sdk_runtime_path_environment,
-        ), patch.object(
-            blueprints_module,
-            "docker_cli_path_environment",
-            side_effect=fake_docker_cli_path_environment,
-        ), patch.object(
-            blueprints_module.shutil,
-            "which",
-            side_effect=fake_which,
+        with (
+            patch.dict(os.environ, {"PATH": "/api/process/bin", "MN_HOME": "/api/mn-home"}, clear=True),
+            patch.object(
+                blueprints_module,
+                "subprocess_environment",
+                return_value={"PATH": "/config/bin", "MN_HOME": "/config/mn-home"},
+            ),
+            patch.object(
+                blueprints_module,
+                "sdk_runtime_path_environment",
+                side_effect=fake_sdk_runtime_path_environment,
+            ),
+            patch.object(
+                blueprints_module,
+                "docker_cli_path_environment",
+                side_effect=fake_docker_cli_path_environment,
+            ),
+            patch.object(
+                blueprints_module.shutil,
+                "which",
+                side_effect=fake_which,
+            ),
         ):
             env = blueprints_module.runtime_path_environment()
 
@@ -205,49 +211,32 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertEqual(env["MN_DOCKER_BIN"], "/docker/bin/docker")
         self.assertEqual(env["PYTHONPATH"], "/runtime/python")
 
-    def test_catalog_accepts_wrapped_index_and_normalizes_aliases(self):
+    def test_catalog_derives_records_from_canonical_package_documents(self):
+        from mn_sdk.blueprints.authoring import write_blueprint_definition
+
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
-            manifest_dir = repo / "worker.two"
-            manifest_dir.mkdir()
-            (manifest_dir / "manifest.json").write_text(
-                json.dumps(
-                    {
-                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
-                        "metadata": {
-                            "init_config_review": {
-                                "required": True,
-                                "fields": [{"path": "vl_model.model", "label": "VL model"}],
-                            }
-                        }
-                    }
-                )
+            write_blueprint_definition(
+                repo / "worker_two",
+                {
+                    "id": "worker_two",
+                    "name": "Worker Two",
+                    "description": "Does useful work.",
+                    "workflow": {"steps": [{"id": "run"}]},
+                    "agents": {},
+                    "runtime": {},
+                    "metadata": {
+                        "category": "Engineering",
+                        "runtime_features": ["streams"],
+                        "init_config_review": {
+                            "required": True,
+                            "fields": [{"path": "vl_model.model", "label": "VL model"}],
+                        },
+                    },
+                },
+                catalog={"pricing": {"model": "metered", "rate": 12.5, "unit": "run"}},
             )
-            (repo / "index.json").write_text(
-                json.dumps(
-                    {
-                        "blueprints": [
-                            {
-                                "blueprintId": "worker.two",
-                                "product": {
-                                    "name": "Worker Two",
-                                    "one_line": "Does useful work.",
-                                    "category": "Engineering",
-                                    "runtimeFeatures": ["streams"],
-                                },
-                                "pricing": {
-                                    "model": "metered",
-                                    "rate": "12.5",
-                                    "unit": "run",
-                                },
-                                "capabilities": "not-a-list",
-                            },
-                            {"name": "missing id"},
-                        ]
-                    }
-                )
-            )
-
+            (repo / "index.json").write_text('["worker_two"]')
             repo_root, blueprints = load_blueprint_catalog(
                 SimpleNamespace(
                     blueprint_source="local",
@@ -256,17 +245,13 @@ class TestBlueprintServices(unittest.TestCase):
                     active_blueprint_location=str(repo),
                 )
             )
-
         self.assertEqual(repo_root, repo.resolve())
         self.assertEqual(len(blueprints), 1)
-        self.assertEqual(blueprints[0]["id"], "worker.two")
+        self.assertEqual(blueprints[0]["id"], "worker_two")
         self.assertEqual(blueprints[0]["name"], "Worker Two")
-        self.assertEqual(blueprints[0]["category"], "Engineering")
         self.assertEqual(blueprints[0]["category_slug"], "engineering")
-        self.assertEqual(blueprints[0]["pricing"], {"model": "metered", "rate": 12.5, "unit": "run"})
         self.assertEqual(blueprints[0]["rate_label"], "$12.5/run")
         self.assertEqual(blueprints[0]["runtime_features"], ["streams"])
-        self.assertEqual(blueprints[0]["capabilities"], [])
         self.assertEqual(blueprints[0]["init_config_review"]["fields"][0]["path"], "vl_model.model")
 
     @patch("mn_api.blueprints.resolve_runtime_cluster_model_for_api", return_value=None)
@@ -293,22 +278,30 @@ class TestBlueprintServices(unittest.TestCase):
             repo = Path(tmpdir)
             bundle = repo / "worker_one"
             bundle.mkdir()
-            (bundle / "manifest.json").write_text(json.dumps({
-                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {},
-                "metadata": {"blueprint_id": "worker_one"},
-                "nodes": [],
-                "edges": [],
-                "runtime": {
-                    "models": {
-                        "primary": {
-                            "provider": "docker_model_runner",
-                            "model": "gemma4:e2b",
-                            "backend": "llama.cpp",
-                            "context_size": 2048,
-                        }
+            (bundle / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "apiVersion": "mn.workflow/v1",
+                        "kind": "Workflow",
+                        "id": "test-workflow",
+                        "contract": {},
+                        "agents": {},
+                        "metadata": {"blueprint_id": "worker_one"},
+                        "nodes": [],
+                        "edges": [],
+                        "runtime": {
+                            "models": {
+                                "primary": {
+                                    "provider": "docker_model_runner",
+                                    "model": "gemma4:e2b",
+                                    "backend": "llama.cpp",
+                                    "context_size": 2048,
+                                }
+                            }
+                        },
                     }
-                },
-            }))
+                )
+            )
 
             summary = install_blueprint_runtime_models(repo.resolve(), {"id": "worker_one", "path": "worker_one"})
 
@@ -352,33 +345,45 @@ class TestBlueprintServices(unittest.TestCase):
             bundle = repo / "worker_one"
             config_dir = bundle / "config"
             config_dir.mkdir(parents=True)
-            (config_dir / "default.json").write_text(json.dumps({
-                "llm": {
-                    "enabled": True,
-                    "configs": {
-                        "primary": {
-                            "provider": "docker_model_runner",
-                            "model": "gemma4:e2b",
-                        }
-                    },
-                    "default_config": "primary",
-                }
-            }))
-            (bundle / "manifest.json").write_text(json.dumps({
-                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {},
-                "metadata": {"blueprint_id": "worker_one"},
-                "nodes": [],
-                "edges": [],
-                "runtime": {
-                    "models": {
-                        "primary": {
-                            "provider": "docker_model_runner",
-                            "model": "gemma4:e2b",
-                            "backend": "llama.cpp",
+            (config_dir / "default.json").write_text(
+                json.dumps(
+                    {
+                        "llm": {
+                            "enabled": True,
+                            "configs": {
+                                "primary": {
+                                    "provider": "docker_model_runner",
+                                    "model": "gemma4:e2b",
+                                }
+                            },
+                            "default_config": "primary",
                         }
                     }
-                },
-            }))
+                )
+            )
+            (bundle / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "apiVersion": "mn.workflow/v1",
+                        "kind": "Workflow",
+                        "id": "test-workflow",
+                        "contract": {},
+                        "agents": {},
+                        "metadata": {"blueprint_id": "worker_one"},
+                        "nodes": [],
+                        "edges": [],
+                        "runtime": {
+                            "models": {
+                                "primary": {
+                                    "provider": "docker_model_runner",
+                                    "model": "gemma4:e2b",
+                                    "backend": "llama.cpp",
+                                }
+                            }
+                        },
+                    }
+                )
+            )
 
             summary = install_blueprint_runtime_models(repo.resolve(), {"id": "worker_one", "path": "worker_one"})
 
@@ -429,12 +434,21 @@ class TestBlueprintServices(unittest.TestCase):
                     }
                 )
             )
-            (bundle / "manifest.json").write_text(json.dumps({
-                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},
-                "metadata": {"blueprint_id": "worker_one"},
-                "nodes": [],
-                "edges": [],
-            }))
+            (bundle / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "apiVersion": "mn.workflow/v1",
+                        "kind": "Workflow",
+                        "id": "test-workflow",
+                        "contract": {},
+                        "agents": {},
+                        "runtime": {},
+                        "metadata": {"blueprint_id": "worker_one"},
+                        "nodes": [],
+                        "edges": [],
+                    }
+                )
+            )
 
             with patch.dict(os.environ, {}, clear=True):
                 summary = install_blueprint_runtime_models(repo.resolve(), {"id": "worker_one", "path": "worker_one"})
@@ -450,29 +464,34 @@ class TestBlueprintServices(unittest.TestCase):
         fake_package.__path__ = []
         fake_server_cmds = ModuleType("mn_cli.server_cmds")
 
-        def fake_ensure_context_engine_runtime(*, force=False):
+        def fake_ensure_context_engine_runtime(*, force=False, environment):
             observed["force"] = force
-            observed["path"] = os.environ.get("PATH")
-            observed["pythonpath"] = os.environ.get("PYTHONPATH")
+            observed["path"] = environment.get("PATH")
+            observed["pythonpath"] = environment.get("PYTHONPATH")
             return {"status": "already_running"}
 
         fake_server_cmds.ensure_context_engine_runtime = fake_ensure_context_engine_runtime
 
-        with patch.dict(
-            sys.modules,
-            {"mn_cli": fake_package, "mn_cli.server_cmds": fake_server_cmds},
-        ), patch.dict(
-            os.environ,
-            {"PATH": "/base/bin"},
-            clear=True,
-        ), patch.object(
-            blueprints_module,
-            "subprocess_environment",
-            return_value={"PATH": "/config/bin:/base/bin", "MN_API_BASE_URL": "http://api.test"},
-        ), patch.object(
-            blueprints_module,
-            "runtime_path_environment",
-            return_value={"PATH": "/runtime/bin:/config/bin:/base/bin", "PYTHONPATH": "/runtime/python"},
+        with (
+            patch.dict(
+                sys.modules,
+                {"mn_cli": fake_package, "mn_cli.server_cmds": fake_server_cmds},
+            ),
+            patch.dict(
+                os.environ,
+                {"PATH": "/base/bin"},
+                clear=True,
+            ),
+            patch.object(
+                blueprints_module,
+                "subprocess_environment",
+                return_value={"PATH": "/config/bin:/base/bin", "MN_API_BASE_URL": "http://api.test"},
+            ),
+            patch.object(
+                blueprints_module,
+                "runtime_path_environment",
+                return_value={"PATH": "/runtime/bin:/config/bin:/base/bin", "PYTHONPATH": "/runtime/python"},
+            ),
         ):
             result = blueprints_module.ensure_context_engine_runtime_direct(force=True)
             self.assertEqual(os.environ.get("PATH"), "/base/bin")
@@ -512,20 +531,28 @@ class TestBlueprintServices(unittest.TestCase):
             repo = Path(tmpdir)
             bundle = repo / "worker_one"
             bundle.mkdir()
-            (bundle / "manifest.json").write_text(json.dumps({
-                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {},
-                "metadata": {"blueprint_id": "worker_one"},
-                "nodes": [],
-                "edges": [],
-                "runtime": {
-                    "models": {
-                        "primary": {
-                            "provider": "docker_model_runner",
-                            "model": "gemma4:e2b",
-                        }
+            (bundle / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "apiVersion": "mn.workflow/v1",
+                        "kind": "Workflow",
+                        "id": "test-workflow",
+                        "contract": {},
+                        "agents": {},
+                        "metadata": {"blueprint_id": "worker_one"},
+                        "nodes": [],
+                        "edges": [],
+                        "runtime": {
+                            "models": {
+                                "primary": {
+                                    "provider": "docker_model_runner",
+                                    "model": "gemma4:e2b",
+                                }
+                            }
+                        },
                     }
-                },
-            }))
+                )
+            )
 
             summary = install_blueprint_runtime_models(repo.resolve(), {"id": "worker_one", "path": "worker_one"})
 
@@ -562,22 +589,30 @@ class TestBlueprintServices(unittest.TestCase):
             repo = Path(tmpdir)
             bundle = repo / "worker_one"
             bundle.mkdir()
-            (bundle / "manifest.json").write_text(json.dumps({
-                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {},
-                "metadata": {"blueprint_id": "worker_one"},
-                "nodes": [],
-                "edges": [],
-                "runtime": {
-                    "models": {
-                        "primary": {
-                            "provider": "docker_model_runner",
-                            "model": "video-vlm:default",
-                            "backend": "llama.cpp",
-                            "install_mode": "cluster_provided",
-                        }
+            (bundle / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "apiVersion": "mn.workflow/v1",
+                        "kind": "Workflow",
+                        "id": "test-workflow",
+                        "contract": {},
+                        "agents": {},
+                        "metadata": {"blueprint_id": "worker_one"},
+                        "nodes": [],
+                        "edges": [],
+                        "runtime": {
+                            "models": {
+                                "primary": {
+                                    "provider": "docker_model_runner",
+                                    "model": "video-vlm:default",
+                                    "backend": "llama.cpp",
+                                    "install_mode": "cluster_provided",
+                                }
+                            }
+                        },
                     }
-                },
-            }))
+                )
+            )
 
             summary = install_blueprint_runtime_models(repo.resolve(), {"id": "worker_one", "path": "worker_one"})
 
@@ -624,41 +659,55 @@ class TestBlueprintServices(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
             remotes_path = repo / "model-remotes.json"
-            remotes_path.write_text(json.dumps({
-                "version": 2,
-                "remotes": {
-                    "spark": {
-                        "name": "spark",
-                        "provider": "docker_model_runner",
-                        "model": "nemotron-3.5-lightning:latest",
-                        "api_model": "nemotron-3.5-lightning:latest",
-                        "base_url": "http://192.168.4.173:12434/v1",
-                        "api_key": "not-needed",
-                        "node": "spark",
+            remotes_path.write_text(
+                json.dumps(
+                    {
+                        "version": 2,
+                        "remotes": {
+                            "spark": {
+                                "name": "spark",
+                                "provider": "docker_model_runner",
+                                "model": "nemotron-3.5-lightning:latest",
+                                "api_model": "nemotron-3.5-lightning:latest",
+                                "base_url": "http://192.168.4.173:12434/v1",
+                                "api_key": "not-needed",
+                                "node": "spark",
+                            }
+                        },
                     }
-                },
-            }))
+                )
+            )
             bundle = repo / "vc_assistant"
             bundle.mkdir()
-            (bundle / "manifest.json").write_text(json.dumps({
-                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {},
-                "metadata": {"blueprint_id": "vc_assistant"},
-                "nodes": [],
-                "edges": [],
-                "runtime": {
-                    "models": {
-                        "primary": {
-                            "provider": "docker_model_runner",
-                            "model": "nemotron-3.5-lightning:latest",
-                            "api_base": "auto",
-                            "backend": "llama.cpp",
-                        }
+            (bundle / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "apiVersion": "mn.workflow/v1",
+                        "kind": "Workflow",
+                        "id": "test-workflow",
+                        "contract": {},
+                        "agents": {},
+                        "metadata": {"blueprint_id": "vc_assistant"},
+                        "nodes": [],
+                        "edges": [],
+                        "runtime": {
+                            "models": {
+                                "primary": {
+                                    "provider": "docker_model_runner",
+                                    "model": "nemotron-3.5-lightning:latest",
+                                    "api_base": "auto",
+                                    "backend": "llama.cpp",
+                                }
+                            }
+                        },
                     }
-                },
-            }))
+                )
+            )
 
             with patch.dict(os.environ, {"MN_MODEL_REMOTES_PATH": str(remotes_path)}, clear=False):
-                summary = install_blueprint_runtime_models(repo.resolve(), {"id": "vc_assistant", "path": "vc_assistant"})
+                summary = install_blueprint_runtime_models(
+                    repo.resolve(), {"id": "vc_assistant", "path": "vc_assistant"}
+                )
 
         self.assertTrue(summary["ok"])
         self.assertEqual(summary["models"][0]["status"], "model_remote")
@@ -744,27 +793,37 @@ class TestBlueprintServices(unittest.TestCase):
             bundle = repo / "vc_assistant"
             config_dir = bundle / "config"
             config_dir.mkdir(parents=True)
-            (config_dir / "default.json").write_text(json.dumps({
-                "llm": {
-                    "enabled": True,
-                    "model": "default",
-                    "provider": "docker_model_runner",
-                }
-            }))
-            (bundle / "manifest.json").write_text(json.dumps({
-                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {},
-                "metadata": {"blueprint_id": "vc_assistant"},
-                "nodes": [],
-                "edges": [],
-                "runtime": {"models": {"primary": {"provider": "docker_model_runner", "model": "default"}}},
-            }))
+            (config_dir / "default.json").write_text(
+                json.dumps(
+                    {
+                        "llm": {
+                            "enabled": True,
+                            "model": "default",
+                            "provider": "docker_model_runner",
+                        }
+                    }
+                )
+            )
+            (bundle / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "apiVersion": "mn.workflow/v1",
+                        "kind": "Workflow",
+                        "id": "test-workflow",
+                        "contract": {},
+                        "agents": {},
+                        "metadata": {"blueprint_id": "vc_assistant"},
+                        "nodes": [],
+                        "edges": [],
+                        "runtime": {"models": {"primary": {"provider": "docker_model_runner", "model": "default"}}},
+                    }
+                )
+            )
             mock_client.resolve_service.return_value = json.dumps({"services": []})
             mock_client.get_resource.return_value = json.dumps(resources)
             mock_client.get_system_summary.return_value = json.dumps(systems)
             mock_client.prepare_runtime_model.return_value = json.dumps(prepared)
-            summary = install_blueprint_runtime_models(
-                repo.resolve(), {"id": "vc_assistant", "path": "vc_assistant"}
-            )
+            summary = install_blueprint_runtime_models(repo.resolve(), {"id": "vc_assistant", "path": "vc_assistant"})
 
         self.assertTrue(summary["ok"])
         self.assertEqual(summary["models"][0]["status"], "fallback_model")
@@ -808,12 +867,15 @@ class TestBlueprintServices(unittest.TestCase):
         resources = {
             "nodes": [
                 {
-                    "name": "local", "self": True, "status": "healthy",
+                    "name": "local",
+                    "self": True,
+                    "status": "healthy",
                     "scheduling_eligible": True,
                     "devices": [{"kind": "gpu", "memory_total_mb": 16384}],
                 },
                 {
-                    "name": "remote", "status": "healthy",
+                    "name": "remote",
+                    "status": "healthy",
                     "scheduling_eligible": True,
                     "devices": [{"kind": "gpu", "memory_total_mb": 65536}],
                 },
@@ -821,7 +883,13 @@ class TestBlueprintServices(unittest.TestCase):
         }
         systems = {
             "nodes": [
-                {"name": "local", "self": True, "status": "healthy", "scheduling_eligible": True, "grpc_host": "10.0.0.10"},
+                {
+                    "name": "local",
+                    "self": True,
+                    "status": "healthy",
+                    "scheduling_eligible": True,
+                    "grpc_host": "10.0.0.10",
+                },
                 {
                     "name": "remote",
                     "status": "healthy",
@@ -832,29 +900,49 @@ class TestBlueprintServices(unittest.TestCase):
             ]
         }
         remote_runtime = unittest.mock.Mock()
-        remote_runtime.prepare_runtime_model.return_value = json.dumps({
-            "status": "installed",
-            "docker_model": "nemotron-3.5-lightning:latest",
-            "endpoint": {"model": "nemotron-3.5-lightning:latest", "runtime_model": "nemotron-3.5-lightning:latest"},
-        })
+        remote_runtime.prepare_runtime_model.return_value = json.dumps(
+            {
+                "status": "installed",
+                "docker_model": "nemotron-3.5-lightning:latest",
+                "endpoint": {
+                    "model": "nemotron-3.5-lightning:latest",
+                    "runtime_model": "nemotron-3.5-lightning:latest",
+                },
+            }
+        )
         remote_runtime.sync_litellm_gateway.return_value = json.dumps({"status": "running"})
         with (
             tempfile.TemporaryDirectory() as tmpdir,
             patch("mn_api.state.client") as mock_client,
             patch("mn_api.blueprints.Client", return_value=remote_runtime) as client_class,
-            patch("mn_api.state.refresh_config_from_env", return_value=SimpleNamespace(grpc_auth_token="auth", grpc_admin_token="admin")),
+            patch(
+                "mn_api.state.refresh_config_from_env",
+                return_value=SimpleNamespace(grpc_auth_token="auth", grpc_admin_token="admin"),
+            ),
             patch("mn_api.blueprints.resolve_runtime_model_endpoint_for_api", return_value=None),
         ):
             repo = Path(tmpdir)
             bundle = repo / "vc_assistant"
             config_dir = bundle / "config"
             config_dir.mkdir(parents=True)
-            (config_dir / "default.json").write_text(json.dumps({"llm": {"enabled": True, "model": "medium", "provider": "docker_model_runner"}}))
-            (bundle / "manifest.json").write_text(json.dumps({
-                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {},
-                "metadata": {"blueprint_id": "vc_assistant"}, "nodes": [], "edges": [],
-                "runtime": {"models": {"primary": {"provider": "docker_model_runner", "model": "medium"}}},
-            }))
+            (config_dir / "default.json").write_text(
+                json.dumps({"llm": {"enabled": True, "model": "medium", "provider": "docker_model_runner"}})
+            )
+            (bundle / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "apiVersion": "mn.workflow/v1",
+                        "kind": "Workflow",
+                        "id": "test-workflow",
+                        "contract": {},
+                        "agents": {},
+                        "metadata": {"blueprint_id": "vc_assistant"},
+                        "nodes": [],
+                        "edges": [],
+                        "runtime": {"models": {"primary": {"provider": "docker_model_runner", "model": "medium"}}},
+                    }
+                )
+            )
             mock_client.resolve_service.return_value = json.dumps({"services": []})
             mock_client.get_resource.return_value = json.dumps(resources)
             mock_client.get_system_summary.return_value = json.dumps(systems)
@@ -897,11 +985,21 @@ class TestBlueprintServices(unittest.TestCase):
             repo = Path(tmpdir)
             bundle = repo / "worker_one"
             bundle.mkdir()
-            (bundle / "manifest.json").write_text(json.dumps({
-                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},"nodes": [], "edges": []}))
-            summary = install_blueprint_runtime_models(
-                repo.resolve(), {"id": "worker_one", "path": "worker_one"}
+            (bundle / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "apiVersion": "mn.workflow/v1",
+                        "kind": "Workflow",
+                        "id": "test-workflow",
+                        "contract": {},
+                        "agents": {},
+                        "runtime": {},
+                        "nodes": [],
+                        "edges": [],
+                    }
+                )
             )
+            summary = install_blueprint_runtime_models(repo.resolve(), {"id": "worker_one", "path": "worker_one"})
 
         self.assertFalse(summary["ok"])
         self.assertIn("LiteLLM gateway synchronization failed: proxy unavailable", summary["errors"])
@@ -920,15 +1018,26 @@ class TestBlueprintServices(unittest.TestCase):
                     }
                 )
             )
-            (repo / "index.json").write_text(
-                json.dumps(
-                    [
-                        {"id": "business_worker", "name": "Business Worker", "category": "Business"},
-                        {"id": "finance_worker", "name": "Finance Worker", "category": "Finance"},
-                        {"id": "another_finance_worker", "name": "Another Finance Worker", "category": "finance"},
-                    ]
+            from mn_sdk.blueprints.authoring import write_blueprint_definition
+
+            records = [
+                ("business_worker", "Business"),
+                ("finance_worker", "Finance"),
+                ("another_finance_worker", "finance"),
+            ]
+            for blueprint_id, category in records:
+                write_blueprint_definition(
+                    repo / blueprint_id,
+                    {
+                        "id": blueprint_id,
+                        "name": blueprint_id,
+                        "workflow": {"steps": [{"id": "run"}]},
+                        "agents": {},
+                        "runtime": {},
+                        "metadata": {"category": category},
+                    },
                 )
-            )
+            (repo / "index.json").write_text(json.dumps([record[0] for record in records]))
 
             repo_root, blueprints = load_blueprint_catalog(
                 SimpleNamespace(
@@ -971,8 +1080,10 @@ class TestBlueprintServices(unittest.TestCase):
                     )
                 )
 
-        self.assertEqual(raised.exception.status_code, 500)
-        self.assertEqual(raised.exception.detail, "blueprint repo index.json must be a list")
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertEqual(
+            raised.exception.detail, "index.json: index.json must be an ordered list of blueprint folder paths"
+        )
 
     def test_blueprint_bundle_root_rejects_paths_outside_repo(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -994,16 +1105,18 @@ class TestBlueprintServices(unittest.TestCase):
             config_dir.mkdir()
             (payloads / "input.txt").write_bytes(b"hello")
             (config_dir / "default.json").write_text(
-                json.dumps({
-                    "identity": {"blueprint_id": "worker_one"},
-                    "vl_model": {"model": "default"},
-                    "manifest_config_bindings": [
-                        {
-                            "config_path": "vl_model.model",
-                            "manifest_path": "agents.nodes.worker.config.environment.CUSTOM_MODEL",
-                        }
-                    ],
-                })
+                json.dumps(
+                    {
+                        "identity": {"blueprint_id": "worker_one"},
+                        "vl_model": {"model": "default"},
+                        "manifest_config_bindings": [
+                            {
+                                "config_path": "vl_model.model",
+                                "manifest_path": "agents.nodes.worker.config.environment.CUSTOM_MODEL",
+                            }
+                        ],
+                    }
+                )
             )
             (config_dir / "overwrite.json").write_text(json.dumps({"vl_model": {"model": "overwrite"}}))
             (bundle / "manifest.json").write_text(
@@ -1013,12 +1126,14 @@ class TestBlueprintServices(unittest.TestCase):
                         "kind": "Workflow",
                         "id": "test-workflow",
                         "contract": {},
-                        "agents": {"nodes": [
-                            {
-                                "node_id": "worker",
-                                "config": {"environment": {"MN_LLM_MODEL": "ollama/test"}},
-                            }
-                        ]},
+                        "agents": {
+                            "nodes": [
+                                {
+                                    "node_id": "worker",
+                                    "config": {"environment": {"MN_LLM_MODEL": "ollama/test"}},
+                                }
+                            ]
+                        },
                         "runtime": {},
                         "metadata": "replace-me",
                     }
@@ -1057,7 +1172,11 @@ class TestBlueprintServices(unittest.TestCase):
             (bundle / "manifest.json").write_text(
                 json.dumps(
                     {
-                        "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "runtime": {},
+                        "apiVersion": "mn.workflow/v1",
+                        "kind": "Workflow",
+                        "id": "test-workflow",
+                        "contract": {},
+                        "runtime": {},
                         "workflow": {
                             "workflow_id": "worker_one_v2",
                             "steps": [{"id": "review", "run": "review"}],
@@ -1068,14 +1187,17 @@ class TestBlueprintServices(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch.object(
-                blueprints_module,
-                "prepare_manifest_submission",
-                wraps=blueprints_module.prepare_manifest_submission,
-            ) as shared_prepare, patch.object(
-                blueprints_module,
-                "prepare_job_submission",
-                side_effect=fake_prepare_job_submission,
+            with (
+                patch.object(
+                    blueprints_module,
+                    "prepare_manifest_submission",
+                    wraps=blueprints_module.prepare_manifest_submission,
+                ) as shared_prepare,
+                patch.object(
+                    blueprints_module,
+                    "prepare_job_submission",
+                    side_effect=fake_prepare_job_submission,
+                ),
             ):
                 manifest_json, _payloads = load_blueprint_bundle(
                     repo.resolve(),
@@ -1101,8 +1223,8 @@ class TestBlueprintServices(unittest.TestCase):
             cluster_client=None,
             **_kwargs,
         ):
-            observed["path"] = os.environ.get("PATH")
-            observed["docker_bin"] = os.environ.get("MN_DOCKER_BIN")
+            observed["path"] = _kwargs["env"].get("PATH")
+            observed["docker_bin"] = _kwargs["env"].get("MN_DOCKER_BIN")
             observed["cluster_client"] = cluster_client
             return SimpleNamespace(manifest_json=json.dumps(manifest), payloads=payloads)
 
@@ -1117,34 +1239,43 @@ class TestBlueprintServices(unittest.TestCase):
                         "kind": "Workflow",
                         "id": "test-workflow",
                         "contract": {},
-                        "agents": {"nodes": [
-                            {
-                                "node_id": "worker",
-                                "config": {"runner_module": "MirrorNeuron.Runner.DockerWorker"},
-                            }
-                        ], "edges": []},
+                        "agents": {
+                            "nodes": [
+                                {
+                                    "node_id": "worker",
+                                    "config": {"runner_module": "MirrorNeuron.Runner.DockerWorker"},
+                                }
+                            ],
+                            "edges": [],
+                        },
                         "runtime": {},
                     }
                 ),
                 encoding="utf-8",
             )
 
-            with patch.dict(os.environ, {"PATH": "/api/bin"}, clear=True), patch.object(
-                blueprints_module,
-                "runtime_process_environment",
-                return_value={"PATH": "/docker/bin:/api/bin", "MN_DOCKER_BIN": "/docker/bin/docker"},
-            ), patch.object(
-                blueprints_module,
-                "prepare_job_submission",
-                side_effect=fake_prepare_job_submission,
-            ), patch.object(
-                state.client,
-                "get_resource",
-                return_value=_single_node_resource_report(),
-            ), patch.object(
-                state.client,
-                "get_system_summary",
-                return_value=_single_node_resource_report(),
+            with (
+                patch.dict(os.environ, {"PATH": "/api/bin"}, clear=True),
+                patch.object(
+                    blueprints_module,
+                    "runtime_process_environment",
+                    return_value={"PATH": "/docker/bin:/api/bin", "MN_DOCKER_BIN": "/docker/bin/docker"},
+                ),
+                patch.object(
+                    blueprints_module,
+                    "prepare_job_submission",
+                    side_effect=fake_prepare_job_submission,
+                ),
+                patch.object(
+                    state.client,
+                    "get_resource",
+                    return_value=_single_node_resource_report(),
+                ),
+                patch.object(
+                    state.client,
+                    "get_system_summary",
+                    return_value=_single_node_resource_report(),
+                ),
             ):
                 _manifest_json, _payload_bytes = load_blueprint_bundle(
                     repo.resolve(),
@@ -1157,7 +1288,7 @@ class TestBlueprintServices(unittest.TestCase):
                 self.assertEqual(os.environ.get("PATH"), "/api/bin")
                 self.assertNotIn("MN_DOCKER_BIN", os.environ)
 
-        self.assertEqual(observed["path"], "/docker/bin:/api/bin")
+        self.assertTrue(observed["path"].startswith("/docker/bin:/api/bin"))
         self.assertEqual(observed["docker_bin"], "/docker/bin/docker")
         self.assertIs(observed["cluster_client"], state.client)
         self.assertEqual(observed["message"], "Preparing DockerWorker runtime.")
@@ -1167,6 +1298,7 @@ class TestBlueprintServices(unittest.TestCase):
     def test_load_blueprint_bundle_preserves_requested_single_node_owner(self):
         owner = "mirror_neuron@10.0.4.26"
         local = "mirror_neuron@10.0.4.23"
+
         def node(name, is_self):
             return {
                 "name": name,
@@ -1208,9 +1340,7 @@ class TestBlueprintServices(unittest.TestCase):
                             "nodes": [
                                 {
                                     "node_id": "worker",
-                                    "config": {
-                                        "runner_module": "MirrorNeuron.Runner.DockerWorker"
-                                    },
+                                    "config": {"runner_module": "MirrorNeuron.Runner.DockerWorker"},
                                 }
                             ]
                         },
@@ -1219,14 +1349,16 @@ class TestBlueprintServices(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch.object(
-                blueprints_module,
-                "prepare_job_submission",
-                side_effect=lambda manifest, payloads, **_kwargs: SimpleNamespace(
-                    manifest_json=json.dumps(manifest), payloads=payloads
+            with (
+                patch.object(
+                    blueprints_module,
+                    "prepare_job_submission",
+                    side_effect=lambda manifest, payloads, **_kwargs: SimpleNamespace(
+                        manifest_json=json.dumps(manifest), payloads=payloads
+                    ),
                 ),
-            ), patch.object(state.client, "get_resource", return_value=report), patch.object(
-                state.client, "get_system_summary", return_value=report
+                patch.object(state.client, "get_resource", return_value=report),
+                patch.object(state.client, "get_system_summary", return_value=report),
             ):
                 manifest_json, _payloads = load_blueprint_bundle(
                     repo.resolve(),
@@ -1239,9 +1371,7 @@ class TestBlueprintServices(unittest.TestCase):
         placement = manifest["metadata"]["mn_workflow_placement"]
         self.assertEqual(placement["selected_node"], owner)
         for workflow_node in manifest["flow"]["nodes"]:
-            self.assertEqual(
-                workflow_node["policies"]["scheduler"]["preferred_node"], owner
-            )
+            self.assertEqual(workflow_node["policies"]["scheduler"]["preferred_node"], owner)
 
     def test_load_blueprint_bundle_prepares_hostlocal_python_environment(self):
         observed = {}
@@ -1267,70 +1397,77 @@ class TestBlueprintServices(unittest.TestCase):
                         "kind": "Workflow",
                         "id": "test-workflow",
                         "contract": {},
-                        "agents": {"nodes": [
-                            {
-                                "node_id": "worker",
-                                "config": {
-                                    "runner_module": "MirrorNeuron.Runner.HostLocal",
-                                    "python_environment": {
-                                        "packages": ["fastapi>=0.115"],
-                                        "requirements": "worker/requirements.txt",
+                        "agents": {
+                            "nodes": [
+                                {
+                                    "node_id": "worker",
+                                    "config": {
+                                        "runner_module": "MirrorNeuron.Runner.HostLocal",
+                                        "python_environment": {
+                                            "packages": ["fastapi>=0.115"],
+                                            "requirements": "worker/requirements.txt",
+                                        },
                                     },
-                                },
-                            }
-                        ]},
+                                }
+                            ]
+                        },
                         "runtime": {"placement": {"mode": "distributed"}},
                     }
                 ),
                 encoding="utf-8",
             )
 
-            with patch.object(
-                blueprints_module,
-                "call_prepare_runtime_model",
-                side_effect=fake_prepare_runtime_model,
-            ), patch.object(
-                blueprints_module,
-                "hostlocal_runtime_client",
-                return_value=object(),
-            ), patch.object(
-                state.client,
-                "get_resource",
-                return_value=json.dumps(
-                    {
-                        "nodes": [
-                            {
-                                "name": "worker-a",
-                                "status": "healthy",
-                                "scheduling_eligible": True,
-                                "coordination_store": {
-                                    "identity": "test-store",
-                                    "writable_primary": True,
-                                    "healthy": True,
-                                },
-                            }
-                        ]
-                    }
+            with (
+                patch.object(
+                    blueprints_module,
+                    "call_prepare_runtime_model",
+                    side_effect=fake_prepare_runtime_model,
                 ),
-            ), patch.object(
-                state.client,
-                "get_system_summary",
-                return_value=json.dumps(
-                    {
-                        "nodes": [
-                            {
-                                "name": "worker-a",
-                                "status": "healthy",
-                                "scheduling_eligible": True,
-                                "self": True,
-                                "coordination_store": {
-                                    "identity": "test-store",
-                                    "writable_primary": True,
-                                    "healthy": True,
-                                },
-                            }
-                        ]
-                    }
+                patch.object(
+                    blueprints_module,
+                    "hostlocal_runtime_client",
+                    return_value=object(),
+                ),
+                patch.object(
+                    state.client,
+                    "get_resource",
+                    return_value=json.dumps(
+                        {
+                            "nodes": [
+                                {
+                                    "name": "worker-a",
+                                    "status": "healthy",
+                                    "scheduling_eligible": True,
+                                    "coordination_store": {
+                                        "identity": "test-store",
+                                        "writable_primary": True,
+                                        "healthy": True,
+                                    },
+                                }
+                            ]
+                        }
+                    ),
+                ),
+                patch.object(
+                    state.client,
+                    "get_system_summary",
+                    return_value=json.dumps(
+                        {
+                            "nodes": [
+                                {
+                                    "name": "worker-a",
+                                    "status": "healthy",
+                                    "scheduling_eligible": True,
+                                    "self": True,
+                                    "coordination_store": {
+                                        "identity": "test-store",
+                                        "writable_primary": True,
+                                        "healthy": True,
+                                    },
+                                }
+                            ]
+                        }
+                    ),
                 ),
             ):
                 manifest_json, _payloads = load_blueprint_bundle(
@@ -1421,16 +1558,18 @@ class TestBlueprintServices(unittest.TestCase):
                         "kind": "Workflow",
                         "id": "test-workflow",
                         "contract": {},
-                        "agents": {"nodes": [
-                            {
-                                "node_id": "worker",
-                                "config": {
-                                    "runner_module": "MirrorNeuron.Runner.DockerWorker",
-                                    "docker_worker_image": "docker_worker",
-                                    "image": "mirror-neuron/vc-assistant:test",
-                                },
-                            }
-                        ]},
+                        "agents": {
+                            "nodes": [
+                                {
+                                    "node_id": "worker",
+                                    "config": {
+                                        "runner_module": "MirrorNeuron.Runner.DockerWorker",
+                                        "docker_worker_image": "docker_worker",
+                                        "image": "mirror-neuron/vc-assistant:test",
+                                    },
+                                }
+                            ]
+                        },
                         "runtime": {},
                         "agent_dependencies": [
                             {
@@ -1445,24 +1584,29 @@ class TestBlueprintServices(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch.dict(
-                os.environ,
-                {
-                    "MN_USE_LOCAL_SKILLS": "1",
-                    "MN_AGENTS_ROOT": str(agents_root),
-                },
-            ), patch.object(
-                blueprints_module,
-                "prepare_job_submission",
-                side_effect=fake_prepare_job_submission,
-            ), patch.object(
-                state.client,
-                "get_resource",
-                return_value=_single_node_resource_report(),
-            ), patch.object(
-                state.client,
-                "get_system_summary",
-                return_value=_single_node_resource_report(),
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "MN_USE_LOCAL_SKILLS": "1",
+                        "MN_AGENTS_ROOT": str(agents_root),
+                    },
+                ),
+                patch.object(
+                    blueprints_module,
+                    "prepare_job_submission",
+                    side_effect=fake_prepare_job_submission,
+                ),
+                patch.object(
+                    state.client,
+                    "get_resource",
+                    return_value=_single_node_resource_report(),
+                ),
+                patch.object(
+                    state.client,
+                    "get_system_summary",
+                    return_value=_single_node_resource_report(),
+                ),
             ):
                 load_blueprint_bundle(
                     repo.resolve(),
@@ -1475,10 +1619,7 @@ class TestBlueprintServices(unittest.TestCase):
         local = manifest["metadata"]["mn_local_skill_dependencies"]
         self.assertIn("mn-prototype-stateful-step-agent", local["packages"])
         payloads = observed["payloads"]
-        staged_prefix = (
-            "docker_worker/__mn_skill_dependencies/local/"
-            "prototype_stateful_step_agent"
-        )
+        staged_prefix = "docker_worker/__mn_skill_dependencies/local/prototype_stateful_step_agent"
         self.assertIn(f"{staged_prefix}/pyproject.toml", payloads)
         self.assertIn(
             "/tmp/mn-skill-runtime/local/prototype_stateful_step_agent",
@@ -1517,28 +1658,33 @@ class TestBlueprintServices(unittest.TestCase):
                         "kind": "Workflow",
                         "id": "test-workflow",
                         "contract": {},
-                        "agents": {"nodes": [
-                            {
-                                "node_id": "worker",
-                                "config": {
-                                    "runner_module": "MirrorNeuron.Runner.HostLocal",
-                                    "environment": {},
-                                },
-                            }
-                        ]},
+                        "agents": {
+                            "nodes": [
+                                {
+                                    "node_id": "worker",
+                                    "config": {
+                                        "runner_module": "MirrorNeuron.Runner.HostLocal",
+                                        "environment": {},
+                                    },
+                                }
+                            ]
+                        },
                         "runtime": {},
                     }
                 )
             )
 
-            with patch.object(
-                state.client,
-                "get_resource",
-                return_value=_single_node_resource_report(),
-            ), patch.object(
-                state.client,
-                "get_system_summary",
-                return_value=_single_node_resource_report(),
+            with (
+                patch.object(
+                    state.client,
+                    "get_resource",
+                    return_value=_single_node_resource_report(),
+                ),
+                patch.object(
+                    state.client,
+                    "get_system_summary",
+                    return_value=_single_node_resource_report(),
+                ),
             ):
                 manifest_json, _payload_bytes = load_blueprint_bundle(
                     repo.resolve(),
@@ -1589,12 +1735,14 @@ class TestBlueprintServices(unittest.TestCase):
                         "kind": "Workflow",
                         "id": "test-workflow",
                         "contract": {},
-                        "agents": {"nodes": [
-                            {
-                                "node_id": "document_intake_agent",
-                                "config": {"environment": {}},
-                            }
-                        ]},
+                        "agents": {
+                            "nodes": [
+                                {
+                                    "node_id": "document_intake_agent",
+                                    "config": {"environment": {}},
+                                }
+                            ]
+                        },
                         "runtime": {},
                         "metadata": {},
                     }
@@ -1620,7 +1768,11 @@ class TestBlueprintServices(unittest.TestCase):
         injected_config = json.loads(env["MN_BLUEPRINT_CONFIG_JSON"])
         expected_input = "/runtime/shared/submissions"
         self.assertTrue(injected_config["tax_documents"]["folder_path"].startswith(expected_input))
-        self.assertTrue(injected_config["tax_documents"]["folder_path"].endswith("/inputs/tax_workflow/mn_local_inputs/tax_documents"))
+        self.assertTrue(
+            injected_config["tax_documents"]["folder_path"].endswith(
+                "/inputs/tax_workflow/mn_local_inputs/tax_documents"
+            )
+        )
         self.assertEqual(
             injected_config["inputs"]["payload"]["document_folder"],
             injected_config["tax_documents"]["folder_path"],
@@ -1661,23 +1813,27 @@ class TestBlueprintServices(unittest.TestCase):
             sandbox.mkdir(parents=True)
             (sandbox / "Dockerfile").write_text("FROM alpine\n")
             (bundle / "manifest.json").write_text(
-                json.dumps({
-                    "apiVersion": "mn.workflow/v1",
-                    "kind": "Workflow",
-                    "id": "test-workflow",
-                    "contract": {},
-                    "agents": {"nodes": [
-                        {
-                            "node_id": "worker",
-                            "config": {
-                                "runner_module": "MirrorNeuron.Sandbox.OpenShell",
-                                "custom_openshell_image": "worker/openshell_sandbox",
-                            },
-                        }
-                    ]},
-                    "runtime": {},
-                    "metadata": {},
-                })
+                json.dumps(
+                    {
+                        "apiVersion": "mn.workflow/v1",
+                        "kind": "Workflow",
+                        "id": "test-workflow",
+                        "contract": {},
+                        "agents": {
+                            "nodes": [
+                                {
+                                    "node_id": "worker",
+                                    "config": {
+                                        "runner_module": "MirrorNeuron.Sandbox.OpenShell",
+                                        "custom_openshell_image": "worker/openshell_sandbox",
+                                    },
+                                }
+                            ]
+                        },
+                        "runtime": {},
+                        "metadata": {},
+                    }
+                )
             )
             calls = []
 
@@ -1713,12 +1869,14 @@ class TestBlueprintServices(unittest.TestCase):
                         "kind": "Workflow",
                         "id": "test-workflow",
                         "contract": {},
-                        "agents": {"nodes": [
-                            {
-                                "node_id": "worker",
-                                "config": {"environment": {}},
-                            }
-                        ]},
+                        "agents": {
+                            "nodes": [
+                                {
+                                    "node_id": "worker",
+                                    "config": {"environment": {}},
+                                }
+                            ]
+                        },
                         "runtime": {},
                     }
                 )
@@ -1748,8 +1906,19 @@ class TestBlueprintServices(unittest.TestCase):
                     config_dir.mkdir(parents=True)
                     (config_dir / "default.json").write_text(json.dumps({"vl_model": {"model": "default"}}))
                     (config_dir / "overwrite.json").write_text(payload)
-                    (bundle / "manifest.json").write_text(json.dumps({
-                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {}, "runtime": {},"nodes": []}))
+                    (bundle / "manifest.json").write_text(
+                        json.dumps(
+                            {
+                                "apiVersion": "mn.workflow/v1",
+                                "kind": "Workflow",
+                                "id": "test-workflow",
+                                "contract": {},
+                                "agents": {},
+                                "runtime": {},
+                                "nodes": [],
+                            }
+                        )
+                    )
 
                     with self.assertRaises(HTTPException) as raised:
                         load_blueprint_bundle(
@@ -1791,12 +1960,14 @@ class TestBlueprintServices(unittest.TestCase):
                         "kind": "Workflow",
                         "id": "test-workflow",
                         "contract": {},
-                        "agents": {"nodes": [
-                            {
-                                "node_id": "worker",
-                                "config": {"environment": {"CUSTOM_MODEL": "keep"}},
-                            }
-                        ]},
+                        "agents": {
+                            "nodes": [
+                                {
+                                    "node_id": "worker",
+                                    "config": {"environment": {"CUSTOM_MODEL": "keep"}},
+                                }
+                            ]
+                        },
                         "runtime": {},
                     }
                 )
@@ -1852,10 +2023,14 @@ class TestBlueprintServices(unittest.TestCase):
                 proc.wait(timeout=5)
                 self.assertTrue(_pid_exists(child_pid), "spawned child exited before cleanup")
 
-                (run_dir / "pre_launch_process.json").write_text(json.dumps({
-                    "pid": process_info["parent_pid"],
-                    "process_group_id": process_group_id,
-                }))
+                (run_dir / "pre_launch_process.json").write_text(
+                    json.dumps(
+                        {
+                            "pid": process_info["parent_pid"],
+                            "process_group_id": process_group_id,
+                        }
+                    )
+                )
 
                 cleanup_run_process(run_dir, "pre_launch_process.json")
 
@@ -1912,15 +2087,22 @@ class TestBlueprintServices(unittest.TestCase):
                 info = json.loads(marker.read_text())
                 port = int(info["port"])
                 self.assertTrue(_port_accepts_connection(port), "test listener did not accept connections")
-                (run_dir / "post_launch_state.json").write_text(json.dumps({
-                    "server_pid": int(info["pid"]),
-                    "rtsp_port": port,
-                }))
+                (run_dir / "post_launch_state.json").write_text(
+                    json.dumps(
+                        {
+                            "server_pid": int(info["pid"]),
+                            "rtsp_port": port,
+                        }
+                    )
+                )
 
-                with patch.dict(os.environ, {
-                    "MN_RUNS_ROOT": str(runs_root),
-                    "MN_PROCESS_CLEANUP_TIMEOUT_SECONDS": "1",
-                }):
+                with patch.dict(
+                    os.environ,
+                    {
+                        "MN_RUNS_ROOT": str(runs_root),
+                        "MN_PROCESS_CLEANUP_TIMEOUT_SECONDS": "1",
+                    },
+                ):
                     cleanup_blueprint_run_processes("run-port-listener", reason="test")
 
                 self.assertTrue(
@@ -2041,6 +2223,7 @@ def test_custom_model_api_prepares_selected_remote_node():
     assert result["endpoint"]["api_base"] == "http://192.168.4.128:4000/v1"
     assert result["endpoint"]["source"] == "remote_litellm_gateway"
 
+
 def test_launch_model_policy_is_deferred_without_installing(monkeypatch):
     with tempfile.TemporaryDirectory() as tmpdir:
         repo = Path(tmpdir)
@@ -2050,7 +2233,11 @@ def test_launch_model_policy_is_deferred_without_installing(monkeypatch):
         (bundle / "manifest.json").write_text(
             json.dumps(
                 {
-                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {},
+                    "apiVersion": "mn.workflow/v1",
+                    "kind": "Workflow",
+                    "id": "test-workflow",
+                    "contract": {},
+                    "agents": {},
                     "runtime": {
                         "models": {
                             "primary": {
@@ -2082,9 +2269,12 @@ def test_launch_model_policy_is_deferred_without_installing(monkeypatch):
                 }
             ]
         }
-        with patch("mn_api.blueprints.install_model_entry") as install, patch(
-            "mn_api.blueprints.runtime_resource_report",
-            return_value=resource_report,
+        with (
+            patch("mn_api.blueprints.install_model_entry") as install,
+            patch(
+                "mn_api.blueprints.runtime_resource_report",
+                return_value=resource_report,
+            ),
         ):
             summary = defer_blueprint_runtime_models(
                 repo,
@@ -2114,7 +2304,11 @@ def test_launch_model_policy_keeps_provider_default_out_of_managed_dmr(tmp_path,
     (bundle / "manifest.json").write_text(
         json.dumps(
             {
-                "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {},
+                "apiVersion": "mn.workflow/v1",
+                "kind": "Workflow",
+                "id": "test-workflow",
+                "contract": {},
+                "agents": {},
                 "config": {"manifest_defaults": ["llm"]},
                 "llm": {
                     "model": "default",
@@ -2160,7 +2354,11 @@ def test_launch_model_policy_skips_runtime_models_for_fake_llm():
         (bundle / "manifest.json").write_text(
             json.dumps(
                 {
-                    "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "test-workflow", "contract": {}, "agents": {},
+                    "apiVersion": "mn.workflow/v1",
+                    "kind": "Workflow",
+                    "id": "test-workflow",
+                    "contract": {},
+                    "agents": {},
                     "runtime": {
                         "models": {
                             "primary": {
@@ -2229,8 +2427,7 @@ def test_run_launch_preflight_prepares_models_and_routes_them_before_submission(
     monkeypatch.setattr(
         blueprint_routes,
         "install_blueprint_runtime_models",
-        lambda *args, **kwargs: install_calls.append({"args": args, "kwargs": kwargs})
-        or prepared_summary,
+        lambda *args, **kwargs: install_calls.append({"args": args, "kwargs": kwargs}) or prepared_summary,
     )
     monkeypatch.setattr(
         blueprint_routes,
@@ -2265,9 +2462,7 @@ def test_run_launch_preflight_prepares_models_and_routes_them_before_submission(
 
 
 def test_default_llm_alias_requires_the_active_profile_to_be_default():
-    assert blueprints_module.blueprint_requests_default_llm(
-        {"llm": {"model": "default"}}
-    )
+    assert blueprints_module.blueprint_requests_default_llm({"llm": {"model": "default"}})
     assert not blueprints_module.blueprint_requests_default_llm(
         {
             "llm": {

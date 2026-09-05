@@ -11,6 +11,7 @@ for parent in Path(__file__).resolve().parents:
         sys.path.insert(0, str(sdk_path))
         break
 
+from mn_sdk.blueprints.limits import MAX_PACKAGE_BYTES
 from mn_sdk.blueprint_source import resolve_blueprint_source_config
 from mn_sdk.runtime_config import RuntimeConfig
 from mn_sdk.config.types import MISSING
@@ -36,6 +37,7 @@ class ApiConfig:
     blueprint_repo: str
     blueprint_local: str
     active_blueprint_location: str
+    blueprint_upload_limit_bytes: int = MAX_PACKAGE_BYTES
 
     @classmethod
     def from_env(
@@ -73,6 +75,12 @@ class ApiConfig:
                 runtime_env=runtime_env,
                 default=5 * 1024 * 1024,
             ),
+            blueprint_upload_limit_bytes=config_int(
+                "MN_API_BLUEPRINT_UPLOAD_LIMIT_BYTES",
+                source=source,
+                runtime_env=runtime_env,
+                default=MAX_PACKAGE_BYTES,
+            ),
             cors_allow_origins=config_list(
                 "MN_API_CORS_ALLOW_ORIGINS",
                 source=source,
@@ -98,6 +106,8 @@ class ApiConfig:
             raise ConfigError("MN_API_PORT must be between 1 and 65535")
         if self.request_size_limit_bytes <= 0:
             raise ConfigError("MN_API_REQUEST_SIZE_LIMIT_BYTES must be > 0")
+        if not 0 < self.blueprint_upload_limit_bytes <= MAX_PACKAGE_BYTES:
+            raise ConfigError(f"MN_API_BLUEPRINT_UPLOAD_LIMIT_BYTES must be between 1 and {MAX_PACKAGE_BYTES}")
         if self.prod and not self.api_token:
             raise ConfigError("MN_API_TOKEN is required when MN_ENV=prod or MN_ENV=production")
         if self.blueprint_source not in {"github", "local"}:

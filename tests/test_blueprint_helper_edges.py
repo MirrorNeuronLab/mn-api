@@ -87,7 +87,7 @@ def test_load_blueprint_catalog_rejects_non_list_index(tmp_path):
     with pytest.raises(HTTPException) as error:
         blueprints.load_blueprint_catalog(config)
 
-    assert error.value.detail == "blueprint repo index.json must be a list"
+    assert error.value.detail == "index.json: index.json must be an ordered list of blueprint folder paths"
 
 
 def test_normalize_blueprint_categories_and_filtering(tmp_path):
@@ -111,7 +111,10 @@ def test_normalize_blueprint_categories_and_filtering(tmp_path):
         encoding="utf-8",
     )
     categories = blueprints.load_blueprint_categories(tmp_path, [normalized])
-    assert categories == [{"name": "Finance", "slug": "finance-ops", "count": 0}, {"name": "Finance", "slug": "finance", "count": 1}]
+    assert categories == [
+        {"name": "Finance", "slug": "finance-ops", "count": 0},
+        {"name": "Finance", "slug": "finance", "count": 1},
+    ]
     assert blueprints.filter_blueprints_by_category([normalized], "finance") == [normalized]
     assert blueprints.filter_blueprints_by_category([normalized], "sales") == []
 
@@ -142,7 +145,14 @@ def test_blueprint_bundle_root_and_validation_reject_bad_paths(tmp_path):
 
 def test_validation_output_parsers(monkeypatch, tmp_path):
     monkeypatch.setattr("mn_api.blueprints.mn_base_command", lambda: ["mn"])
-    assert blueprints.mn_validate_command(tmp_path) == ["mn", "blueprint", "validate", str(tmp_path), "--output", "json"]
+    assert blueprints.mn_validate_command(tmp_path) == [
+        "mn",
+        "blueprint",
+        "validate",
+        str(tmp_path),
+        "--output",
+        "json",
+    ]
     assert blueprints.clean_validation_output("\x1b[31m bad \x1b[0m") == "bad"
     assert blueprints.parse_validation_json('prefix {"ok": true, "value": 1} suffix') == {"ok": True, "value": 1}
     assert blueprints.parse_validation_json("[1]") is None
@@ -233,7 +243,9 @@ def test_run_dir_blueprint_matching_and_mapping_helpers(monkeypatch, tmp_path):
     (run_dir / "post_launch_hook.json").write_text(json.dumps({"bundle_dir": str(bundle_root)}), encoding="utf-8")
     assert blueprints.run_dir_matches_blueprint(run_dir, blueprint_id="bp", bundle_root=bundle_root.resolve()) is True
 
-    monkeypatch.setattr("mn_api.blueprints.time.time", lambda: run_dir.stat().st_mtime + blueprints.UNMAPPED_RUN_STALE_SECONDS + 1)
+    monkeypatch.setattr(
+        "mn_api.blueprints.time.time", lambda: run_dir.stat().st_mtime + blueprints.UNMAPPED_RUN_STALE_SECONDS + 1
+    )
     assert blueprints.unmapped_run_dir_is_stale(run_dir) is True
 
 
@@ -270,11 +282,17 @@ def test_manifest_config_and_environment_helpers(monkeypatch, tmp_path):
     )
     assert manifest["agents"]["nodes"][0]["config"]["enabled"] == "true"
 
-    node_env = {"PYTHONPATH": "b", "MN_LLM_PROVIDER": "docker_model_runner", "MN_LLM_API_BASE": "http://localhost:12434/v1"}
+    node_env = {
+        "PYTHONPATH": "b",
+        "MN_LLM_PROVIDER": "docker_model_runner",
+        "MN_LLM_API_BASE": "http://localhost:12434/v1",
+    }
     blueprints.inject_node_environment(manifest, node_env)
     environment = manifest["agents"]["nodes"][0]["config"]["environment"]
     assert environment["PYTHONPATH"] == os.pathsep.join(["a", "b"])
     assert "host.docker.internal" in environment["MN_LLM_API_BASE"] or "localhost" not in environment["MN_LLM_API_BASE"]
+
+
 def test_config_loading_and_json_helpers(tmp_path):
     bundle = tmp_path / "bundle"
     (bundle / "config").mkdir(parents=True)

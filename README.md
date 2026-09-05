@@ -35,6 +35,28 @@ Explicit model-install endpoints remain eager and unchanged.
 
 ## Quick Start
 
+### Observe a long submission
+
+Send a unique `X-Launch-Progress-ID` header with `POST /api/v1/jobs` or
+`POST /api/v1/blueprints/{blueprint_id}/runs`. While that request is pending,
+poll `GET /api/v1/launch-progress/{progress_id}` from another connection, using
+the same bearer authentication as other API requests. Use the same progress ID
+when replaying a request with its `Idempotency-Key`.
+
+The snapshot contains `status`, `completed`, `current_phase`, `latest`, `phases`,
+and up to 200 recent `events`. It starts as `pending` until the API records work.
+Preparation reports dependency resolution, model import, sandbox images, payload
+staging, Python environments, and Docker worker readiness. Long stages refresh
+their detail every ten seconds with elapsed time. Elapsed time is not a
+completion estimate. No build logs, configuration, or secret values are added.
+
+Submission keeps its existing synchronous response and status code. Progress is
+observational: disconnecting a poll does not cancel submission, and a failed
+request status does not prove Core rejected the job. Check the original response
+and job state before retrying an uncertain submission.
+
+### Install and run
+
 Install locally and run tests:
 
 ```bash
@@ -241,3 +263,9 @@ bounded in `errors`.
   require the target job to be running.
 - Use `MN_ENV=prod` with `MN_API_TOKEN` when exposing protected endpoints.
 - `MN_RUNS_ROOT` controls where run artifacts are read from.
+
+Blueprint folders and ZIP uploads use the SDK's canonical blueprint/v1 loader.
+`MN_API_BLUEPRINT_UPLOAD_LIMIT_BYTES` caps ZIP files (default 32 GiB, the format
+maximum); extraction applies the same limit to their uncompressed contents.
+The ordinary `MN_API_REQUEST_SIZE_LIMIT_BYTES` limit continues to apply to other
+requests. Uploads validate documents without importing blueprint Python code.

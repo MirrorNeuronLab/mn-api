@@ -38,12 +38,18 @@ def parse_path(name: str, value: str) -> Path:
 
 
 API_CONFIG_KEYS: tuple[ConfigKey, ...] = (
+    ConfigKey(
+        "MN_API_BLUEPRINT_UPLOAD_LIMIT_BYTES",
+        parse_int,
+        default=str(32 * 1024**3),
+        description="Maximum blueprint ZIP upload size; at most the format-v1 32 GiB limit.",
+    ),
     ConfigKey("MN_API_LOG_PATH", parse_path, default="", description="API log file path."),
     ConfigKey(
         "MN_API_REQUEST_SIZE_LIMIT_BYTES",
         parse_int,
         default=str(5 * 1024 * 1024),
-        description="Maximum HTTP request body size.",
+        description="Maximum HTTP request body size for non-bundle requests.",
     ),
     ConfigKey(
         "MN_API_CORS_ALLOW_ORIGINS",

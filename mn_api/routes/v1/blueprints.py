@@ -16,6 +16,7 @@ from mn_api.blueprint_additions import add_catalog_blueprint, blueprint_public_p
 from mn_api.blueprints import filter_blueprints_by_category, find_blueprint, load_blueprint_catalog, refresh_blueprint_catalog
 from mn_api.contracts import API_PREFIX, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 from mn_api.dependencies import require_auth
+from mn_api.launch_progress import public_progress_snapshot
 from mn_api.operations import complete_local_operation, start_local_operation, start_operation
 from mn_api.pagination import page
 from mn_api.public import idempotent_response, public_value
@@ -28,6 +29,13 @@ router = APIRouter(prefix=API_PREFIX)
 
 def _config():
     return state.refresh_config_from_env()
+
+
+@router.get(
+    "/launch-progress/{progress_id}", operation_id="get_launch_progress", tags=["blueprints"], response_model=ResourceModel
+)
+def get_launch_progress(progress_id: str, _principal=Depends(require_auth)):
+    return public_progress_snapshot(progress_id)
 
 
 @router.get("/blueprints", operation_id="list_blueprints", tags=["blueprints"], response_model=PageResponse)
@@ -161,8 +169,10 @@ def create_blueprint_run(
     request: BlueprintRunCreate | None = None,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", max_length=255),
     principal: str = Depends(require_auth),
+    progress_id: str | None = Header(default=None, alias="X-Launch-Progress-ID", max_length=220),
 ):
     payload = request or BlueprintRunCreate()
+    progress_id = legacy_blueprints.validate_progress_id(progress_id if isinstance(progress_id, str) else None)
 
     def start():
         repo_root, blueprint = find_blueprint(_config(), blueprint_id)
@@ -178,6 +188,7 @@ def create_blueprint_run(
                 fake_skills=payload.fake_skills,
                 owner_node=payload.owner_node,
                 replace_existing_run=payload.replace_existing_run,
+                progress_id=progress_id,
             ),
         )
         run = legacy_blueprints.run_blueprint_record(repo_root, blueprint, resolved)

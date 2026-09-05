@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
+from mn_api.launch_progress import launch_activity
+
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -242,21 +243,6 @@ def docker_cli_runtime_environment(base_env: Dict[str, str] | None = None) -> Di
         env["MN_DOCKER_BIN"] = docker_bin
     env["PATH"] = path
     return env
-
-
-@contextmanager
-def temporary_process_environment(env: Dict[str, str]):
-    updates = {str(key): str(value) for key, value in env.items() if value is not None}
-    previous = {key: os.environ.get(key) for key in updates}
-    os.environ.update(updates)
-    try:
-        yield
-    finally:
-        for key, value in previous.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
 
 
 def ensure_runtime_modules_for_submission(
@@ -626,15 +612,9 @@ def blueprint_requests_default_llm(config: dict[str, Any]) -> bool:
     llm = config.get("llm") if isinstance(config.get("llm"), dict) else {}
     config_name = str(llm.get("default_config") or "primary")
     configs = llm.get("configs") if isinstance(llm.get("configs"), dict) else {}
-    primary = (
-        configs.get(config_name) if isinstance(configs.get(config_name), dict) else {}
-    )
+    primary = configs.get(config_name) if isinstance(configs.get(config_name), dict) else {}
     active_model = str(
-        primary.get("runtime_model")
-        or primary.get("model")
-        or llm.get("runtime_model")
-        or llm.get("model")
-        or ""
+        primary.get("runtime_model") or primary.get("model") or llm.get("runtime_model") or llm.get("model") or ""
     ).strip()
     return active_model.lower() == "default"
 
@@ -1031,11 +1011,7 @@ def prepared_model_installed_resolver(env: dict[str, str] | None):
     prepared = prepared_runtime_model_keys_from_env(env)
     if not prepared:
         return None
-    prepared_match_keys = {
-        match_key
-        for reference in prepared
-        for match_key in model_match_keys(reference)
-    }
+    prepared_match_keys = {match_key for reference in prepared for match_key in model_match_keys(reference)}
 
     def resolver(model_name: str, requirement: dict[str, Any]) -> bool:
         references = {
@@ -1044,11 +1020,7 @@ def prepared_model_installed_resolver(env: dict[str, str] | None):
             str(requirement.get("runtime_model") or "").strip(),
             str(requirement.get("name") or "").strip(),
         }
-        candidate_match_keys = {
-            match_key
-            for reference in references
-            for match_key in model_match_keys(reference)
-        }
+        candidate_match_keys = {match_key for reference in references for match_key in model_match_keys(reference)}
         if candidate_match_keys & prepared_match_keys:
             return True
         return docker_model_installed(model_name)
@@ -1161,8 +1133,7 @@ def ensure_context_engine_runtime_direct(*, force: bool = False) -> dict[str, An
     except Exception:
         return None
     try:
-        with temporary_process_environment(runtime_process_environment()):
-            summary = ensure_context_engine_runtime(force=force)
+        summary = ensure_context_engine_runtime(force=force, environment=runtime_process_environment())
     except Exception as exc:
         return {
             "name": "membrane-context-engine",
@@ -1180,45 +1151,11 @@ def local_blueprint_from_path(path: str) -> tuple[Path, Dict[str, Any]]:
     bundle_root = Path(path).expanduser().resolve()
     if not bundle_root.is_dir():
         raise HTTPException(status_code=400, detail="blueprint path is not a directory")
-    manifest_path = bundle_root / "manifest.json"
-    if not manifest_path.is_file():
-        raise HTTPException(status_code=400, detail="blueprint path must contain manifest.json")
+    from mn_sdk.blueprints import catalog_record, read_blueprint
 
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=400, detail="blueprint manifest.json is malformed") from exc
-    if not isinstance(manifest, dict):
-        raise HTTPException(status_code=400, detail="blueprint manifest.json must be an object")
-    manifest = expand_blueprint_manifest_if_source(bundle_root, manifest)
-
-    metadata = as_dict(manifest.get("metadata"))
-    identity = as_dict(manifest.get("identity"))
-    workflow_manifest = (
-        manifest.get("apiVersion") == "mn.workflow/v1"
-        or manifest.get("kind") == "Workflow"
-        or isinstance(manifest.get("workflow"), dict)
-    )
-    raw_id = (
-        metadata.get("blueprint_id")
-        or identity.get("blueprint_id")
-        or manifest.get("blueprint_id")
-        or manifest.get("id")
-        or manifest.get("workflow_id")
-        or (None if workflow_manifest else manifest.get("graph_id"))
-        or bundle_root.name
-    )
-    blueprint_id = sanitize_blueprint_id(raw_id)
-    blueprint = {
-        "id": blueprint_id,
-        "name": manifest.get("job_name") or identity.get("name") or blueprint_id,
-        "path": bundle_root.name,
-        "description": manifest.get("description") or "",
-        "category": DEFAULT_CATEGORY,
-        "category_slug": category_slug(DEFAULT_CATEGORY),
-        "source": "local_path",
-        "local_path": str(bundle_root),
-    }
+    blueprint = catalog_record(read_blueprint(bundle_root), bundle_root.name)
+    blueprint.update({"source": "local_path", "local_path": str(bundle_root)})
+    blueprint["category_slug"] = category_slug(blueprint.get("category") or DEFAULT_CATEGORY)
     return bundle_root.parent, blueprint
 
 
@@ -1351,7 +1288,10 @@ def load_blueprint_bundle(
 ) -> tuple[str, Dict[str, bytes]]:
     from mn_api import state
 
-    bundle_root = validate_blueprint_bundle(repo_root, blueprint)
+    with launch_activity(
+        progress_callback, "Read blueprint package.", "Reading and validating the blueprint and its referenced files."
+    ):
+        bundle_root = validate_blueprint_bundle(repo_root, blueprint)
     manifest_path = bundle_root / "manifest.json"
 
     try:
@@ -1373,15 +1313,20 @@ def load_blueprint_bundle(
     if blueprint.get("revision"):
         submission_metadata["blueprint_revision"] = blueprint["revision"]
 
-    shared_preparation = prepare_manifest_submission(
-        bundle_root,
-        manifest,
-        env_overrides=preparation_env,
-        submission_metadata=submission_metadata,
-        config_overrides=config_overrides,
-        runtime_environment=runtime_path_environment(),
-        read_json_object_fn=read_json_object,
-    )
+    with launch_activity(
+        progress_callback,
+        "Resolve workflow and dependencies.",
+        "Compiling the workflow, resolving configuration, and preparing declared agent and skill packages.",
+    ):
+        shared_preparation = prepare_manifest_submission(
+            bundle_root,
+            manifest,
+            env_overrides=preparation_env,
+            submission_metadata=submission_metadata,
+            config_overrides=config_overrides,
+            runtime_environment=runtime_path_environment(),
+            read_json_object_fn=read_json_object,
+        )
     manifest = shared_preparation.manifest
     runtime_env = shared_preparation.runtime_environment
     selected_runtime_node = str(preparation_env.get("MN_SELECTED_RUNTIME_NODE") or "").strip()
@@ -1402,8 +1347,20 @@ def load_blueprint_bundle(
                 "constraint_source": "mn-api-workflow-placement",
             },
         )
-    package_payload_models_for_api(bundle_root, manifest)
-    prepare_openshell_custom_images(bundle_root, manifest)
+    with launch_activity(
+        progress_callback,
+        "Prepare packaged models.",
+        "Checking and importing declared model assets into Docker Model Runner.",
+        "Large local model files can take several minutes to import.",
+    ):
+        package_payload_models_for_api(bundle_root, manifest)
+    with launch_activity(
+        progress_callback,
+        "Prepare sandbox images.",
+        "Checking or building declared OpenShell images.",
+        "A first image build can take several minutes.",
+    ):
+        prepare_openshell_custom_images(bundle_root, manifest)
 
     metadata = manifest.setdefault("metadata", {})
     if not isinstance(metadata, dict):
@@ -1451,35 +1408,52 @@ def load_blueprint_bundle(
 
     hostlocal_nodes = hostlocal_python_environment_nodes(manifest)
     if hostlocal_nodes:
-        if progress_callback:
-            progress_callback(
-                "Preparing HostLocal Python environments.",
-                "Building or reusing isolated Python environments required by local workflow services.",
-                "A first launch may take several minutes while Python packages are installed.",
+        with launch_activity(
+            progress_callback,
+            "Preparing HostLocal Python environments.",
+            "Building or reusing isolated Python environments required by local workflow services.",
+            "A first launch may take several minutes while Python packages are installed.",
+        ):
+            prepare_hostlocal_python_environments_for_submission(
+                bundle_root,
+                manifest,
+                selected_runtime_node=str(runtime_env.get("MN_SELECTED_RUNTIME_NODE") or ""),
             )
-        prepare_hostlocal_python_environments_for_submission(
-            bundle_root,
-            manifest,
-            selected_runtime_node=str(runtime_env.get("MN_SELECTED_RUNTIME_NODE") or ""),
-        )
 
-    payloads = stage_payload_assets(
-        manifest,
-        bundle_root,
-        blob_root=resolve_mn_home() / "blobs",
-    )
-    stage_blueprint_payloads_for_submission(manifest, payloads, bundle_dir=bundle_root)
-    if progress_callback and any(
+    with launch_activity(
+        progress_callback, "Stage workflow files.", "Copying and verifying payload assets and local inputs."
+    ):
+        payloads = stage_payload_assets(
+            manifest,
+            bundle_root,
+            blob_root=resolve_mn_home() / "blobs",
+        )
+    with launch_activity(
+        progress_callback,
+        "Stage runtime support.",
+        "Packaging the resolved descriptor, dependencies, and runtime helpers.",
+    ):
+        stage_blueprint_payloads_for_submission(manifest, payloads, bundle_dir=bundle_root)
+    docker_workers = any(
         str((node.get("config") or {}).get("runner_module") or "") == "MirrorNeuron.Runner.DockerWorker"
         for node in manifest_agent_nodes(manifest)
         if isinstance(node.get("config"), dict)
+    )
+    process_environment = runtime_process_environment()
+    submission_environment = {**runtime_env, **process_environment, **preparation_env}
+    submission_environment["PATH"] = sdk_merge_path_values(
+        process_environment.get("PATH", ""), runtime_env.get("PATH", "")
+    )
+    with launch_activity(
+        progress_callback,
+        "Preparing DockerWorker runtime." if docker_workers else "Preparing runtime resources.",
+        (
+            "Building or reusing the DockerWorker image and starting its shared container."
+            if docker_workers
+            else "Preparing declared storage, services, and worker environments."
+        ),
+        "The first launch can take several minutes while runtime dependencies are installed. Keep Docker running.",
     ):
-        progress_callback(
-            "Preparing DockerWorker runtime.",
-            "Building or reusing the DockerWorker image and starting its shared container.",
-            "The first launch can take several minutes while runtime dependencies are installed. Keep Docker running.",
-        )
-    with temporary_process_environment(runtime_process_environment()):
         prepared = prepare_job_submission(
             manifest,
             payloads,
@@ -1488,7 +1462,7 @@ def load_blueprint_bundle(
             job_id=stable_job_id,
             submission_id=submission_id,
             cluster_client=state.client,
-            env={**os.environ, **runtime_env},
+            env=submission_environment,
         )
 
     return prepared.manifest_json, prepared.payloads
@@ -1760,10 +1734,9 @@ def stage_blueprint_payloads_for_submission(
     *,
     bundle_dir: Path,
 ) -> None:
-    stage_upload_path_payloads_for_manifest(manifest, payloads, bundle_dir=bundle_dir)
-    stage_blueprint_support_payloads_for_manifest(manifest, payloads, bundle_dir=bundle_dir)
-    sdk_stage_skill_runtime_payloads_for_manifest(manifest, payloads, bundle_dir=bundle_dir)
-    stage_skill_dependency_payloads_for_manifest(manifest, payloads, bundle_dir=bundle_dir)
+    from mn_sdk.blueprints.payloads import stage_submission_payloads
+
+    stage_submission_payloads(manifest, payloads, bundle_dir=bundle_dir)
 
 
 def strip_docker_model_runner_placement_requirements_for_submission(

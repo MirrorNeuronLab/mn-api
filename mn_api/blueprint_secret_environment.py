@@ -5,6 +5,8 @@ import re
 from typing import Any, Mapping
 
 from fastapi import HTTPException
+from mn_sdk.blueprints.secrets import executable_manifest_nodes
+from mn_sdk.blueprints.secrets import inject_declared_secret_environment as _inject_secret_environment
 
 
 SECRET_ENV_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]{0,127}$")
@@ -35,11 +37,7 @@ def declared_pass_environment_names(value: Any) -> set[str]:
     if isinstance(value, Mapping):
         pass_env = value.get("pass_env")
         if isinstance(pass_env, list):
-            names.update(
-                str(name).strip()
-                for name in pass_env
-                if SECRET_ENV_NAME_PATTERN.fullmatch(str(name).strip())
-            )
+            names.update(str(name).strip() for name in pass_env if SECRET_ENV_NAME_PATTERN.fullmatch(str(name).strip()))
         for nested in value.values():
             names.update(declared_pass_environment_names(nested))
     elif isinstance(value, list):
@@ -60,48 +58,13 @@ def validate_blueprint_secret_environment(manifest: Mapping[str, Any], environme
         )
 
 
-def executable_manifest_nodes(manifest: Mapping[str, Any]) -> list[dict[str, Any]]:
-    agents = manifest.get("agents") if isinstance(manifest.get("agents"), Mapping) else {}
-    flow = manifest.get("flow") if isinstance(manifest.get("flow"), Mapping) else {}
-    candidates = [flow.get("nodes"), agents.get("nodes"), agents.get("extra_nodes")]
-    nodes: list[dict[str, Any]] = []
-    seen: set[int] = set()
-    for candidate in candidates:
-        if not isinstance(candidate, list):
-            continue
-        for node in candidate:
-            if isinstance(node, dict) and id(node) not in seen:
-                nodes.append(node)
-                seen.add(id(node))
-    return nodes
 
 
 def inject_declared_secret_environment(manifest_json: str, environment: Mapping[str, str]) -> str:
-    if not environment:
-        return manifest_json
-    manifest = json.loads(manifest_json)
-    injected: set[str] = set()
-    for node in executable_manifest_nodes(manifest):
-        config = node.get("config")
-        if not isinstance(config, dict):
-            continue
-        pass_env = config.get("pass_env")
-        if not isinstance(pass_env, list):
-            continue
-        declared = {str(name).strip() for name in pass_env}
-        selected = {name: value for name, value in environment.items() if name in declared}
-        if not selected:
-            continue
-        node_environment = config.setdefault("environment", {})
-        if not isinstance(node_environment, dict):
-            raise HTTPException(status_code=422, detail="A declared worker environment is invalid.")
-        node_environment.update(selected)
-        injected.update(selected)
-    missing = sorted(set(environment) - injected)
-    if missing:
-        joined = ", ".join(missing)
-        raise HTTPException(status_code=422, detail=f"Secret environment values have no executable worker: {joined}.")
-    return json.dumps(manifest, separators=(",", ":"))
+    try:
+        return _inject_secret_environment(manifest_json, environment)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 def manifest_without_secret_environment(manifest_json: str, environment: Mapping[str, str]) -> dict[str, Any]:

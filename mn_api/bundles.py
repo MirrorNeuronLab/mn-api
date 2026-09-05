@@ -2,9 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 import secrets
+import shutil
+import tempfile
 from typing import Any
 
 from fastapi import HTTPException, UploadFile
+from mn_sdk.blueprints import BlueprintError, read_blueprint
+from mn_sdk.blueprints.limits import MAX_PACKAGE_BYTES
 from mn_sdk.bundle_io import (
     DEFAULT_RAG_NAMESPACE,
     RAG_EXPORT_SCHEMA_VERSION,
@@ -14,7 +18,6 @@ from mn_sdk.bundle_io import (
     extract_zip_to_dir,
     find_bundle_root,
     first_string,
-    load_bundle_manifest,
     load_uploaded_bundle as sdk_load_uploaded_bundle,
     rag_db_sidecar_suffix,
     resolved_rag_db_path,
@@ -29,32 +32,40 @@ def _bundle_http_exception(exc: BundleError) -> HTTPException:
     return HTTPException(status_code=exc.status_code, detail=exc.detail)
 
 
-async def save_uploaded_bundle(bundle: UploadFile, upload_root: Path) -> dict[str, Any]:
+async def save_uploaded_bundle(
+    bundle: UploadFile, upload_root: Path, *, max_bytes: int = MAX_PACKAGE_BYTES
+) -> dict[str, Any]:
     if not bundle.filename or not bundle.filename.lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="bundle must be a .zip file")
 
+    max_bytes = min(max_bytes, MAX_PACKAGE_BYTES)
     upload_root.mkdir(parents=True, exist_ok=True)
     bundle_id = secrets.token_urlsafe(24)
     target_dir = upload_root / bundle_id
     target_dir.mkdir(mode=0o700)
-    archive_path = target_dir / "bundle.zip"
-    archive_path.write_bytes(await bundle.read())
-
     try:
-        extract_zip_to_dir(archive_path, target_dir)
-        archive_path.unlink(missing_ok=True)
+        size = 0
+        # Transport bytes live outside the package namespace: an authored asset
+        # may itself be named bundle.zip without colliding with this upload.
+        with tempfile.NamedTemporaryFile(dir=upload_root, prefix=".upload-", suffix=".zip") as archive:
+            while chunk := await bundle.read(1024 * 1024):
+                size += len(chunk)
+                if size > max_bytes:
+                    raise HTTPException(status_code=413, detail=f"Blueprint upload exceeds the {max_bytes} byte limit.")
+                archive.write(chunk)
+            archive.flush()
+            extract_zip_to_dir(Path(archive.name), target_dir)
         bundle_root = find_bundle_root(target_dir)
-        manifest_path = bundle_root / "manifest.json"
-        payloads_path = bundle_root / "payloads"
-        if not manifest_path.is_file() or not payloads_path.is_dir():
-            raise HTTPException(
-                status_code=400,
-                detail="bundle zip must contain manifest.json and payloads/",
-            )
-        manifest = load_bundle_manifest(bundle_root)
-        restore_exported_rag_db(bundle_root, manifest=manifest)
+        read_blueprint(bundle_root)
+    except BlueprintError as exc:
+        shutil.rmtree(target_dir)
+        raise HTTPException(status_code=400, detail={"errors": [issue.to_dict() for issue in exc.issues]}) from exc
     except BundleError as exc:
+        shutil.rmtree(target_dir)
         raise _bundle_http_exception(exc) from exc
+    except BaseException:
+        shutil.rmtree(target_dir)
+        raise
 
     return {"bundle_id": bundle_id}
 
@@ -63,6 +74,8 @@ def load_uploaded_bundle(bundle_id: str, upload_root: Path) -> tuple[str, dict[s
     target_dir = uploaded_bundle_root(bundle_id, upload_root)
     try:
         return sdk_load_uploaded_bundle(str(target_dir), upload_root)
+    except BlueprintError as exc:
+        raise HTTPException(status_code=400, detail={"errors": [issue.to_dict() for issue in exc.issues]}) from exc
     except BundleError as exc:
         raise _bundle_http_exception(exc) from exc
 

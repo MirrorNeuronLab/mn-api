@@ -5,6 +5,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from mn_api import state
 from mn_api.config import auth_enabled
+from mn_api.contracts import API_PREFIX
 from mn_api.errors import problem_response
 
 
@@ -22,12 +23,16 @@ async def enforce_request_size(request: Request, call_next):
             request_id=str(getattr(request.state, "request_id", "")),
         )
 
-    if request_size > state.config.request_size_limit_bytes:
+    limit = state.config.request_size_limit_bytes
+    if request.method == "POST" and request.url.path.rstrip("/") == f"{API_PREFIX}/bundles":
+        # Permit multipart framing in addition to the separately enforced file cap.
+        limit = state.config.blueprint_upload_limit_bytes + 1024 * 1024
+    if request_size > limit:
         return problem_response(
             status_code=413,
             error="request_too_large",
             title="Request too large",
-            detail=f"The request exceeds the {state.config.request_size_limit_bytes} byte limit.",
+            detail=f"The request exceeds the {limit} byte limit.",
             instance=request.url.path,
             request_id=str(getattr(request.state, "request_id", "")),
         )
@@ -41,6 +46,10 @@ def require_auth(credentials: HTTPAuthorizationCredentials | None = Security(_be
     if not auth_enabled(state.config):
         return "anonymous"
 
-    if credentials is None or credentials.scheme.lower() != "bearer" or credentials.credentials != state.config.api_token:
+    if (
+        credentials is None
+        or credentials.scheme.lower() != "bearer"
+        or credentials.credentials != state.config.api_token
+    ):
         raise HTTPException(status_code=401, detail="missing or invalid bearer token")
     return "authenticated"

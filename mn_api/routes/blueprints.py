@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from mn_api.launch_progress import launch_activity, progress_reporter
+
 from dataclasses import dataclass
 import hashlib
 import json
@@ -14,7 +16,6 @@ from typing import Any
 from fastapi import Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from mn_sdk import (
-    cleanup_job_definition_resources,
     cleanup_blueprint_resources,
     generate_job_definition_submission_id,
     generate_stable_job_id,
@@ -30,7 +31,6 @@ from mn_api import state
 from mn_api.blueprints import (
     active_job_ids_from_jobs_payload,
     create_blueprint_run_id,
-    expand_blueprint_manifest_if_source,
     filter_blueprints_by_category,
     find_blueprint,
     install_blueprint_runtime_models,
@@ -63,7 +63,13 @@ from mn_api.config import config_value
 from mn_api.dependencies import require_auth
 from mn_api.errors import handle_grpc_error, validation_problem_response
 from mn_api.path_utils import resolve_mn_home
-from mn_api.schemas import BlueprintCleanupRequest, BlueprintLaunchRequest, BlueprintRunRequest, BlueprintUninstallRequest, BlueprintUpdateRequest
+from mn_api.schemas import (
+    BlueprintCleanupRequest,
+    BlueprintLaunchRequest,
+    BlueprintRunRequest,
+    BlueprintUninstallRequest,
+    BlueprintUpdateRequest,
+)
 
 
 PROGRESS_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,220}$")
@@ -274,8 +280,7 @@ def launch_progress_snapshot(progress_id: str) -> dict[str, Any]:
     ids = launch_progress_identifiers(events)
     error = launch_progress_error(events)
     completed = any(
-        event.get("phase") == "launch"
-        and str(event.get("status") or "").lower() in TERMINAL_LAUNCH_PROGRESS_STATUSES
+        event.get("phase") == "launch" and str(event.get("status") or "").lower() in TERMINAL_LAUNCH_PROGRESS_STATUSES
         for event in events
     )
     response = {
@@ -729,7 +734,11 @@ def uninstall_blueprint_models(
     removed: list[str] = []
     kept: list[str] = []
     if keep_models:
-        return {"orphaned": orphaned, "removed": removed, "kept": [model_name_from_record(record) for record in orphaned]}
+        return {
+            "orphaned": orphaned,
+            "removed": removed,
+            "kept": [model_name_from_record(record) for record in orphaned],
+        }
     for record in orphaned:
         model = model_name_from_record(record)
         if not model:
@@ -752,7 +761,11 @@ def projected_orphaned_models(blueprint_id: str) -> list[dict[str, Any]]:
             continue
         owners = dict(record.get("owners") or {})
         owners.pop(blueprint_id, None)
-        if owners or record.get("manual") or str(record.get("provider") or "docker_model_runner") != "docker_model_runner":
+        if (
+            owners
+            or record.get("manual")
+            or str(record.get("provider") or "docker_model_runner") != "docker_model_runner"
+        ):
             continue
         projected = dict(record)
         projected["owners"] = {}
@@ -893,7 +906,9 @@ def run_blueprint_record(
             detail="A local helper failed before the runtime job could be submitted.",
             severity="error",
         )
-        record_launch_progress(progress_id, "launch", "failed", "Blueprint launch failed during pre-launch.", {"run_id": run_id})
+        record_launch_progress(
+            progress_id, "launch", "failed", "Blueprint launch failed during pre-launch.", {"run_id": run_id}
+        )
         raise
     record_launch_progress(
         progress_id,
@@ -930,7 +945,9 @@ def run_blueprint_record(
                 detail="A runtime, model, input, or launch config check failed.",
                 severity="error",
             )
-            record_launch_progress(progress_id, "launch", "failed", "Blueprint launch stopped during validation.", {"run_id": run_id})
+            record_launch_progress(
+                progress_id, "launch", "failed", "Blueprint launch stopped during validation.", {"run_id": run_id}
+            )
             return validation_problem_response(
                 validation,
                 status_code=422,
@@ -993,30 +1010,16 @@ def run_blueprint_record(
         prepared_metadata = prepared_manifest.get("metadata", {})
         prepared_runtime = prepared_manifest.get("runtime", {})
         metadata_placement = (
-            prepared_metadata.get("mn_workflow_placement", {})
-            if isinstance(prepared_metadata, dict)
-            else {}
+            prepared_metadata.get("mn_workflow_placement", {}) if isinstance(prepared_metadata, dict) else {}
         )
-        runtime_placement = (
-            prepared_runtime.get("placement", {})
-            if isinstance(prepared_runtime, dict)
-            else {}
-        )
+        runtime_placement = prepared_runtime.get("placement", {}) if isinstance(prepared_runtime, dict) else {}
         prepared_placement = (
-            metadata_placement
-            if isinstance(metadata_placement, dict) and metadata_placement
-            else runtime_placement
+            metadata_placement if isinstance(metadata_placement, dict) and metadata_placement else runtime_placement
         )
-        prepared_owner_node = str(
-            prepared_placement.get("selected_node") or ""
-        )
+        prepared_owner_node = str(prepared_placement.get("selected_node") or "")
         if not prepared_owner_node and isinstance(prepared_metadata, dict):
             docker_workers = prepared_metadata.get("mn_docker_workers", {})
-            docker_services = (
-                docker_workers.get("services", [])
-                if isinstance(docker_workers, dict)
-                else []
-            )
+            docker_services = docker_workers.get("services", []) if isinstance(docker_workers, dict) else []
             docker_owner_nodes = {
                 str(service.get("node") or "").strip()
                 for service in docker_services
@@ -1037,7 +1040,9 @@ def run_blueprint_record(
             detail="The job bundle could not be prepared for submission.",
             severity="error",
         )
-        record_launch_progress(progress_id, "launch", "failed", "Blueprint launch failed while preparing the bundle.", {"run_id": run_id})
+        record_launch_progress(
+            progress_id, "launch", "failed", "Blueprint launch failed while preparing the bundle.", {"run_id": run_id}
+        )
         raise
     except Exception as exc:
         cleanup_blueprint_run_processes(run_id, reason="manifest_prepare_failed")
@@ -1051,7 +1056,9 @@ def run_blueprint_record(
             detail="The job bundle could not be prepared for submission.",
             severity="error",
         )
-        record_launch_progress(progress_id, "launch", "failed", "Blueprint launch failed while preparing the bundle.", {"run_id": run_id})
+        record_launch_progress(
+            progress_id, "launch", "failed", "Blueprint launch failed while preparing the bundle.", {"run_id": run_id}
+        )
         raise
     record_launch_progress(
         progress_id,
@@ -1073,29 +1080,25 @@ def run_blueprint_record(
             label="Submit runtime job",
             detail="Handing the prepared job bundle to MirrorNeuron core.",
         )
-        if not req.job_id:
-            created = json.loads(
-                state.client.create_job(
-                    manifest_json,
-                    payloads,
-                    job_id=stable_job_id,
-                    resolved_configuration=config_overrides,
-                    owner_node=owner_node,
-                )
-            )
-            stable_job_id = str(created["job_id"])
-            definition_committed = True
-        else:
-            state.client.update_job(
-                stable_job_id,
-                {"resolved_configuration": config_overrides}
-                if config_overrides
-                else {},
-                manifest_json=manifest_json,
-                payloads=payloads,
+        from mn_sdk.blueprints.submission import submit
+        from mn_sdk.submission import PreparedSubmission
+
+        with launch_activity(
+            progress_reporter(progress_id, "submit"),
+            "Submitting job to the runtime.",
+            "Waiting for the runtime to acknowledge the prepared definition.",
+        ):
+            created = submit(
+                PreparedSubmission(manifest_json, payloads, {}),
+                client=state.client,
+                job_id=stable_job_id,
+                resolved_configuration=config_overrides,
+                owner_node=owner_node,
+                update_existing=bool(req.job_id),
                 replace_existing_run=bool(req.replace_existing_run),
             )
-            definition_committed = True
+        stable_job_id = str(created.get("job_id") or stable_job_id)
+        definition_committed = True
         started = json.loads(
             state.client.start_run(
                 stable_job_id,
@@ -1136,7 +1139,9 @@ def run_blueprint_record(
             label="Submit runtime job",
             detail="The runtime accepted the job and live monitoring can begin.",
         )
-        record_launch_progress(progress_id, "launch", "completed", "Launch complete.", {"run_id": execution_id, "job_id": stable_job_id})
+        record_launch_progress(
+            progress_id, "launch", "completed", "Launch complete.", {"run_id": execution_id, "job_id": stable_job_id}
+        )
         return {
             "job_id": stable_job_id,
             "id": execution_id,
@@ -1150,15 +1155,12 @@ def run_blueprint_record(
             "progress_url": None,
         }
     except Exception as exc:
-        if "submission_id" in locals() and not definition_committed:
-            try:
-                cleanup_job_definition_resources(manifest_json)
-            except Exception:
-                state.logger.exception(
-                    "failed to clean prepared DockerWorker definition after launch failure",
-                    extra={"submission_id": submission_id},
-                )
-        cleanup_blueprint_run_processes(run_id, reason="launch_failed")
+        from mn_sdk.blueprints.submission import SubmissionUncertainError
+
+        # A lost acknowledgement may have started work. Preserve resources and
+        # host services until the durable job/run can be reconciled.
+        if not definition_committed and not isinstance(exc, SubmissionUncertainError):
+            cleanup_blueprint_run_processes(run_id, reason="launch_failed")
         record_launch_progress(
             progress_id,
             "submit",
@@ -1166,10 +1168,12 @@ def run_blueprint_record(
             str(exc),
             {"run_id": run_id},
             label="Submit runtime job",
-            detail="The runtime did not accept the job bundle.",
+            detail="The submission did not return a confirmed result. Check the job before retrying.",
             severity="error",
         )
-        record_launch_progress(progress_id, "launch", "failed", "Blueprint launch failed during submit.", {"run_id": run_id})
+        record_launch_progress(
+            progress_id, "launch", "failed", "Blueprint launch failed during submit.", {"run_id": run_id}
+        )
         return handle_grpc_error(exc)
 
 
@@ -1208,7 +1212,11 @@ def resolve_launch_source(req: BlueprintLaunchRequest) -> dict:
         manifest = json.loads(manifest_json)
         bundle_root = Path(req.bundle_path).expanduser().resolve()
         workflow = manifest.get("workflow") if isinstance(manifest.get("workflow"), dict) else {}
-        workflow_manifest = manifest.get("apiVersion") == "mn.workflow/v1" or manifest.get("kind") == "Workflow" or isinstance(manifest.get("workflow"), dict)
+        workflow_manifest = (
+            manifest.get("apiVersion") == "mn.workflow/v1"
+            or manifest.get("kind") == "Workflow"
+            or isinstance(manifest.get("workflow"), dict)
+        )
         blueprint_id = sanitize_blueprint_id(
             manifest.get("id")
             or manifest.get("blueprint_id")
@@ -1238,13 +1246,9 @@ def resolve_launch_source(req: BlueprintLaunchRequest) -> dict:
 
 
 def read_manifest_for_launch(bundle_root: Path) -> dict:
-    try:
-        manifest = json.loads((bundle_root / "manifest.json").read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    if not isinstance(manifest, dict):
-        return {}
-    return expand_blueprint_manifest_if_source(bundle_root, manifest)
+    from mn_sdk.blueprints import blueprint_definition, read_blueprint
+
+    return blueprint_definition(read_blueprint(bundle_root))
 
 
 def validate_progress_id(progress_id: str | None) -> str | None:
@@ -1635,9 +1639,7 @@ def run_launch_preflight(
     env_patch = model_install.get("env") if isinstance(model_install.get("env"), dict) else {}
     env_overrides = {str(key): str(value) for key, value in env_patch.items() if value is not None}
     config_patch = (
-        model_install.get("config_overrides")
-        if isinstance(model_install.get("config_overrides"), dict)
-        else {}
+        model_install.get("config_overrides") if isinstance(model_install.get("config_overrides"), dict) else {}
     )
     return LaunchPreflight(
         model_install=model_install,
@@ -1649,17 +1651,12 @@ def run_launch_preflight(
 
 def single_hardware_owner_node(validation: dict[str, Any]) -> str:
     matching_sets = [
-        {
-            str(node).strip()
-            for node in result.get("matching_nodes", [])
-            if str(node).strip()
-        }
+        {str(node).strip() for node in result.get("matching_nodes", []) if str(node).strip()}
         for result in validation.get("results", [])
         if isinstance(result, dict)
         and result.get("type") == "hardware_requirement"
         and isinstance(result.get("requirement"), dict)
-        and str(result["requirement"].get("enforcement") or "hard").lower()
-        == "hard"
+        and str(result["requirement"].get("enforcement") or "hard").lower() == "hard"
     ]
     if not matching_sets:
         return ""
@@ -1712,7 +1709,9 @@ def model_install_problem_response(
     for item in model_install.get("models") or []:
         if str(item.get("status") or "") != "failed":
             continue
-        message = str(item.get("error") or f"Could not install {item.get('model') or item.get('id') or 'runtime model'}")
+        message = str(
+            item.get("error") or f"Could not install {item.get('model') or item.get('id') or 'runtime model'}"
+        )
         issues.append(
             {
                 "code": "runtime_model_install_failed",
@@ -1764,9 +1763,7 @@ def model_install_problem_response(
 
 def runtime_active_jobs_payload() -> object | None:
     try:
-        return json.loads(
-            state.client.list_jobs(include_archived=False, page_size=500)
-        )
+        return json.loads(state.client.list_jobs(include_archived=False, page_size=500))
     except Exception:
         return None
 

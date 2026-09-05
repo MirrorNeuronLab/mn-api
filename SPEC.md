@@ -49,6 +49,15 @@ model placement algorithms, blueprint domain behavior, or the browser UI.
 
 ## Interface Contract
 
+Job creation and blueprint-run requests accept the optional observation header
+`X-Launch-Progress-ID`. Authenticated `GET /api/v1/launch-progress/{progress_id}`
+exposes presentation-only snapshots while the existing synchronous request is
+pending. The view excludes configuration, validation payloads, and raw failure
+diagnostics; it retains at most 200 recent events. Blocking preparation stages
+refresh their current description and elapsed time every ten seconds. Reporting
+threads end with the wrapped call and never execute, retry, or cancel a job.
+No artificial completion percentage is inferred from elapsed time.
+
 - Every REST path is rooted at `/api/v1`. `/api/v2`, historical aliases,
   runtime-run paths, and WebSocket routes are not mounted.
 - `GET /api/v1/health` advertises `api_contract: "mirrorneuron.rest.v1"`.
@@ -212,3 +221,20 @@ python -m build
 The test configuration requires at least 85 percent branch coverage. Live
 system behavior belongs in cross-repository system tests; this repository's
 normal suite must remain deterministic and dependency-injected.
+
+
+## Canonical blueprint packages
+
+All blueprint folders and ZIPs use the blueprint/v1 manifest schema and role
+documents owned by `mn_sdk.blueprints`. Catalog indexes contain ordered package
+paths only. Catalog reads are data-only; explicit compilation produces Core's
+runtime manifest. Default configuration, local overwrites, and invocation
+values resolve through the SDK. Payload assembly stages one resolved descriptor;
+launch environment is passed explicitly. Confirmed failure permits owned
+resource rollback; uncertain submission acknowledgements require reconciliation.
+See `mn-docs/blueprint-standard.md` for document ownership and extension schemas.
+
+Blueprint uploads have a separate configurable file-size limit, capped by the
+SDK format-v1 maximum of 32 GiB. Multipart framing has a 1 MiB allowance. Other
+requests retain the ordinary HTTP body-size policy. Upload files and extracted
+contents are independently checked before a package can be launched.
