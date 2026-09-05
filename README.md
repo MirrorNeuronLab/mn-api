@@ -57,6 +57,8 @@ and job state before retrying an uncertain submission.
 
 ### Install and run
 
+Requires `mirrorneuron-python-sdk>1.3,<2.0`.
+
 Install locally and run tests:
 
 ```bash
