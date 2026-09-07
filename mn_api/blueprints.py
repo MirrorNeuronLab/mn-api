@@ -138,7 +138,7 @@ from mn_sdk.skill_runtime import (
 )
 from mn_sdk.skill_dependencies import skill_dependency_package_names
 from mn_sdk.submission_preparation import (
-    ensure_blueprint_support_sdk_build_context_uploads,
+    ensure_sdk_build_context_uploads,
     inject_skill_dependency_python_environments,
     inject_localized_hostlocal_python_environments,
     localize_agent_dependencies_for_dev,
@@ -149,7 +149,7 @@ from mn_sdk.submission_preparation import (
     prepare_manifest_submission,
     refresh_embedded_blueprint_config,
     release_skill_dependency_runtime_environment,
-    stage_blueprint_support_payloads_for_manifest,
+    stage_sdk_payloads_for_manifest,
     stage_skill_dependency_payloads_for_manifest,
     stage_upload_path_payloads_for_manifest,
     strip_docker_model_runner_placement_requirements,
@@ -1691,10 +1691,10 @@ def prepare_skill_runtime_for_submission(
     )
 
 
-def ensure_blueprint_support_sdk_build_context_uploads_for_submission(
+def ensure_sdk_build_context_uploads_for_submission(
     manifest: dict[str, Any],
 ) -> dict[str, Any]:
-    return ensure_blueprint_support_sdk_build_context_uploads(manifest)
+    return ensure_sdk_build_context_uploads(manifest)
 
 
 def refresh_embedded_blueprint_config_for_submission(

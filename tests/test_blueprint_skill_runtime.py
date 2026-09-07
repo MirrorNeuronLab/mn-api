@@ -43,8 +43,8 @@ def test_stage_blueprint_payloads_uses_sdk_for_skill_runtime(monkeypatch, tmp_pa
     )
     monkeypatch.setattr(
         __import__("mn_sdk.submission_preparation", fromlist=["stage_upload_path_payloads_for_manifest"]),
-        "stage_blueprint_support_payloads_for_manifest",
-        stage("stage_blueprint_support_payloads_for_manifest"),
+        "stage_sdk_payloads_for_manifest",
+        stage("stage_sdk_payloads_for_manifest"),
     )
     monkeypatch.setattr(
         __import__("mn_sdk.submission_preparation", fromlist=["stage_upload_path_payloads_for_manifest"]),
@@ -58,7 +58,7 @@ def test_stage_blueprint_payloads_uses_sdk_for_skill_runtime(monkeypatch, tmp_pa
 
     assert [call[0] for call in calls] == [
         "stage_upload_path_payloads_for_manifest",
-        "stage_blueprint_support_payloads_for_manifest",
+        "stage_sdk_payloads_for_manifest",
         "sdk_skill_runtime",
         "stage_skill_dependency_payloads_for_manifest",
     ]

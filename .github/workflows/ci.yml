@@ -97,24 +97,29 @@ jobs:
           fi
 
           if [[ "$GITHUB_REPOSITORY" == "MirrorNeuronLab/mn-api" || "$GITHUB_REPOSITORY" == "MirrorNeuronLab/mn-cli" ]]; then
-            python -m pip install "mirrorneuron-python-sdk @ git+https://github.com/MirrorNeuronLab/mn-python-sdk.git"
+            sdk_commit="$(git ls-remote https://github.com/MirrorNeuronLab/mn-python-sdk.git HEAD | cut -f1)"
+            python -m pip install \
+              "mn-python-sdk-common @ git+https://github.com/MirrorNeuronLab/mn-python-sdk.git@${sdk_commit}#subdirectory=packages/common" \
+              "mn-python-sdk-web-ui @ git+https://github.com/MirrorNeuronLab/mn-python-sdk.git@${sdk_commit}#subdirectory=packages/web-ui" \
+              "mirrorneuron-python-sdk @ git+https://github.com/MirrorNeuronLab/mn-python-sdk.git@${sdk_commit}"
           fi
 
-          if [[ "$GITHUB_REPOSITORY" == "MirrorNeuronLab/mn-api" ]]; then
-            python -m pip install \
-              --index-url https://us-central1-python.pkg.dev/mirrorneuron-public-packages/agent-skills/simple/ \
-              --extra-index-url https://pypi.org/simple \
-              "mirrorneuron-blueprint-support-skill>=1.2.1,<2"
-          fi
 
           if [[ "$GITHUB_REPOSITORY" == "MirrorNeuronLab/mn-blueprints" ]]; then
-            python -m pip install "mirrorneuron-python-sdk @ git+https://github.com/MirrorNeuronLab/mn-python-sdk.git"
-            python -m pip install "mirrorneuron-blueprint-support-skill @ git+https://github.com/MirrorNeuronLab/mn-skills.git#subdirectory=blueprint_support_skill"
+            sdk_commit="$(git ls-remote https://github.com/MirrorNeuronLab/mn-python-sdk.git HEAD | cut -f1)"
+            python -m pip install \
+              "mn-python-sdk-common @ git+https://github.com/MirrorNeuronLab/mn-python-sdk.git@${sdk_commit}#subdirectory=packages/common" \
+              "mn-python-sdk-web-ui @ git+https://github.com/MirrorNeuronLab/mn-python-sdk.git@${sdk_commit}#subdirectory=packages/web-ui" \
+              "mirrorneuron-python-sdk @ git+https://github.com/MirrorNeuronLab/mn-python-sdk.git@${sdk_commit}"
           fi
 
           if [[ "$GITHUB_REPOSITORY" == "MirrorNeuronLab/mn-system-tests" ]]; then
             python -m pip install pytest pytest-cov requests
-            python -m pip install "mirrorneuron-python-sdk @ git+https://github.com/MirrorNeuronLab/mn-python-sdk.git"
+            sdk_commit="$(git ls-remote https://github.com/MirrorNeuronLab/mn-python-sdk.git HEAD | cut -f1)"
+            python -m pip install \
+              "mn-python-sdk-common @ git+https://github.com/MirrorNeuronLab/mn-python-sdk.git@${sdk_commit}#subdirectory=packages/common" \
+              "mn-python-sdk-web-ui @ git+https://github.com/MirrorNeuronLab/mn-python-sdk.git@${sdk_commit}#subdirectory=packages/web-ui" \
+              "mirrorneuron-python-sdk @ git+https://github.com/MirrorNeuronLab/mn-python-sdk.git@${sdk_commit}"
             python -m pip install "mirrorneuron-cli @ git+https://github.com/MirrorNeuronLab/mn-cli.git"
           elif [[ -f requirements.txt && "${{ steps.detect.outputs.has_python_package }}" != "true" ]]; then
             python -m pip install -r requirements.txt
