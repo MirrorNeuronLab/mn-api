@@ -33,6 +33,7 @@ from mn_api.blueprints import (
     load_blueprint_catalog,
     model_match_keys,
     model_service_tags,
+    record_prevalidated_command_rules,
     runtime_blueprint_environment_overrides,
     validate_run_id,
 )
@@ -1160,6 +1161,48 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertEqual(env["CUSTOM_MODEL"], "overwrite")
         self.assertEqual(env["MN_LLM_MODEL"], "ollama/test")
         self.assertEqual(payload_bytes, {"nested/input.txt": b"hello"})
+
+    def test_records_and_removes_prevalidated_command_rules_before_core_submission(self):
+        manifest = {
+            "input_validation": {
+                "rules": [
+                    {"name": "video_source_validate", "type": "command", "command": ["check.py"]},
+                    {"name": "job_name", "type": "pattern", "path": "job_name", "pattern": "^cctv-"},
+                ]
+            }
+        }
+        report = {
+            "ok": True,
+            "results": [
+                {
+                    "ok": True,
+                    "type": "command",
+                    "rule": {"name": "video_source_validate", "type": "command", "index": 0},
+                },
+                {
+                    "ok": True,
+                    "type": "pattern",
+                    "rule": {"name": "job_name", "type": "pattern", "index": 1},
+                },
+            ],
+        }
+
+        record_prevalidated_command_rules(manifest, report)
+
+        self.assertEqual(
+            manifest["input_validation"]["rules"],
+            [{"name": "job_name", "type": "pattern", "path": "job_name", "pattern": "^cctv-"}],
+        )
+        self.assertEqual(
+            manifest["metadata"]["mn_validation"]["input_validation"],
+            {
+                "status": "passed",
+                "validator": "mn-api",
+                "prevalidated_command_rules": [
+                    {"name": "video_source_validate", "type": "command", "index": 0}
+                ],
+            },
+        )
 
     def test_load_blueprint_bundle_uses_shared_sdk_manifest_preparation(self):
         def fake_prepare_job_submission(manifest, payloads, **_kwargs):
