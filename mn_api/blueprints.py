@@ -1380,6 +1380,37 @@ def load_blueprint_bundle(
     if blueprint.get("revision"):
         submission_metadata["blueprint_revision"] = blueprint["revision"]
 
+    # Match the CLI launch order: validate the expanded source manifest while
+    # its declared skill dependencies are still present. Dependency
+    # localization performed below may replace those declarations with staged
+    # runtime payloads, but command validators still need the declarations to
+    # construct their local import environment.
+    input_validation_report = None
+    if validate_inputs and not force:
+        validation_manifest = expand_blueprint_manifest_if_source(
+            bundle_root,
+            json.loads(json.dumps(manifest)),
+        )
+        resolve_blueprint_payload_contract(validation_manifest, bundle_root)
+        validation_config = load_blueprint_config(
+            bundle_root,
+            config_overrides=config_overrides,
+        )
+        validation_env = blueprint_runtime_environment(
+            bundle_root,
+            config=validation_config,
+            config_overrides=config_overrides,
+        )
+        validation_env.update(preparation_env)
+        input_validation_report = run_input_validation(
+            bundle_root,
+            validation_manifest,
+            config=validation_config,
+            env=validation_env,
+        )
+        if not input_validation_report.get("ok"):
+            raise HTTPException(status_code=422, detail=input_validation_report)
+
     with launch_activity(
         progress_callback,
         "Resolve workflow and dependencies.",
@@ -1396,15 +1427,7 @@ def load_blueprint_bundle(
         )
     manifest = shared_preparation.manifest
     runtime_env = shared_preparation.runtime_environment
-    if validate_inputs and not force:
-        input_validation_report = run_input_validation(
-            bundle_root,
-            manifest,
-            config=shared_preparation.resolved_config,
-            env={**runtime_env, **preparation_env},
-        )
-        if not input_validation_report.get("ok"):
-            raise HTTPException(status_code=422, detail=input_validation_report)
+    if input_validation_report is not None:
         record_prevalidated_command_rules(manifest, input_validation_report)
     selected_runtime_node = str(preparation_env.get("MN_SELECTED_RUNTIME_NODE") or "").strip()
     placement_mode = workflow_placement_mode(manifest, env=preparation_env)

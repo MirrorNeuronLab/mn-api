@@ -419,6 +419,7 @@ def test_job_configuration_and_run_overrides_reprepare_catalog_definition(monkey
             "blueprint_id": "worker-1",
             "status": "active",
             "revision": 1,
+            "owner_node": "mirror_neuron@gpu-node",
             "resolved_configuration": {"worker": {"mode": "saved"}},
         }),
     )
@@ -446,6 +447,10 @@ def test_job_configuration_and_run_overrides_reprepare_catalog_definition(monkey
     assert update_call[3]["manifest_json"] == '{"graph_id":"prepared-catalog"}'
     assert update_call[3]["payloads"] == {"payload": b"ready"}
     assert prepared[-1][3]["stable_job_id"] == "job-1"
+    assert prepared[-1][3]["validate_inputs"] is False
+    assert prepared[-1][3]["env_overrides"] == {
+        "MN_SELECTED_RUNTIME_NODE": "mirror_neuron@gpu-node",
+    }
 
     started = client.post(
         "/api/v1/jobs/job-1/runs",
@@ -460,6 +465,10 @@ def test_job_configuration_and_run_overrides_reprepare_catalog_definition(monkey
     assert run_update[2]["resolved_configuration"] == {
         "worker": {"mode": "saved"},
         "execution": {"quick_test": True},
+    }
+    assert prepared[-1][3]["validate_inputs"] is True
+    assert prepared[-1][3]["env_overrides"] == {
+        "MN_SELECTED_RUNTIME_NODE": "mirror_neuron@gpu-node",
     }
     start_call = [call for call in runtime.calls if call[0] == "start_run"][-1]
     assert start_call[2]["inputs"] == {}

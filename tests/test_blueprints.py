@@ -1215,6 +1215,87 @@ class TestBlueprintServices(unittest.TestCase):
         manifest = json.loads(manifest_json)
         self.assertNotIn("mn_validation", manifest["metadata"])
 
+    def test_load_blueprint_bundle_validates_before_skill_dependencies_are_localized(self):
+        observed = {}
+        validation_report = {
+            "ok": True,
+            "results": [
+                {
+                    "ok": True,
+                    "type": "command",
+                    "rule": {"name": "video_source_validate", "type": "command", "index": 0},
+                }
+            ],
+        }
+
+        def validate(_bundle_root, manifest, **_kwargs):
+            observed["skill_dependencies"] = manifest.get("skill_dependencies")
+            return validation_report
+
+        def prepare_manifest(_bundle_root, manifest, **_kwargs):
+            prepared = json.loads(json.dumps(manifest))
+            prepared["skill_dependencies"] = []
+            return SimpleNamespace(manifest=prepared, runtime_environment={}, resolved_config={})
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            bundle = repo / "worker_one"
+            bundle.mkdir()
+            (bundle / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "apiVersion": "mn.workflow/v1",
+                        "kind": "Workflow",
+                        "id": "test-workflow",
+                        "contract": {},
+                        "runtime": {"placement": {"mode": "distributed"}},
+                        "agents": {"nodes": []},
+                        "skill_dependencies": [
+                            {"name": "mirrorneuron-live-video-analysis-skill", "source": "gar"}
+                        ],
+                        "input_validation": {
+                            "rules": [
+                                {
+                                    "name": "video_source_validate",
+                                    "type": "command",
+                                    "command": ["validate_video_source.py"],
+                                }
+                            ]
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with (
+                patch.object(blueprints_module, "run_input_validation", side_effect=validate),
+                patch.object(blueprints_module, "prepare_manifest_submission", side_effect=prepare_manifest),
+                patch.object(
+                    blueprints_module,
+                    "prepare_job_submission",
+                    side_effect=lambda manifest, payloads, **_kwargs: SimpleNamespace(
+                        manifest_json=json.dumps(manifest), payloads=payloads
+                    ),
+                ),
+            ):
+                manifest_json, _payloads = load_blueprint_bundle(
+                    repo.resolve(),
+                    {"id": "worker_one", "path": "worker_one"},
+                    "worker_one-run",
+                )
+
+        self.assertEqual(
+            observed["skill_dependencies"],
+            [{"name": "mirrorneuron-live-video-analysis-skill", "source": "gar"}],
+        )
+        manifest = json.loads(manifest_json)
+        self.assertEqual(manifest["skill_dependencies"], [])
+        self.assertEqual(manifest["input_validation"]["rules"], [])
+        self.assertEqual(
+            manifest["metadata"]["mn_validation"]["input_validation"]["status"],
+            "passed",
+        )
+
     def test_records_and_removes_prevalidated_command_rules_before_core_submission(self):
         manifest = {
             "input_validation": {

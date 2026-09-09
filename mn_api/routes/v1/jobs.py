@@ -290,6 +290,8 @@ def _prepare_catalog_job_update(
     job_id: str,
     current: dict[str, Any],
     resolved_configuration: dict[str, Any],
+    *,
+    validate_inputs: bool,
 ) -> tuple[str, dict[str, bytes]]:
     blueprint_id = str(current.get("blueprint_id") or "").strip()
     if not blueprint_id:
@@ -298,11 +300,14 @@ def _prepare_catalog_job_update(
             detail="Catalog configuration overrides require a Job with a blueprint_id.",
         )
     repo_root, blueprint = find_blueprint(state.refresh_config_from_env(), blueprint_id)
+    owner_node = str(current.get("owner_node") or "").strip()
     return load_blueprint_bundle(
         repo_root,
         blueprint,
         create_blueprint_run_id(blueprint_id),
         config_overrides=resolved_configuration,
+        env_overrides={"MN_SELECTED_RUNTIME_NODE": owner_node} if owner_node else None,
+        validate_inputs=validate_inputs,
         stable_job_id=job_id,
         submission_id=generate_job_definition_submission_id(job_id),
     )
@@ -328,6 +333,7 @@ def update_job(
                 job_id,
                 current,
                 request.resolved_configuration,
+                validate_inputs=False,
             )
             result = _service().update_job(
                 job_id,
@@ -435,6 +441,7 @@ def create_job_run(
                 job_id,
                 current,
                 resolved_configuration,
+                validate_inputs=True,
             )
             _service().update_job(
                 job_id,
