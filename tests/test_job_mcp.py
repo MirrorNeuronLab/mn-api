@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import threading
 from types import SimpleNamespace
@@ -14,6 +15,7 @@ from mn_api.job_mcp import (
     MAX_CONTEXT_BYTES,
     JOB_CONTEXT_SCHEMA,
     JobContextProvider,
+    _job_context_fingerprint,
     context_state,
     safe_context_value,
 )
@@ -740,6 +742,34 @@ def test_ask_job_reuses_one_job_and_run_snapshot(monkeypatch):
     assert runtime.get_job_calls == 1
     assert runtime.list_run_calls == 1
     assert runtime.queries[0]["context"]["_active_service_run_id"] == "runtime-run-agent"
+
+
+def test_job_context_fingerprint_ignores_response_heartbeat_timestamps():
+    before = {
+        "job_id": "job-agent",
+        "status": "active",
+        "updated_at": "2026-09-09T11:52:54Z",
+        "resolved_configuration": {"camera": "demo"},
+        "response_service": {
+            "state": "ready",
+            "started_at": "2026-09-09T11:52:25Z",
+            "ready_at": "2026-09-09T11:53:02Z",
+            "updated_at": "2026-09-09T11:59:04Z",
+        },
+    }
+    heartbeat = copy.deepcopy(before)
+    heartbeat["updated_at"] = "2026-09-09T12:00:04Z"
+    heartbeat["response_service"]["updated_at"] = "2026-09-09T12:00:04Z"
+
+    assert _job_context_fingerprint(before) == _job_context_fingerprint(heartbeat)
+
+    changed = copy.deepcopy(heartbeat)
+    changed["response_service"]["state"] = "error"
+    assert _job_context_fingerprint(before) != _job_context_fingerprint(changed)
+
+    changed = copy.deepcopy(heartbeat)
+    changed["resolved_configuration"]["camera"] = "warehouse"
+    assert _job_context_fingerprint(before) != _job_context_fingerprint(changed)
 
 
 def test_context_returns_marked_last_known_good_while_one_refresh_runs(monkeypatch):

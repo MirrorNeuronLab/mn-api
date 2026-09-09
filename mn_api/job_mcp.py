@@ -189,6 +189,38 @@ def _identity(job_id: str, blueprint_id: str, descriptor: Mapping[str, Any]) -> 
     return identity
 
 
+def _job_context_fingerprint(job: Mapping[str, Any]) -> dict[str, Any]:
+    """Return Job fields whose changes can alter bounded conversation context.
+
+    Response-service timestamps are health heartbeats. Including them makes a
+    healthy service invalidate the context cache faster than a remote Run
+    snapshot can be loaded, which leaves every request stuck on unavailable.
+    Keep response state and all other Job data in the fingerprint.
+    """
+
+    stable_job = copy.deepcopy(dict(job))
+    for key in ("created_at", "createdAt", "updated_at", "updatedAt", "last_synced_at", "lastSyncedAt"):
+        stable_job.pop(key, None)
+    response_service = stable_job.get("response_service")
+    if isinstance(response_service, Mapping):
+        stable_response = dict(response_service)
+        for key in (
+            "ready_at",
+            "readyAt",
+            "started_at",
+            "startedAt",
+            "updated_at",
+            "updatedAt",
+            "checked_at",
+            "checkedAt",
+            "last_heartbeat_at",
+            "lastHeartbeatAt",
+        ):
+            stable_response.pop(key, None)
+        stable_job["response_service"] = stable_response
+    return stable_job
+
+
 def _schedules_for_job(job: Mapping[str, Any], job_id: str) -> list[dict[str, Any]]:
     payload = job.get("schedules")
     schedules = payload if isinstance(payload, list) else []
@@ -462,7 +494,7 @@ class JobContextProvider:
                 raise
             fingerprint = json.dumps(
                 {
-                    "job": job,
+                    "job": _job_context_fingerprint(job),
                     "blueprint_id": blueprint.get("id") or _first_text(
                         (
                             blueprint.get("metadata")
