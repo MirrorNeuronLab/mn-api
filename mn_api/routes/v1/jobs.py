@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
@@ -31,11 +32,14 @@ from mn_api.api_models import (
     ScheduleCreate,
 )
 from mn_api.blueprints import (
+    cleanup_blueprint_run_processes,
     create_blueprint_run_id,
     deep_merge,
     find_blueprint,
     load_blueprint_bundle,
     local_blueprint_from_path,
+    start_background_event_relay_if_needed,
+    write_blueprint_job_mapping,
 )
 from mn_api.bundles import uploaded_bundle_root
 from mn_api.contracts import API_PREFIX, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
@@ -292,6 +296,7 @@ def _prepare_catalog_job_update(
     resolved_configuration: dict[str, Any],
     *,
     validate_inputs: bool,
+    blueprint_run_id: str | None = None,
 ) -> tuple[str, dict[str, bytes]]:
     blueprint_id = str(current.get("blueprint_id") or "").strip()
     if not blueprint_id:
@@ -304,7 +309,7 @@ def _prepare_catalog_job_update(
     return load_blueprint_bundle(
         repo_root,
         blueprint,
-        create_blueprint_run_id(blueprint_id),
+        blueprint_run_id or create_blueprint_run_id(blueprint_id),
         config_overrides=resolved_configuration,
         env_overrides={"MN_SELECTED_RUNTIME_NODE": owner_node} if owner_node else None,
         validate_inputs=validate_inputs,
@@ -426,38 +431,76 @@ def create_job_run(
 ):
     def start():
         run_id = request.run_id
+        relay = None
         if request.replace_existing_run and not run_id:
             raise HTTPException(
                 status_code=422,
                 detail="replace_existing_run requires a fresh explicit run_id",
             )
-        if request.config_overrides:
-            current = public_value(_service().get_job(job_id))
+        current = public_value(_service().get_job(job_id))
+        blueprint_id = str(current.get("blueprint_id") or "").strip()
+        if blueprint_id:
+            repo_root, blueprint = find_blueprint(state.refresh_config_from_env(), blueprint_id)
+            blueprint_run_id = create_blueprint_run_id(blueprint_id)
             resolved_configuration = deep_merge(
                 current.get("resolved_configuration") or {},
-                request.config_overrides,
+                request.config_overrides or {},
             )
             manifest_json, payloads = _prepare_catalog_job_update(
                 job_id,
                 current,
                 resolved_configuration,
                 validate_inputs=True,
+                blueprint_run_id=blueprint_run_id,
             )
-            _service().update_job(
+            if request.config_overrides:
+                _service().update_job(
+                    job_id,
+                    {"resolved_configuration": resolved_configuration},
+                    manifest_json=manifest_json,
+                    payloads=payloads,
+                    expected_revision=_revision(current),
+                )
+            relay = (repo_root, blueprint, blueprint_run_id, manifest_json, resolved_configuration, current)
+        try:
+            run = _service().start_run(
                 job_id,
-                {"resolved_configuration": resolved_configuration},
-                manifest_json=manifest_json,
-                payloads=payloads,
-                expected_revision=_revision(current),
+                run_id=run_id,
+                inputs=request.inputs,
+                idempotency_key=idempotency_key or "",
+                replace_existing_run=request.replace_existing_run,
             )
-        run = _service().start_run(
-            job_id,
-            run_id=run_id,
-            inputs=request.inputs,
-            idempotency_key=idempotency_key or "",
-            replace_existing_run=request.replace_existing_run,
-        )
+        except Exception:
+            if relay:
+                cleanup_blueprint_run_processes(relay[2], reason="launch_failed")
+            raise
         run.setdefault("status", "pending")
+        if relay:
+            repo_root, blueprint, blueprint_run_id, manifest_json, resolved_configuration, current = relay
+            execution_id = str(run.get("run_id") or run.get("id") or "").strip()
+            if execution_id:
+                runtime_config = state.refresh_config_from_env()
+                write_blueprint_job_mapping(
+                    blueprint_run_id,
+                    job_id,
+                    execution_id,
+                    blueprint_id=str(current.get("blueprint_id") or "").strip() or None,
+                    blueprint_revision=str(blueprint.get("revision") or "").strip() or None,
+                    blueprint_source=getattr(runtime_config, "blueprint_source", None),
+                    blueprint_path=str(Path(repo_root) / str(blueprint.get("path") or blueprint["id"])),
+                    monitor_manifest=json.loads(manifest_json),
+                )
+                start_background_event_relay_if_needed(
+                    repo_root,
+                    blueprint,
+                    blueprint_run_id,
+                    execution_id,
+                    manifest_json,
+                    config_overrides=resolved_configuration,
+                    grpc_target=getattr(runtime_config, "grpc_target", None),
+                    grpc_auth_token=getattr(runtime_config, "grpc_auth_token", None),
+                    grpc_timeout_seconds=getattr(runtime_config, "grpc_timeout_seconds", None),
+                )
         return run
 
     return idempotent_response(

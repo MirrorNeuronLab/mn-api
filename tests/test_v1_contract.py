@@ -410,6 +410,8 @@ def test_etag_precondition_and_idempotent_run_creation(monkeypatch):
 def test_job_configuration_and_run_overrides_reprepare_catalog_definition(monkeypatch):
     client, runtime = _client(monkeypatch)
     prepared = []
+    mappings = []
+    relays = []
 
     monkeypatch.setattr(
         runtime,
@@ -434,6 +436,12 @@ def test_job_configuration_and_run_overrides_reprepare_catalog_definition(monkey
         return '{"graph_id":"prepared-catalog"}', {"payload": b"ready"}
 
     monkeypatch.setattr(jobs, "load_blueprint_bundle", prepare)
+    monkeypatch.setattr(jobs, "write_blueprint_job_mapping", lambda *args, **kwargs: mappings.append((args, kwargs)))
+    monkeypatch.setattr(
+        jobs,
+        "start_background_event_relay_if_needed",
+        lambda *args, **kwargs: relays.append((args, kwargs)),
+    )
 
     current = client.get("/api/v1/jobs/job-1")
     updated = client.patch(
@@ -472,6 +480,22 @@ def test_job_configuration_and_run_overrides_reprepare_catalog_definition(monkey
     }
     start_call = [call for call in runtime.calls if call[0] == "start_run"][-1]
     assert start_call[2]["inputs"] == {}
+    assert mappings[-1][0][1:] == ("job-1", "run-1")
+    assert relays[-1][0][3] == "run-1"
+    assert relays[-1][1]["config_overrides"]["execution"]["quick_test"] is True
+
+    update_count = len([call for call in runtime.calls if call[0] == "update_job"])
+    started_without_overrides = client.post(
+        "/api/v1/jobs/job-1/runs",
+        headers={"Idempotency-Key": "default-start"},
+        json={"inputs": {}},
+    )
+    assert started_without_overrides.status_code == 202, started_without_overrides.text
+    assert prepared[-1][3]["validate_inputs"] is True
+    assert len([call for call in runtime.calls if call[0] == "update_job"]) == update_count
+    assert len(mappings) == 2
+    assert len(relays) == 2
+    assert relays[-1][1]["config_overrides"] == {"worker": {"mode": "saved"}}
 
 
 def _patch_canonical_projections(monkeypatch):

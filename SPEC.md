@@ -120,6 +120,9 @@ No artificial completion percentage is inferred from elapsed time.
   placement declaration.
 - Background output relays poll the execution run ID, which remains separate
   from the durable job ID used for definition paths and launch responses.
+  Starting a catalog-backed stable Job through `/jobs/{job_id}/runs` creates the
+  same per-run mapping and relay as `/blueprints/{blueprint_id}/runs`, including
+  when no configuration override is supplied.
 - Blueprint launch delegates manifest expansion, config application,
   dependency localization, environment injection, and topology lowering to the
   same SDK preparation path consumed by the CLI.

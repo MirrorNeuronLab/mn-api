@@ -187,6 +187,11 @@ execution. Every manual or scheduled start creates a new Run. There is no
 compatibility facade, redirect, host-path request field, or JSON `version`
 field.
 
+For catalog-backed Jobs, `POST /api/v1/jobs/{job_id}/runs` also prepares the
+run-scoped output-copy state and starts the background output relay. This keeps
+shared-output materialization identical to a direct blueprint launch whether
+or not the request contains configuration overrides.
+
 Collections use `items` and `next_page_token`; clients pass `page_size`
 (default 50, maximum 200) and an opaque `page_token`. Persistent resources use
 strong ETags. Mutating or deleting jobs, schedules, deployments, model
