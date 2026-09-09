@@ -484,7 +484,6 @@ def _patch_canonical_projections(monkeypatch):
         "run_blueprint_record",
         lambda *_args, **_kwargs: {"job_id": "job-blueprint", "run_id": "run-blueprint", "status": "pending"},
     )
-
     system_payload = {"status": "ok", "nodes": [{"node_name": "node-1"}]}
     monkeypatch.setattr(system.legacy_system, "runtime_status", lambda **_kwargs: system_payload)
     monkeypatch.setattr(system.legacy_system, "runtime_health", lambda **_kwargs: system_payload)
@@ -1077,11 +1076,12 @@ def test_uploaded_job_uses_catalog_preparation_before_runtime_submission(monkeyp
     assert run_id
     assert options["stable_job_id"] == "upload-job"
     assert options["config_overrides"] == {"sample": 3}
+    assert options["validate_inputs"] is False
     assert options["submission_id"]
     assert runtime.calls[-1][0] == "create_job"
 
 
-def test_catalog_job_preparation_preserves_requested_owner_node(monkeypatch):
+def test_catalog_job_create_preserves_owner_without_launch_input_validation(monkeypatch):
     client, runtime = _client(monkeypatch)
     prepared = []
 
@@ -1114,5 +1114,9 @@ def test_catalog_job_preparation_preserves_requested_owner_node(monkeypatch):
     assert options["env_overrides"] == {
         "MN_SELECTED_RUNTIME_NODE": "mirror_neuron@gpu-node",
     }
+    assert options["config_overrides"] == {}
+    assert options["validate_inputs"] is False
     assert runtime.calls[-1][0] == "create_job"
+    assert all(call[0] != "start_run" for call in runtime.calls)
     assert runtime.calls[-1][1]["owner_node"] == "mirror_neuron@gpu-node"
+    assert runtime.calls[-1][1]["resolved_configuration"] == {}

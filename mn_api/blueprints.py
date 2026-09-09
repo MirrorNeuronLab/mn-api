@@ -1348,6 +1348,7 @@ def load_blueprint_bundle(
     config_overrides: Dict[str, Any] | None = None,
     env_overrides: Dict[str, str] | None = None,
     force: bool = False,
+    validate_inputs: bool = True,
     progress_callback: Callable[[str, str, str], None] | None = None,
     stable_job_id: str | None = None,
     submission_id: str | None = None,
@@ -1395,7 +1396,7 @@ def load_blueprint_bundle(
         )
     manifest = shared_preparation.manifest
     runtime_env = shared_preparation.runtime_environment
-    if not force:
+    if validate_inputs and not force:
         input_validation_report = run_input_validation(
             bundle_root,
             manifest,

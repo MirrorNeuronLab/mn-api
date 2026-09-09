@@ -1162,6 +1162,59 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertEqual(env["MN_LLM_MODEL"], "ollama/test")
         self.assertEqual(payload_bytes, {"nested/input.txt": b"hello"})
 
+    def test_load_blueprint_bundle_can_prepare_durable_job_without_run_input_validation(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            bundle = repo / "worker_one"
+            bundle.mkdir()
+            (bundle / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "apiVersion": "mn.workflow/v1",
+                        "kind": "Workflow",
+                        "id": "test-workflow",
+                        "contract": {},
+                        "runtime": {"placement": {"mode": "distributed"}},
+                        "agents": {"nodes": []},
+                        "input_validation": {
+                            "rules": [
+                                {
+                                    "name": "video_source_required",
+                                    "type": "required",
+                                    "path": "video_source",
+                                }
+                            ]
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with (
+                patch.object(
+                    blueprints_module,
+                    "run_input_validation",
+                    side_effect=AssertionError("job creation must not run the launch input gate"),
+                ) as input_validation,
+                patch.object(
+                    blueprints_module,
+                    "prepare_job_submission",
+                    side_effect=lambda manifest, payloads, **_kwargs: SimpleNamespace(
+                        manifest_json=json.dumps(manifest), payloads=payloads
+                    ),
+                ),
+            ):
+                manifest_json, _payloads = load_blueprint_bundle(
+                    repo.resolve(),
+                    {"id": "worker_one", "path": "worker_one"},
+                    "worker_one-definition",
+                    validate_inputs=False,
+                )
+
+        input_validation.assert_not_called()
+        manifest = json.loads(manifest_json)
+        self.assertNotIn("mn_validation", manifest["metadata"])
+
     def test_records_and_removes_prevalidated_command_rules_before_core_submission(self):
         manifest = {
             "input_validation": {

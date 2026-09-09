@@ -30,7 +30,13 @@ from mn_api.api_models import (
     RunUpdate,
     ScheduleCreate,
 )
-from mn_api.blueprints import create_blueprint_run_id, deep_merge, find_blueprint, load_blueprint_bundle, local_blueprint_from_path
+from mn_api.blueprints import (
+    create_blueprint_run_id,
+    deep_merge,
+    find_blueprint,
+    load_blueprint_bundle,
+    local_blueprint_from_path,
+)
 from mn_api.bundles import uploaded_bundle_root
 from mn_api.contracts import API_PREFIX, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 from mn_api.dependencies import require_auth
@@ -194,17 +200,20 @@ def create_job(
             repo_root, blueprint = local_blueprint_from_path(str(bundle_root))
         blueprint_id = str(blueprint["id"])
         stable_job_id = request.job_id or generate_stable_job_id(blueprint_id)
-        env_overrides = {
-            "MN_SELECTED_RUNTIME_NODE": request.owner_node,
-        } if request.owner_node else None
+        owner_node = str(request.owner_node or "").strip()
+        env_overrides = {"MN_SELECTED_RUNTIME_NODE": owner_node} if owner_node else None
         # Both sources need dependency preparation, configuration, topology
         # lowering, and staging before they can be submitted as prepared=True.
+        # Like `mn job create`, this creates a durable definition without
+        # applying the launch-time input gate. Required run inputs are checked
+        # when the definition is started.
         manifest_json, payloads = load_blueprint_bundle(
             repo_root,
             blueprint,
             create_blueprint_run_id(blueprint_id),
             config_overrides=request.resolved_configuration,
             env_overrides=env_overrides,
+            validate_inputs=False,
             stable_job_id=stable_job_id,
             submission_id=generate_job_definition_submission_id(stable_job_id),
             progress_callback=progress_reporter(progress_id),
@@ -222,7 +231,7 @@ def create_job(
                 storage=request.storage,
                 idempotency_key=idempotency_key or "",
                 prepared=True,
-                owner_node=request.owner_node,
+                owner_node=owner_node or None,
             )
 
     def observed_create():
