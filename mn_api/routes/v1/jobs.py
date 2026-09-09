@@ -194,6 +194,9 @@ def create_job(
             repo_root, blueprint = local_blueprint_from_path(str(bundle_root))
         blueprint_id = str(blueprint["id"])
         stable_job_id = request.job_id or generate_stable_job_id(blueprint_id)
+        env_overrides = {
+            "MN_SELECTED_RUNTIME_NODE": request.owner_node,
+        } if request.owner_node else None
         # Both sources need dependency preparation, configuration, topology
         # lowering, and staging before they can be submitted as prepared=True.
         manifest_json, payloads = load_blueprint_bundle(
@@ -201,6 +204,7 @@ def create_job(
             blueprint,
             create_blueprint_run_id(blueprint_id),
             config_overrides=request.resolved_configuration,
+            env_overrides=env_overrides,
             stable_job_id=stable_job_id,
             submission_id=generate_job_definition_submission_id(stable_job_id),
             progress_callback=progress_reporter(progress_id),

@@ -1079,3 +1079,40 @@ def test_uploaded_job_uses_catalog_preparation_before_runtime_submission(monkeyp
     assert options["config_overrides"] == {"sample": 3}
     assert options["submission_id"]
     assert runtime.calls[-1][0] == "create_job"
+
+
+def test_catalog_job_preparation_preserves_requested_owner_node(monkeypatch):
+    client, runtime = _client(monkeypatch)
+    prepared = []
+
+    monkeypatch.setattr(
+        jobs,
+        "find_blueprint",
+        lambda _config, blueprint_id: ("/catalog", {"id": blueprint_id}),
+    )
+
+    def prepare(root, blueprint, run_id, **kwargs):
+        prepared.append((root, blueprint, run_id, kwargs))
+        return '{"graph_id":"prepared-catalog","flow":{"nodes":[]}}', {}
+
+    monkeypatch.setattr(jobs, "load_blueprint_bundle", prepare)
+    response = client.post(
+        "/api/v1/jobs",
+        json={
+            "blueprint_id": "gpu-worker",
+            "owner_node": "mirror_neuron@gpu-node",
+        },
+        headers={"Idempotency-Key": "catalog-owner-placement"},
+    )
+
+    assert response.status_code == 201, response.text
+    assert len(prepared) == 1
+    root, blueprint, run_id, options = prepared[0]
+    assert root == "/catalog"
+    assert blueprint == {"id": "gpu-worker"}
+    assert run_id
+    assert options["env_overrides"] == {
+        "MN_SELECTED_RUNTIME_NODE": "mirror_neuron@gpu-node",
+    }
+    assert runtime.calls[-1][0] == "create_job"
+    assert runtime.calls[-1][1]["owner_node"] == "mirror_neuron@gpu-node"

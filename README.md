@@ -217,6 +217,14 @@ logs, host paths, and unrestricted artifact bodies. Answers use
 grounded status summary when the model or Job RAG is unavailable. There is no
 REST, SSE, or UI chat surface.
 
+The Job endpoint negotiates MCP protocol `2026-07-28`. When the active Run has
+a pending `human_input_requested` event, context and response tools return an
+`io.modelcontextprotocol/input-required` result containing a bounded form
+elicitation. An accepting client response is revalidated against the still-
+pending request, recorded through the Run human-response API, and the original
+tool request resumes. Durable `human_notice` events remain the unsolicited
+notification path; MRTR is request/resume, not server push.
+
 ## SDK Usage
 
 Use SDK services directly when building another client:

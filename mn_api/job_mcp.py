@@ -1080,7 +1080,7 @@ def create_job_mcp(provider: JobContextProvider | None = None) -> tuple[list[MCP
             ),
         )
 
-    def register_context_tools(server: FastMCP) -> None:
+    def register_context_tools(server: MCPServer) -> None:
         @server.tool(
             name="get_job_profile",
             description="Read this job's identity, mission, safe configuration, schedule, and lifecycle state.",
