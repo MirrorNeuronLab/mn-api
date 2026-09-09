@@ -206,18 +206,15 @@ def create_job(
         stable_job_id = request.job_id or generate_stable_job_id(blueprint_id)
         owner_node = str(request.owner_node or "").strip()
         env_overrides = {"MN_SELECTED_RUNTIME_NODE": owner_node} if owner_node else None
-        # Both sources need dependency preparation, configuration, topology
-        # lowering, and staging before they can be submitted as prepared=True.
-        # Like `mn job create`, this creates a durable definition without
-        # applying the launch-time input gate. Required run inputs are checked
-        # when the definition is started.
+        # Command validators must run at this trusted adapter boundary. Core
+        # safely rechecks declarative rules but refuses arbitrary commands.
         manifest_json, payloads = load_blueprint_bundle(
             repo_root,
             blueprint,
             create_blueprint_run_id(blueprint_id),
             config_overrides=request.resolved_configuration,
             env_overrides=env_overrides,
-            validate_inputs=False,
+            validate_inputs=True,
             stable_job_id=stable_job_id,
             submission_id=generate_job_definition_submission_id(stable_job_id),
             progress_callback=progress_reporter(progress_id),
@@ -338,7 +335,7 @@ def update_job(
                 job_id,
                 current,
                 request.resolved_configuration,
-                validate_inputs=False,
+                validate_inputs=True,
             )
             result = _service().update_job(
                 job_id,

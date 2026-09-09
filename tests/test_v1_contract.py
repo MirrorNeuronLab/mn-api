@@ -455,7 +455,7 @@ def test_job_configuration_and_run_overrides_reprepare_catalog_definition(monkey
     assert update_call[3]["manifest_json"] == '{"graph_id":"prepared-catalog"}'
     assert update_call[3]["payloads"] == {"payload": b"ready"}
     assert prepared[-1][3]["stable_job_id"] == "job-1"
-    assert prepared[-1][3]["validate_inputs"] is False
+    assert prepared[-1][3]["validate_inputs"] is True
     assert prepared[-1][3]["env_overrides"] == {
         "MN_SELECTED_RUNTIME_NODE": "mirror_neuron@gpu-node",
     }
@@ -1109,12 +1109,12 @@ def test_uploaded_job_uses_catalog_preparation_before_runtime_submission(monkeyp
     assert run_id
     assert options["stable_job_id"] == "upload-job"
     assert options["config_overrides"] == {"sample": 3}
-    assert options["validate_inputs"] is False
+    assert options["validate_inputs"] is True
     assert options["submission_id"]
     assert runtime.calls[-1][0] == "create_job"
 
 
-def test_catalog_job_create_preserves_owner_without_launch_input_validation(monkeypatch):
+def test_catalog_job_create_preserves_owner_with_definition_input_validation(monkeypatch):
     client, runtime = _client(monkeypatch)
     prepared = []
 
@@ -1148,7 +1148,7 @@ def test_catalog_job_create_preserves_owner_without_launch_input_validation(monk
         "MN_SELECTED_RUNTIME_NODE": "mirror_neuron@gpu-node",
     }
     assert options["config_overrides"] == {}
-    assert options["validate_inputs"] is False
+    assert options["validate_inputs"] is True
     assert runtime.calls[-1][0] == "create_job"
     assert all(call[0] != "start_run" for call in runtime.calls)
     assert runtime.calls[-1][1]["owner_node"] == "mirror_neuron@gpu-node"

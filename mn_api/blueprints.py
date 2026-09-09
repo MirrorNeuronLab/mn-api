@@ -54,6 +54,7 @@ from mn_sdk import (
     payload_agent_root,
     package_payload_models,
     record_model_owner,
+    record_prevalidated_command_rules as sdk_record_prevalidated_command_rules,
     required_blueprint_models,
     resolve_llm_environment,
     resolve_custom_model_placement,
@@ -1277,67 +1278,11 @@ def validation_failure_report(message: str) -> Dict[str, Any]:
 def record_prevalidated_command_rules(
     manifest: Dict[str, Any], validation_report: Dict[str, Any]
 ) -> None:
-    passed_commands: Dict[int, Dict[str, Any]] = {}
-    for result in validation_report.get("results") or []:
-        if (
-            not isinstance(result, dict)
-            or result.get("type") != "command"
-            or result.get("ok") is not True
-        ):
-            continue
-        rule_ref = result.get("rule") if isinstance(result.get("rule"), dict) else {}
-        index = rule_ref.get("index")
-        if isinstance(index, int):
-            passed_commands[index] = {
-                key: rule_ref[key]
-                for key in ("name", "id", "type", "index")
-                if key in rule_ref
-            }
-
-    if not passed_commands:
-        return
-
-    input_validation = manifest.get("input_validation")
-    if isinstance(input_validation, list):
-        rules = input_validation
-        manifest["input_validation"] = [
-            rule
-            for index, rule in enumerate(rules)
-            if not (
-                index in passed_commands
-                and isinstance(rule, dict)
-                and rule.get("type") == "command"
-            )
-        ]
-    elif isinstance(input_validation, dict) and isinstance(input_validation.get("rules"), list):
-        rules = input_validation["rules"]
-        input_validation["rules"] = [
-            rule
-            for index, rule in enumerate(rules)
-            if not (
-                index in passed_commands
-                and isinstance(rule, dict)
-                and rule.get("type") == "command"
-            )
-        ]
-    else:
-        return
-
-    metadata = manifest.setdefault("metadata", {})
-    if not isinstance(metadata, dict):
-        metadata = {}
-        manifest["metadata"] = metadata
-    validation_metadata = metadata.setdefault("mn_validation", {})
-    if not isinstance(validation_metadata, dict):
-        validation_metadata = {}
-        metadata["mn_validation"] = validation_metadata
-    validation_metadata["input_validation"] = {
-        "status": "passed",
-        "validator": "mn-api",
-        "prevalidated_command_rules": [
-            passed_commands[index] for index in sorted(passed_commands)
-        ],
-    }
+    sdk_record_prevalidated_command_rules(
+        manifest,
+        validation_report,
+        validator="mn-api",
+    )
 
 
 def load_blueprint_bundle(

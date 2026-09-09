@@ -138,6 +138,9 @@ No artificial completion percentage is inferred from elapsed time.
 - Stable-job creation may resolve a catalog `blueprint_id`; only API-trusted
   catalog sources or uploaded bundle roots are read from the host filesystem.
   Caller-provided arbitrary host paths are rejected.
+  Creation and executable configuration updates run host-side command input
+  validators before storing the definition. The SDK records those successful
+  checks and removes command rules that Core is intentionally forbidden to run.
 - A legacy MCP-enabled catalog Job exposes the read-only tools
   `get_job_profile`, `get_latest_run`, `get_job_context`, and
   `watch_job_activity` through Streamable HTTP. A response-enabled Job exposes
