@@ -251,3 +251,9 @@ Blueprint uploads have a separate configurable file-size limit, capped by the
 SDK format-v1 maximum of 32 GiB. Multipart framing has a 1 MiB allowance. Other
 requests retain the ordinary HTTP body-size policy. Upload files and extracted
 contents are independently checked before a package can be launched.
+
+Starting a saved Job through `POST /api/v1/jobs/{job_id}/runs` reuses its prepared
+definition when overrides are absent or do not change its resolved configuration,
+matching `mn job start`. It does not rediscover the catalog, rebuild worker
+resources, or rerun placement against transient node status. Changed configuration
+still passes the normal preparation and revision-checked update before start.

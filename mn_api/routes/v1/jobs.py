@@ -436,13 +436,13 @@ def create_job_run(
             )
         current = public_value(_service().get_job(job_id))
         blueprint_id = str(current.get("blueprint_id") or "").strip()
-        if blueprint_id:
+        saved_configuration = current.get("resolved_configuration") or {}
+        resolved_configuration = deep_merge(saved_configuration, request.config_overrides or {})
+        # Starting a prepared durable Job is the same operation as `mn job start`.
+        # Rebuild only for an actual configuration change, not a status refresh.
+        if blueprint_id and resolved_configuration != saved_configuration:
             repo_root, blueprint = find_blueprint(state.refresh_config_from_env(), blueprint_id)
             blueprint_run_id = create_blueprint_run_id(blueprint_id)
-            resolved_configuration = deep_merge(
-                current.get("resolved_configuration") or {},
-                request.config_overrides or {},
-            )
             manifest_json, payloads = _prepare_catalog_job_update(
                 job_id,
                 current,

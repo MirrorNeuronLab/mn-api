@@ -294,3 +294,9 @@ requests. Uploads validate documents without importing blueprint Python code.
 Uploaded Job definitions, bundle replacements, and catalog Job definitions pass through full
 blueprint preparation before submission, including configuration overrides,
 dependencies, topology lowering, and runtime staging.
+
+Starting a saved Job through `POST /api/v1/jobs/{job_id}/runs` reuses its prepared
+definition when overrides are absent or do not change its resolved configuration,
+matching `mn job start`. It does not rediscover the catalog, rebuild worker
+resources, or rerun placement against transient node status. Changed configuration
+still passes the normal preparation and revision-checked update before start.

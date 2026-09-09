@@ -493,9 +493,22 @@ def test_job_configuration_and_run_overrides_reprepare_catalog_definition(monkey
     assert started_without_overrides.status_code == 202, started_without_overrides.text
     assert prepared[-1][3]["validate_inputs"] is True
     assert len([call for call in runtime.calls if call[0] == "update_job"]) == update_count
-    assert len(mappings) == 2
-    assert len(relays) == 2
-    assert relays[-1][1]["config_overrides"] == {"worker": {"mode": "saved"}}
+    assert len(prepared) == 2
+    assert len(mappings) == 1
+    assert len(relays) == 1
+
+    def unexpected_preparation(*args, **kwargs):
+        raise AssertionError("An unchanged prepared Job must not access the catalog or prepare placement")
+
+    monkeypatch.setattr(jobs, "find_blueprint", unexpected_preparation)
+    monkeypatch.setattr(jobs, "load_blueprint_bundle", unexpected_preparation)
+    repeated = client.post(
+        "/api/v1/jobs/job-1/runs",
+        headers={"Idempotency-Key": "same-settings-start"},
+        json={"inputs": {}, "config_overrides": {"worker": {"mode": "saved"}}},
+    )
+    assert repeated.status_code == 202, repeated.text
+    assert len([call for call in runtime.calls if call[0] == "update_job"]) == update_count
 
 
 def _patch_canonical_projections(monkeypatch):
