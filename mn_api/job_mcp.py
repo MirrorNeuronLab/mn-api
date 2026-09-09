@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextvars
 import copy
+import hashlib
 import hmac
 import json
 import logging
@@ -44,6 +45,11 @@ from mn_sdk.job_context import (
     safe_context_value as sdk_safe_context_value,
     safe_text as sdk_safe_text,
 )
+from mn_sdk_mcp import (
+    job_activity_input_required,
+    normalize_job_activity,
+    resolve_job_activity_receipt,
+)
 
 
 _ACTIVE_SCHEDULE_STATUSES = {"active", "enabled", "running", "scheduled"}
@@ -51,6 +57,8 @@ _SNAPSHOT_FRESH_SECONDS = 2.0
 _SNAPSHOT_LAST_KNOWN_GOOD_SECONDS = 30.0
 _SNAPSHOT_INITIAL_WAIT_SECONDS = 2.0
 _SNAPSHOT_MAX_ENTRIES = 100
+_ACTIVITY_POLL_SECONDS = 0.5
+_ACTIVITY_MAX_WAIT_SECONDS = 25.0
 _current_job_id: contextvars.ContextVar[str] = contextvars.ContextVar("job_mcp_job_id", default="")
 LOGGER = logging.getLogger(__name__)
 
@@ -116,8 +124,12 @@ def _response_descriptor(blueprint: Mapping[str, Any]) -> dict[str, Any]:
         if isinstance(blueprint.get("response_service"), Mapping)
         else {}
     )
+    agent = descriptor.get("agent") if isinstance(descriptor.get("agent"), Mapping) else {}
+    tools = agent.get("tools") if isinstance(agent.get("tools"), Mapping) else {}
+    user_tools = tools.get("user") if isinstance(tools.get("user"), Mapping) else {}
     return {
         "goal_id": _first_text(descriptor.get("goal_id")) or None,
+        "activity_mcp": "watch_operator_activity" in user_tools,
     }
 
 
@@ -832,6 +844,115 @@ class JobContextProvider:
             "runtime_run_id": snapshot.active_service_run_id,
         }
 
+    def get_next_activity(
+        self,
+        job_id: str,
+        *,
+        after_event_id: str = "",
+        wait_seconds: float = 0.0,
+    ) -> dict[str, Any] | None:
+        """Return the next bounded chat-delivery notice for an MCP activity watch."""
+
+        context, snapshot = self._context_for_request(job_id, evidence_limit=1)
+        if snapshot is None or not snapshot.active_service_run_id:
+            return None
+        activity_mcp = self._base_snapshot(job_id).descriptor.get("activity_mcp")
+        if activity_mcp is True:
+            return self._get_next_agent_activity(
+                job_id,
+                context,
+                snapshot.active_service_run_id,
+                after_event_id=after_event_id,
+                wait_seconds=wait_seconds,
+            )
+        try:
+            result = runtime_run_routes.get_run_human_events(
+                snapshot.active_service_run_id,
+                None,
+                "authenticated",
+            )
+        except Exception:
+            return None
+        result_record = _as_record(result)
+        items = result_record.get("data")
+        if not isinstance(items, list):
+            items = result_record.get("items")
+        activities: list[dict[str, Any]] = []
+        for raw_event in items or []:
+            if not isinstance(raw_event, Mapping) or _first_text(raw_event.get("type")) != "human_notice":
+                continue
+            payload = raw_event.get("payload") if isinstance(raw_event.get("payload"), Mapping) else {}
+            if _first_text(payload.get("chat_delivery")) not in {"", "otterdesk_worker_chat"}:
+                continue
+            message = _safe_text(payload.get("message") or payload.get("detail"), limit=8_000)
+            if not message:
+                continue
+            notice_id = _safe_text(payload.get("notice_id"), limit=256)
+            occurred_at = _safe_text(
+                payload.get("observed_at") or raw_event.get("ts") or raw_event.get("timestamp"),
+                limit=80,
+            )
+            event_id = notice_id or hashlib.sha256(
+                f"{snapshot.active_service_run_id}\0{occurred_at}\0{message}".encode("utf-8")
+            ).hexdigest()[:32]
+            activities.append(
+                {
+                    "event_id": event_id,
+                    "title": _safe_text(payload.get("title"), limit=240) or "Operator notice",
+                    "message": message,
+                    "occurred_at": occurred_at,
+                    "source": _safe_text(payload.get("kind"), limit=160) or "job",
+                    "requires_review": payload.get("requires_ack") is True,
+                }
+            )
+        if not activities:
+            return None
+        cursor = _safe_text(after_event_id, limit=256)
+        if not cursor:
+            return activities[-1]
+        for index, activity in enumerate(activities):
+            if activity["event_id"] == cursor:
+                return activities[index + 1] if index + 1 < len(activities) else None
+        return activities[-1] if activities[-1]["event_id"] != cursor else None
+
+    def _get_next_agent_activity(
+        self,
+        job_id: str,
+        context: Mapping[str, Any],
+        active_service_run_id: str,
+        *,
+        after_event_id: str,
+        wait_seconds: float,
+    ) -> dict[str, Any] | None:
+        """Ask the owner-node Job agent to relay its Run-scoped MCP activity."""
+
+        relay_context = copy.deepcopy(dict(context))
+        relay_context["_active_service_run_id"] = active_service_run_id
+        relay_context["_mn_activity_watch"] = {
+            "after_event_id": _safe_text(after_event_id, limit=256),
+            "wait_seconds": min(
+                max(float(wait_seconds or 0), 0.0), _ACTIVITY_MAX_WAIT_SECONDS
+            ),
+        }
+        try:
+            response = self._service().query_job_response(
+                job_id,
+                "Watch the declared service for one activity item.",
+                context=relay_context,
+                conversation_id="",
+                request_id="",
+            )
+        except Exception:
+            return None
+        payload = _as_record(response)
+        activity = payload.get("activity")
+        if payload.get("delivered") is not True or not isinstance(activity, Mapping):
+            return None
+        try:
+            return normalize_job_activity(activity)
+        except ValueError:
+            return None
+
     def record_pending_human_response(
         self,
         job_id: str,
@@ -1111,6 +1232,49 @@ def create_job_mcp(provider: JobContextProvider | None = None) -> tuple[list[MCP
                 if pending is not None:
                     return pending
             return context_provider.get_context(bound_job_id(), evidence_limit=evidence_limit)
+
+        @server.tool(
+            name="watch_job_activity",
+            description=(
+                "Wait briefly for one new job-originated activity item and deliver it "
+                "to the calling chat client through an MCP multi round-trip request."
+            ),
+            structured_output=True,
+        )
+        async def watch_job_activity(
+            after_event_id: str = "",
+            wait_seconds: float = 20.0,
+            ctx: Context = None,
+        ) -> dict[str, Any] | InputRequiredResult:
+            if ctx is not None:
+                receipt = resolve_job_activity_receipt(ctx)
+                if receipt is not None:
+                    return receipt
+            bounded_wait = min(max(float(wait_seconds or 0), 0.0), _ACTIVITY_MAX_WAIT_SECONDS)
+            deadline = time.monotonic() + bounded_wait
+            while True:
+                activity = await anyio.to_thread.run_sync(
+                    lambda: context_provider.get_next_activity(
+                        bound_job_id(),
+                        after_event_id=after_event_id,
+                        wait_seconds=max(0.0, deadline - time.monotonic()),
+                    )
+                )
+                if activity is not None:
+                    return job_activity_input_required(
+                        activity,
+                        after_event_id=after_event_id,
+                    )
+                if time.monotonic() >= deadline:
+                    return {
+                        "schema_version": "mn.mcp.job_activity_watch.v1",
+                        "delivered": False,
+                        "cursor": _safe_text(after_event_id, limit=256),
+                        "activity": None,
+                    }
+                await anyio.sleep(
+                    min(_ACTIVITY_POLL_SECONDS, max(0.0, deadline - time.monotonic()))
+                )
 
     register_context_tools(base_server)
     register_context_tools(enhanced_server)

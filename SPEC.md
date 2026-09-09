@@ -136,8 +136,9 @@ No artificial completion percentage is inferred from elapsed time.
   catalog sources or uploaded bundle roots are read from the host filesystem.
   Caller-provided arbitrary host paths are rejected.
 - A legacy MCP-enabled catalog Job exposes the read-only tools
-  `get_job_profile`, `get_latest_run`, and `get_job_context` through Streamable
-  HTTP. A response-enabled Job exposes those tools plus `ask_job`. Tool inputs
+  `get_job_profile`, `get_latest_run`, `get_job_context`, and
+  `watch_job_activity` through Streamable HTTP. A response-enabled Job exposes
+  those tools plus `ask_job`. Tool inputs
   cannot select another Job. Context responses use `mn.mcp.job_context.v1`,
   contain at most 50 evidence records and 256 KiB, and retain the stable
   profile with warnings when latest-run data cannot be read. Never-run,
@@ -147,6 +148,12 @@ No artificial completion percentage is inferred from elapsed time.
   ID, and an optional 128-character request ID. It returns the bounded
   `mn.mcp.job_answer.v1` contract through Core's owner-routed unary query,
   never creates a Run, and has no REST, SSE, or UI chat equivalent.
+- `watch_job_activity` performs a bounded active wait. When the blueprint's
+  bounded response agent declares `watch_operator_activity`, the API routes the
+  watch to that Job's owner node. The Job response agent resolves exactly one
+  passing Run-scoped service and uses the SDK MCP client to receive its activity
+  through MRTR before the API relays it to the chat client through MRTR.
+  Delivery receipt is transport-only and never acknowledges a review notice.
 - The stable supervisory MCP excludes credentials, secret/environment values,
   raw logs, host paths, arbitrary files, and unrestricted artifact bodies. It
   cannot mutate job, run, schedule, approval, or configuration state.

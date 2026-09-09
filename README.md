@@ -205,10 +205,11 @@ When an existing `job_id` is supplied, the API installs the freshly prepared
 bundle before starting the run; job data, schedules, and prior run history are
 preserved.
 
-Blueprints that enable `response_service` expose the stable three-tool
+Blueprints that enable `response_service` expose the stable context-and-activity
 Job MCP at `/api/v1/jobs/{job_id}/mcp`. Blueprints that instead declare the
 top-level `response_service: {"enabled": true}` expose the same context tools
-plus `ask_job(question, conversation_id?, request_id?)`. The responder is
+plus `ask_job(question, conversation_id?, request_id?)`. All variants expose
+`watch_job_activity(after_event_id?, wait_seconds?)`. The responder is
 definition-scoped and remains available before the first Run and between Runs;
 asking never creates a Run. Context uses `mn.mcp.job_context.v1`, is limited to
 256 KiB and 50 evidence records, and omits secrets, environment values, raw
@@ -222,8 +223,12 @@ a pending `human_input_requested` event, context and response tools return an
 `io.modelcontextprotocol/input-required` result containing a bounded form
 elicitation. An accepting client response is revalidated against the still-
 pending request, recorded through the Run human-response API, and the original
-tool request resumes. Durable `human_notice` events remain the unsolicited
-notification path; MRTR is request/resume, not server push.
+tool request resumes. When a bounded response agent declares
+`watch_operator_activity`, `watch_job_activity` asks the owner-node Job response
+agent to resolve that Run-scoped MCP service and relay its SDK activity envelope
+through a second MRTR. This is an
+active bounded watch, not unsolicited server push, and its transport receipt
+does not acknowledge a durable operator notice.
 
 ## SDK Usage
 

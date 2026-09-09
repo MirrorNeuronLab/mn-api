@@ -168,7 +168,15 @@ def _blueprint(_config, blueprint_id):
     if blueprint_id == "agent-blueprint":
         blueprint["response_service"] = {
             "enabled": True,
-            "agent": {"kind": "bounded_mcp"},
+            "agent": {
+                "kind": "bounded_mcp",
+                "service": {
+                    "name": "cctv-operator-mcp",
+                    "path": "/mcp",
+                    "required_tags": ["mcp", "cctv-operator"],
+                },
+                "tools": {"user": {"watch_operator_activity": {"effect": "read"}}},
+            },
         }
     return "catalog", blueprint
 
@@ -230,6 +238,7 @@ def test_protocol_lists_only_stable_read_tools_and_reads_never_run_context(monke
             "get_job_context",
             "get_job_profile",
             "get_latest_run",
+            "watch_job_activity",
         }
         called = _mcp_request(
             client,
@@ -309,6 +318,94 @@ def test_job_context_uses_mrtr_for_pending_runtime_input(monkeypatch):
     assert recorded[0][2]["decision"] == "Loading bay"
 
 
+def test_job_activity_watch_relays_worker_mcp_activity_through_mrtr(monkeypatch):
+    from mcp import Client
+    from mcp.types import ElicitResult
+
+    runtime = MCPRuntime()
+    _configure(monkeypatch, runtime)
+    activity = {
+        "schema_version": "mn.mcp.job_activity.v1",
+        "event_id": "cctv-target-camera-1-42",
+        "title": "Target observed",
+        "message": "A person is clearly visible near the center of the frame.",
+        "occurred_at": "2026-09-08T22:23:39Z",
+        "source": "cctv_operator",
+        "requires_review": True,
+    }
+    relay_calls = []
+
+    def relay(job_id, question, *, context, conversation_id="", request_id=""):
+        relay_calls.append(
+            {
+                "job_id": job_id,
+                "question": question,
+                "context": context,
+                "conversation_id": conversation_id,
+                "request_id": request_id,
+            }
+        )
+        return json.dumps(
+            {
+                "schema_version": "mn.mcp.job_activity_watch.v1",
+                "delivered": True,
+                "cursor": activity["event_id"],
+                "activity": activity,
+            }
+        )
+
+    runtime.query_job_response = relay
+
+    async def scenario():
+        servers, _app = job_mcp.create_job_mcp(JobContextProvider())
+        observed = []
+
+        async def elicit(_context, params):
+            encoded = params.requested_schema["properties"]["mn_activity"]["default"]
+            observed.append(json.loads(encoded))
+            return ElicitResult(action="accept", content={"response": "received"})
+
+        token = job_mcp._current_job_id.set("job-agent")
+        try:
+            async with Client(
+                servers[2],
+                mode="2026-07-28",
+                elicitation_callback=elicit,
+            ) as client:
+                result = await client.call_tool(
+                    "watch_job_activity",
+                    {"after_event_id": "", "wait_seconds": 0},
+                )
+        finally:
+            job_mcp._current_job_id.reset(token)
+        return observed, result
+
+    observed, result = asyncio.run(scenario())
+
+    assert observed == [
+        {
+            "schema_version": "mn.mcp.job_activity.v1",
+            "event_id": "cctv-target-camera-1-42",
+            "title": "Target observed",
+            "message": "A person is clearly visible near the center of the frame.",
+            "occurred_at": "2026-09-08T22:23:39Z",
+            "source": "cctv_operator",
+            "requires_review": True,
+        }
+    ]
+    assert result.structured_content["delivered"] is True
+    assert result.structured_content["cursor"] == "cctv-target-camera-1-42"
+    assert len(relay_calls) == 1
+    assert relay_calls[0]["job_id"] == "job-agent"
+    assert relay_calls[0]["conversation_id"] == ""
+    assert relay_calls[0]["request_id"] == ""
+    assert relay_calls[0]["context"]["_active_service_run_id"] == "runtime-run-agent"
+    assert relay_calls[0]["context"]["_mn_activity_watch"] == {
+        "after_event_id": "",
+        "wait_seconds": 0,
+    }
+
+
 def test_auth_job_isolation_archived_and_disabled_behavior(monkeypatch):
     runtime = MCPRuntime()
     _configure(monkeypatch, runtime, token="top-secret")
@@ -360,6 +457,7 @@ def test_response_enabled_job_lists_ask_job_and_never_starts_a_run(monkeypatch):
             "get_job_context",
             "get_job_profile",
             "get_latest_run",
+            "watch_job_activity",
         }
         called = _mcp_request(
             client,
@@ -428,6 +526,7 @@ def test_agent_enabled_job_adds_turn_polling_and_preserves_internal_service_run_
             "get_job_profile",
             "get_job_turn",
             "get_latest_run",
+            "watch_job_activity",
         }
         accepted = _mcp_request(
             client,
