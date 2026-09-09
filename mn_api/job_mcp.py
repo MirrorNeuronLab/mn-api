@@ -15,8 +15,10 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 import anyio
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
+from mcp.server.mcpserver import Context
 from mcp.server.transport_security import TransportSecuritySettings
+from mcp.types import ElicitRequest, ElicitRequestFormParams, InputRequiredResult
 from starlette.requests import Request
 
 from mn_api import state
@@ -786,6 +788,74 @@ class JobContextProvider:
             for key in ("schema_version", "fetched_at", "freshness", "identity", "state", "read_only", "response_service", "latest_run", "recent_runs", "evidence", "warnings", "truncation")
         }
 
+    def get_pending_human_request(self, job_id: str) -> dict[str, Any] | None:
+        """Return the latest pending runtime request safe for MCP elicitation."""
+        _context, snapshot = self._context_for_request(job_id, evidence_limit=1)
+        if snapshot is None or not snapshot.active_service_run_id:
+            return None
+        try:
+            result = runtime_run_routes.get_run_human_events(
+                snapshot.active_service_run_id,
+                "pending",
+                "authenticated",
+            )
+        except Exception:
+            return None
+        result_record = _as_record(result)
+        items = result_record.get("data")
+        if not isinstance(items, list):
+            items = result_record.get("items")
+        requests = [item for item in (items or []) if isinstance(item, Mapping)]
+        if not requests:
+            return None
+        event = requests[-1]
+        payload = event.get("payload") if isinstance(event.get("payload"), Mapping) else event
+        request_id = _safe_text(payload.get("request_id") or payload.get("requestId"), limit=256)
+        prompt = _safe_text(
+            payload.get("prompt") or payload.get("message") or "I need your input before I continue.",
+            limit=4_000,
+        )
+        if not request_id or not prompt:
+            return None
+        options = [
+            _safe_text(option.get("label") if isinstance(option, Mapping) else option, limit=240)
+            for option in (payload.get("options") if isinstance(payload.get("options"), list) else [])
+        ]
+        return {
+            "request_id": request_id,
+            "prompt": prompt,
+            "options": [option for option in options if option][:12],
+            "decision_type": _safe_text(
+                payload.get("decision_type") or payload.get("decisionType"),
+                limit=160,
+            ),
+            "runtime_run_id": snapshot.active_service_run_id,
+        }
+
+    def record_pending_human_response(
+        self,
+        job_id: str,
+        request_id: str,
+        response: str,
+    ) -> dict[str, Any]:
+        pending = self.get_pending_human_request(job_id)
+        if pending is None or pending["request_id"] != request_id:
+            raise ValueError("The pending co-worker request changed before the response arrived.")
+        answer = _safe_text(response, limit=8_000)
+        if not answer:
+            raise ValueError("response is required")
+        return runtime_run_routes.post_run_human_response(
+            pending["runtime_run_id"],
+            request_id,
+            {
+                "decision": answer,
+                "notes": answer,
+                "approved": answer.lower() in {"approve", "approved", "yes"},
+                "reviewer": "mcp_mrtr",
+            },
+            "authenticated",
+        )
+
     def ask_job(
         self,
         job_id: str,
@@ -929,17 +999,13 @@ class JobMCPGuard:
             _current_job_id.reset(token)
 
 
-def create_job_mcp(provider: JobContextProvider | None = None) -> tuple[list[FastMCP], Any]:
+def create_job_mcp(provider: JobContextProvider | None = None) -> tuple[list[MCPServer], Any]:
     context_provider = provider or JobContextProvider()
 
-    def new_server(name: str, instructions: str) -> FastMCP:
-        return FastMCP(
+    def new_server(name: str, instructions: str) -> MCPServer:
+        return MCPServer(
             name,
             instructions=instructions,
-            streamable_http_path="/mcp",
-            json_response=True,
-            stateless_http=True,
-            transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
         )
 
     base_server = new_server(
@@ -960,6 +1026,59 @@ def create_job_mcp(provider: JobContextProvider | None = None) -> tuple[list[Fas
         if not job_id:
             raise JobMCPNotFoundError("The MCP request is not bound to a job.")
         return job_id
+
+    def resolve_human_input(ctx: Context) -> InputRequiredResult | None:
+        job_id = bound_job_id()
+        pending = context_provider.get_pending_human_request(job_id)
+        if pending is None:
+            return None
+        request_key = f"human-response:{pending['request_id']}"
+        if ctx.request_state:
+            try:
+                state_payload = json.loads(ctx.request_state)
+            except (TypeError, ValueError, json.JSONDecodeError) as error:
+                raise ValueError("The MCP request state was invalid.") from error
+            if _first_text(state_payload.get("request_id")) != pending["request_id"]:
+                raise ValueError("The pending co-worker request changed before the response arrived.")
+            response = (ctx.input_responses or {}).get(request_key)
+            if response is None:
+                return None
+            action = _first_text(getattr(response, "action", "")).lower()
+            content = getattr(response, "content", None)
+            if action == "accept" and isinstance(content, Mapping):
+                context_provider.record_pending_human_response(
+                    job_id,
+                    pending["request_id"],
+                    _first_text(content.get("response")),
+                )
+            return None
+        property_schema: dict[str, Any] = {
+            "type": "string",
+            "title": "Response",
+            "minLength": 1,
+            "maxLength": 8_000,
+        }
+        if pending["options"]:
+            property_schema["enum"] = pending["options"]
+        return InputRequiredResult(
+            input_requests={
+                request_key: ElicitRequest(
+                    params=ElicitRequestFormParams(
+                        message=pending["prompt"],
+                        requested_schema={
+                            "type": "object",
+                            "properties": {"response": property_schema},
+                            "required": ["response"],
+                        },
+                    )
+                )
+            },
+            request_state=json.dumps(
+                {"request_id": pending["request_id"]},
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+        )
 
     def register_context_tools(server: FastMCP) -> None:
         @server.tool(
@@ -983,7 +1102,14 @@ def create_job_mcp(provider: JobContextProvider | None = None) -> tuple[list[Fas
             description="Read the combined job profile, schedule, recent Runs, and bounded latest-run context.",
             structured_output=True,
         )
-        def get_job_context(evidence_limit: int = MAX_EVIDENCE_RECORDS) -> dict[str, Any]:
+        def get_job_context(
+            evidence_limit: int = MAX_EVIDENCE_RECORDS,
+            ctx: Context = None,
+        ) -> dict[str, Any] | InputRequiredResult:
+            if ctx is not None:
+                pending = resolve_human_input(ctx)
+                if pending is not None:
+                    return pending
             return context_provider.get_context(bound_job_id(), evidence_limit=evidence_limit)
 
     register_context_tools(base_server)
@@ -1002,7 +1128,12 @@ def create_job_mcp(provider: JobContextProvider | None = None) -> tuple[list[Fas
         question: str,
         conversation_id: str | None = None,
         request_id: str | None = None,
-    ) -> dict[str, Any]:
+        ctx: Context = None,
+    ) -> dict[str, Any] | InputRequiredResult:
+        if ctx is not None:
+            pending = resolve_human_input(ctx)
+            if pending is not None:
+                return pending
         return context_provider.ask_job(
             bound_job_id(),
             question,
@@ -1022,7 +1153,12 @@ def create_job_mcp(provider: JobContextProvider | None = None) -> tuple[list[Fas
         question: str,
         conversation_id: str | None = None,
         request_id: str | None = None,
-    ) -> dict[str, Any]:
+        ctx: Context = None,
+    ) -> dict[str, Any] | InputRequiredResult:
+        if ctx is not None:
+            pending = resolve_human_input(ctx)
+            if pending is not None:
+                return pending
         return context_provider.ask_job(
             bound_job_id(),
             question,
@@ -1040,14 +1176,29 @@ def create_job_mcp(provider: JobContextProvider | None = None) -> tuple[list[Fas
 
     servers = [base_server, enhanced_server, agent_server]
     return servers, JobMCPGuard(
-        base_server.streamable_http_app(),
-        enhanced_server.streamable_http_app(),
-        agent_server.streamable_http_app(),
+        base_server.streamable_http_app(
+            streamable_http_path="/mcp",
+            json_response=True,
+            stateless_http=True,
+            transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+        ),
+        enhanced_server.streamable_http_app(
+            streamable_http_path="/mcp",
+            json_response=True,
+            stateless_http=True,
+            transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+        ),
+        agent_server.streamable_http_app(
+            streamable_http_path="/mcp",
+            json_response=True,
+            stateless_http=True,
+            transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+        ),
         context_provider,
     )
 
 
-def job_mcp_lifespan(servers: FastMCP | list[FastMCP]):
+def job_mcp_lifespan(servers: MCPServer | list[MCPServer]):
     resolved_servers = servers if isinstance(servers, list) else [servers]
 
     @asynccontextmanager

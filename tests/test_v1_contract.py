@@ -407,6 +407,64 @@ def test_etag_precondition_and_idempotent_run_creation(monkeypatch):
     assert missing_replacement_id.status_code == 422
 
 
+def test_job_configuration_and_run_overrides_reprepare_catalog_definition(monkeypatch):
+    client, runtime = _client(monkeypatch)
+    prepared = []
+
+    monkeypatch.setattr(
+        runtime,
+        "get_job",
+        lambda job_id: json.dumps({
+            "job_id": job_id,
+            "blueprint_id": "worker-1",
+            "status": "active",
+            "revision": 1,
+            "resolved_configuration": {"worker": {"mode": "saved"}},
+        }),
+    )
+    monkeypatch.setattr(
+        jobs,
+        "find_blueprint",
+        lambda _config, blueprint_id: ("/catalog", {"id": blueprint_id}),
+    )
+
+    def prepare(root, blueprint, run_id, **kwargs):
+        prepared.append((root, blueprint, run_id, kwargs))
+        return '{"graph_id":"prepared-catalog"}', {"payload": b"ready"}
+
+    monkeypatch.setattr(jobs, "load_blueprint_bundle", prepare)
+
+    current = client.get("/api/v1/jobs/job-1")
+    updated = client.patch(
+        "/api/v1/jobs/job-1",
+        headers={"If-Match": current.headers["etag"]},
+        json={"resolved_configuration": {"worker": {"mode": "updated"}}},
+    )
+    assert updated.status_code == 200, updated.text
+    update_call = [call for call in runtime.calls if call[0] == "update_job"][-1]
+    assert update_call[2] == {"resolved_configuration": {"worker": {"mode": "updated"}}}
+    assert update_call[3]["manifest_json"] == '{"graph_id":"prepared-catalog"}'
+    assert update_call[3]["payloads"] == {"payload": b"ready"}
+    assert prepared[-1][3]["stable_job_id"] == "job-1"
+
+    started = client.post(
+        "/api/v1/jobs/job-1/runs",
+        headers={"Idempotency-Key": "configured-start"},
+        json={
+            "inputs": {},
+            "config_overrides": {"execution": {"quick_test": True}},
+        },
+    )
+    assert started.status_code == 202, started.text
+    run_update = [call for call in runtime.calls if call[0] == "update_job"][-1]
+    assert run_update[2]["resolved_configuration"] == {
+        "worker": {"mode": "saved"},
+        "execution": {"quick_test": True},
+    }
+    start_call = [call for call in runtime.calls if call[0] == "start_run"][-1]
+    assert start_call[2]["inputs"] == {}
+
+
 def _patch_canonical_projections(monkeypatch):
     blueprint = {"id": "worker-1", "name": "Worker", "installed": True, "revision": "abc"}
     monkeypatch.setattr(blueprints, "load_blueprint_catalog", lambda _config: (None, [blueprint]))

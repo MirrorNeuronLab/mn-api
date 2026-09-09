@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 from types import SimpleNamespace
@@ -250,6 +251,62 @@ def test_protocol_lists_only_stable_read_tools_and_reads_never_run_context(monke
     assert "must-not-leak" not in encoded
     assert "/private/tmp/hidden" not in encoded
     assert context["profile"]["configuration"] == {"query": "safe", "nested": {"region": "east"}}
+
+
+def test_job_context_uses_mrtr_for_pending_runtime_input(monkeypatch):
+    from mcp import Client
+    from mcp.types import ElicitResult
+
+    runtime = MCPRuntime()
+    _configure(monkeypatch, runtime)
+    recorded = []
+    pending_event = {
+        "type": "human_input_requested",
+        "payload": {
+            "request_id": "review-loading-bay",
+            "prompt": "Which area should I inspect next?",
+            "options": ["Loading bay", "Main entrance"],
+            "decision_type": "inspection_area",
+        },
+    }
+    monkeypatch.setattr(
+        job_mcp.runtime_run_routes,
+        "get_run_human_events",
+        lambda *_args: {"data": [pending_event]},
+    )
+    monkeypatch.setattr(
+        job_mcp.runtime_run_routes,
+        "post_run_human_response",
+        lambda *args: recorded.append(args) or {"ok": True},
+    )
+
+    async def scenario():
+        servers, _app = job_mcp.create_job_mcp(JobContextProvider())
+        prompts = []
+
+        async def elicit(_context, params):
+            prompts.append(params.message)
+            return ElicitResult(action="accept", content={"response": "Loading bay"})
+
+        token = job_mcp._current_job_id.set("job-agent")
+        try:
+            async with Client(
+                servers[0],
+                mode="2026-07-28",
+                elicitation_callback=elicit,
+            ) as client:
+                result = await client.call_tool("get_job_context", {"evidence_limit": 5})
+        finally:
+            job_mcp._current_job_id.reset(token)
+        return prompts, result
+
+    prompts, result = asyncio.run(scenario())
+
+    assert prompts == ["Which area should I inspect next?"]
+    assert result.structured_content["identity"]["job_id"] == "job-agent"
+    assert recorded
+    assert recorded[0][0:2] == ("runtime-run-agent", "review-loading-bay")
+    assert recorded[0][2]["decision"] == "Loading bay"
 
 
 def test_auth_job_isolation_archived_and_disabled_behavior(monkeypatch):

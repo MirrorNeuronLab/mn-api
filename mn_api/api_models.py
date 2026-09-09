@@ -79,12 +79,12 @@ class JobBundleReplacement(StrictModel):
 class RunCreate(StrictModel):
     run_id: str | None = None
     inputs: dict[str, Any] = Field(default_factory=dict)
+    config_overrides: dict[str, Any] = Field(default_factory=dict)
     replace_existing_run: bool = False
 
 
 class BlueprintRunCreate(RunCreate):
     job_id: str | None = None
-    config_overrides: dict[str, Any] = Field(default_factory=dict)
     secret_environment: dict[str, str] = Field(default_factory=dict)
     force: bool = False
     fake_llm: bool = False

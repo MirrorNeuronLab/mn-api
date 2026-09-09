@@ -145,7 +145,8 @@ All paths below are under `/api/v1`.
   `PUT /jobs/{job_id}/bundle`, `POST /jobs/{job_id}/data-resets`, and the
   read-only Streamable HTTP MCP endpoint at `/jobs/{job_id}/mcp` for eligible
   blueprint jobs.
-- Runs: `POST/GET /jobs/{job_id}/runs`,
+- Runs: `POST/GET /jobs/{job_id}/runs` (catalog Jobs may include
+  `config_overrides`; the API prepares the updated definition before launch),
   `POST /blueprints/{blueprint_id}/runs`, `GET /runs`, and
   `GET/PATCH/DELETE /runs/{run_id}`.
 - Run detail: logs, events, resources, human requests, UI, artifacts, outputs,

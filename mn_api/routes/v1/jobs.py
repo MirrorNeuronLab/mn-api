@@ -30,7 +30,7 @@ from mn_api.api_models import (
     RunUpdate,
     ScheduleCreate,
 )
-from mn_api.blueprints import create_blueprint_run_id, find_blueprint, load_blueprint_bundle, local_blueprint_from_path
+from mn_api.blueprints import create_blueprint_run_id, deep_merge, find_blueprint, load_blueprint_bundle, local_blueprint_from_path
 from mn_api.bundles import uploaded_bundle_root
 from mn_api.contracts import API_PREFIX, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 from mn_api.dependencies import require_auth
@@ -273,6 +273,28 @@ def get_job_ui(job_id: str, principal=Depends(require_auth)):
     return public_value(runtime_job_routes.get_job_ui(job_id, principal))
 
 
+def _prepare_catalog_job_update(
+    job_id: str,
+    current: dict[str, Any],
+    resolved_configuration: dict[str, Any],
+) -> tuple[str, dict[str, bytes]]:
+    blueprint_id = str(current.get("blueprint_id") or "").strip()
+    if not blueprint_id:
+        raise HTTPException(
+            status_code=422,
+            detail="Catalog configuration overrides require a Job with a blueprint_id.",
+        )
+    repo_root, blueprint = find_blueprint(state.refresh_config_from_env(), blueprint_id)
+    return load_blueprint_bundle(
+        repo_root,
+        blueprint,
+        create_blueprint_run_id(blueprint_id),
+        config_overrides=resolved_configuration,
+        stable_job_id=job_id,
+        submission_id=generate_job_definition_submission_id(job_id),
+    )
+
+
 @router.patch("/jobs/{job_id}", operation_id="update_job", tags=["jobs"], response_model=ResourceModel)
 def update_job(
     job_id: str,
@@ -288,7 +310,21 @@ def update_job(
         attrs = {key: value for key, value in request.model_dump(exclude_none=True).items() if key != "status"}
         if request.status:
             attrs["status"] = request.status
-        result = _service().update_job(job_id, attrs, expected_revision=_revision(current))
+        if request.resolved_configuration is not None:
+            manifest_json, payloads = _prepare_catalog_job_update(
+                job_id,
+                current,
+                request.resolved_configuration,
+            )
+            result = _service().update_job(
+                job_id,
+                attrs,
+                manifest_json=manifest_json,
+                payloads=payloads,
+                expected_revision=_revision(current),
+            )
+        else:
+            result = _service().update_job(job_id, attrs, expected_revision=_revision(current))
     return resource_response(result, etag=True)
 
 
@@ -375,6 +411,24 @@ def create_job_run(
             raise HTTPException(
                 status_code=422,
                 detail="replace_existing_run requires a fresh explicit run_id",
+            )
+        if request.config_overrides:
+            current = public_value(_service().get_job(job_id))
+            resolved_configuration = deep_merge(
+                current.get("resolved_configuration") or {},
+                request.config_overrides,
+            )
+            manifest_json, payloads = _prepare_catalog_job_update(
+                job_id,
+                current,
+                resolved_configuration,
+            )
+            _service().update_job(
+                job_id,
+                {"resolved_configuration": resolved_configuration},
+                manifest_json=manifest_json,
+                payloads=payloads,
+                expected_revision=_revision(current),
             )
         run = _service().start_run(
             job_id,
