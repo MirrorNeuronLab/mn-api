@@ -2856,6 +2856,7 @@ def validate_blueprint_inputs(
     *,
     config_overrides: Dict[str, Any] | None = None,
     env_overrides: Dict[str, str] | None = None,
+    input_validation_report: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     bundle_root = validate_blueprint_bundle(repo_root, blueprint)
     manifest_path = bundle_root / "manifest.json"
@@ -2917,6 +2918,8 @@ def validate_blueprint_inputs(
     if not model_result.get("ok"):
         return model_result
 
+    if input_validation_report is not None:
+        return input_validation_report
     return run_input_validation(bundle_root, manifest, config=config, env=env)
 
 

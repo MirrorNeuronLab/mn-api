@@ -959,6 +959,7 @@ def run_blueprint_record(
             blueprint,
             config_overrides=config_overrides,
             env_overrides=env_overrides,
+            input_validation_report=input_validation,
         )
         if not validation.get("ok"):
             cleanup_blueprint_run_processes(run_id, reason="validation_failed")
