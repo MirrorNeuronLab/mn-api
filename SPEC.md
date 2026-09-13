@@ -5,6 +5,9 @@
 `mn-api` is the HTTP gateway for the local MirrorNeuron runtime. It translates
 HTTP and Server-Sent Event interactions into calls to the
 MirrorNeuron Python SDK and returns browser- and desktop-consumable responses.
+Blueprint run requests apply the SDK-owned input validator before hardware,
+model, helper-process, or submission work and return a field-level HTTP 422
+problem when required configuration is missing.
 The package installs the `mn-api` service and the `mn-web-ui-server` static/proxy
 service.
 

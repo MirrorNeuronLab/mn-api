@@ -29,6 +29,9 @@ configuration and public monitor manifests.
 Blueprint launch preserves the `model_install` progress phase for compatibility
 and uses it as a blocking readiness gate. Every declared DMR model is selected,
 installed or reused, and published through LiteLLM before the job is submitted.
+Before that gate, launch applies the SDK input validator used by blueprint
+validation and returns HTTP 422 for missing required inputs, without preparing
+runtime resources or submitting a job.
 The shared SDK still prepares dynamically requested RAG/OCR skill models on
 first use, and also rechecks a declared model if it is removed after launch.
 Explicit model-install endpoints remain eager and unchanged.

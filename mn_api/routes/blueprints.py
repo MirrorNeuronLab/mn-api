@@ -47,6 +47,7 @@ from mn_api.blueprints import (
     run_mn_blueprint_validate,
     sanitize_blueprint_id,
     validate_blueprint_hardware_requirements,
+    validate_blueprint_input_values,
     validate_blueprint_inputs,
     validate_blueprint_bundle,
     validate_run_id,
@@ -839,6 +840,32 @@ def run_blueprint_record(
         owner_node = str(existing_job.get("owner_node") or "").strip()
         if owner_node:
             env_overrides["MN_SELECTED_RUNTIME_NODE"] = owner_node
+    if not force:
+        input_validation = validate_blueprint_input_values(
+            repo_root,
+            blueprint,
+            config_overrides=config_overrides,
+            env_overrides=env_overrides,
+        )
+        if not input_validation.get("ok"):
+            record_launch_progress(
+                progress_id,
+                "validation",
+                "failed",
+                "Blueprint input validation failed.",
+                {"validation": input_validation, "run_id": run_id},
+                label="Validate inputs",
+                detail="A required or invalid blueprint input must be fixed before runtime preparation.",
+                severity="error",
+            )
+            return validation_problem_response(
+                input_validation,
+                status_code=422,
+                error="blueprint_validation_failed",
+                title="Blueprint input validation failed",
+                detail="Fix the highlighted blueprint input before running this blueprint.",
+                extra={"run_id": run_id, "blueprint": blueprint, "progress_id": progress_id},
+            )
     preflight = run_launch_preflight(
         repo_root,
         blueprint,

@@ -2565,6 +2565,102 @@ def test_launch_model_policy_skips_runtime_models_for_fake_llm():
     assert summary["env"]["MN_LLM_PROVIDER"] == "fake"
 
 
+def test_validate_blueprint_input_values_uses_shared_required_input_report(tmp_path):
+    bundle = tmp_path / "required-input"
+    bundle.mkdir()
+    (bundle / "manifest.json").write_text(
+        json.dumps(
+            {
+                "apiVersion": "mn.workflow/v1",
+                "kind": "Workflow",
+                "id": "required-input",
+                "contract": {},
+                "agents": {"nodes": []},
+                "runtime": {},
+                "input_validation": {
+                    "required": ["input_folder"],
+                    "rules": [],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    config_dir = bundle / "config"
+    config_dir.mkdir()
+    (config_dir / "default.json").write_text(
+        json.dumps({"inputs": {"payload": {"input_folder": ""}}}),
+        encoding="utf-8",
+    )
+
+    report = blueprints_module.validate_blueprint_input_values(
+        tmp_path,
+        {"id": "required-input", "path": "required-input"},
+    )
+
+    assert report["ok"] is False
+    assert report["issues"][0]["code"] == "config.required"
+    assert "--set inputs.payload.input_folder" in report["issues"][0]["help"]
+
+
+def test_run_blueprint_record_rejects_missing_input_before_runtime_preflight(
+    mocker,
+    tmp_path,
+):
+    from mn_api.schemas import BlueprintRunRequest
+
+    report = {
+        "ok": False,
+        "issues": [
+            {
+                "code": "config.required",
+                "message": "Required input 'input_folder' is missing.",
+                "help": "Provide it with --set inputs.payload.input_folder=...",
+                "severity": "error",
+                "location": {"path": "inputs.payload.input_folder"},
+            }
+        ],
+    }
+    mocker.patch.object(blueprint_routes, "record_launch_progress")
+    mocker.patch.object(
+        blueprint_routes,
+        "validate_blueprint_bundle",
+        return_value=tmp_path,
+    )
+    mocker.patch.object(
+        blueprint_routes,
+        "read_manifest_for_launch",
+        return_value={},
+    )
+    mocker.patch.object(blueprint_routes, "validate_blueprint_secret_environment")
+    mocker.patch.object(
+        blueprint_routes,
+        "runtime_blueprint_environment_overrides",
+        return_value={},
+    )
+    mocker.patch.object(
+        blueprint_routes,
+        "fake_mode_environment_overrides",
+        return_value={},
+    )
+    mocker.patch.object(blueprint_routes.state, "close_client")
+    mocker.patch.object(
+        blueprint_routes,
+        "validate_blueprint_input_values",
+        return_value=report,
+    )
+    preflight = mocker.patch.object(blueprint_routes, "run_launch_preflight")
+
+    response = blueprint_routes.run_blueprint_record(
+        tmp_path,
+        {"id": "required-input", "path": "required-input"},
+        BlueprintRunRequest(),
+    )
+
+    assert response.status_code == 422
+    assert json.loads(response.body)["errors"][0]["code"] == "config.required"
+    preflight.assert_not_called()
+
+
 def test_run_launch_preflight_prepares_models_and_routes_them_before_submission(
     monkeypatch,
     tmp_path,

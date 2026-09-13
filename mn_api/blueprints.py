@@ -2818,6 +2818,38 @@ def cleanup_blueprint_processes_for_job(job_id: str) -> None:
             return
 
 
+def validate_blueprint_input_values(
+    repo_root: Path,
+    blueprint: Dict[str, Any],
+    *,
+    config_overrides: Dict[str, Any] | None = None,
+    env_overrides: Dict[str, str] | None = None,
+) -> Dict[str, Any]:
+    """Validate only blueprint input declarations, before runtime preparation."""
+    bundle_root = validate_blueprint_bundle(repo_root, blueprint)
+    manifest_path = bundle_root / "manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=500, detail="blueprint manifest.json is malformed") from exc
+    if not isinstance(manifest, dict):
+        raise HTTPException(status_code=500, detail="blueprint manifest.json must be an object")
+    manifest = expand_blueprint_manifest_if_source(bundle_root, manifest)
+    resolve_blueprint_payload_contract(manifest, bundle_root)
+
+    spec_issues = validate_input_validation_spec_issues(manifest)
+    if spec_issues:
+        return make_validation_report(spec_issues)
+    config = load_blueprint_config(bundle_root, config_overrides=config_overrides)
+    env = blueprint_runtime_environment(
+        bundle_root,
+        config=config,
+        config_overrides=config_overrides,
+    )
+    env.update(string_env_values(env_overrides))
+    return run_input_validation(bundle_root, manifest, config=config, env=env)
+
+
 def validate_blueprint_inputs(
     repo_root: Path,
     blueprint: Dict[str, Any],
