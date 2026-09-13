@@ -1166,3 +1166,64 @@ def test_catalog_job_create_preserves_owner_with_definition_input_validation(mon
     assert all(call[0] != "start_run" for call in runtime.calls)
     assert runtime.calls[-1][1]["owner_node"] == "mirror_neuron@gpu-node"
     assert runtime.calls[-1][1]["resolved_configuration"] == {}
+
+
+def test_remote_operation_stream_replays_and_stops_at_terminal(monkeypatch):
+    from mn_api.routes.v1 import operations
+
+    client, runtime = _client(monkeypatch)
+    monkeypatch.setattr(operations, "is_local_operation", lambda _: False)
+    events = [
+        {"type": "operation.started", "status": "running"},
+        {"type": "operation.completed", "status": "completed"},
+        {"type": "unexpected", "status": "running"},
+    ]
+    runtime.stream_operation_events = lambda *_args, **_kwargs: iter(map(json.dumps, events))
+    response = client.get("/api/v1/operations/remote-replay/events/stream", headers={"Last-Event-ID": "1"})
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert "id: 2" in response.text
+    assert "operation.completed" in response.text
+    assert "operation.started" not in response.text
+    assert "unexpected" not in response.text
+
+
+def test_remote_operation_stream_emits_snapshot_when_upstream_ends(monkeypatch):
+    from mn_api.routes.v1 import operations
+
+    client, runtime = _client(monkeypatch)
+    monkeypatch.setattr(operations, "is_local_operation", lambda _: False)
+    runtime.stream_operation_events = lambda *_args, **_kwargs: iter([json.dumps({"status": "running"})])
+    monkeypatch.setattr(operations, "get_operation", lambda operation_id: {"operation_id": operation_id, "status": "completed"})
+    response = client.get("/api/v1/operations/remote-ended/events/stream")
+    assert response.status_code == 200
+    assert "id: 1" in response.text
+    assert "id: 2" in response.text
+    assert "operation.snapshot" in response.text
+    assert '"status":"completed"' in response.text
+    invalid = client.get("/api/v1/operations/remote-ended/events/stream", headers={"Last-Event-ID": "invalid"})
+    assert invalid.status_code == 400
+    assert invalid.headers["content-type"].startswith("application/problem+json")
+
+
+def test_staged_final_artifact_errors_preserve_retry_and_integrity_contract(monkeypatch):
+    client, _runtime = _client(monkeypatch)
+    _patch_canonical_projections(monkeypatch)
+
+    def missing(*_args):
+        raise HTTPException(status_code=404, detail="final artifact not found")
+
+    monkeypatch.setattr(jobs.runtime_run_routes, "get_run_final_artifact", missing)
+    for error, status, code in [
+        (jobs.ArtifactNotReadyError("artifact pending"), 503, "service_unavailable"),
+        (jobs.ArtifactIntegrityError("digest mismatch"), 500, "internal_error"),
+        (jobs.StagedArtifactError("invalid reference"), 500, "internal_error"),
+    ]:
+        def resolve(_run_id, failure=error):
+            raise failure
+        monkeypatch.setattr(jobs, "_resolve_run_result_reference", resolve)
+        response = client.get("/api/v1/runs/run-1/artifacts/final")
+        assert response.status_code == status
+        assert response.json()["code"] == code
+        assert str(error) not in response.text
+        assert response.headers.get("retry-after") == ("1" if status == 503 else None)
