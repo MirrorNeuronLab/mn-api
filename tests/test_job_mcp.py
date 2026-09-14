@@ -876,7 +876,7 @@ def test_opt_in_stream_uses_progress_and_preserves_final_answer(monkeypatch):
                            "cursor": control["cursor"] + len(delta), "delta": delta, "done": done,
                            "failed": False, "cancelled": False, "response": result if done else None})
     runtime.query_job_response = query
-    with TestClient(create_app(), base_url="http://localhost") as client:
+    with TestClient(create_app(), base_url="http://localhost:54019") as client:
         assert _initialize(client, "job-response").status_code == 200
         response = _mcp_request(client, "job-response", {
             "jsonrpc": "2.0", "id": 3, "method": "tools/call",
@@ -909,3 +909,36 @@ def test_stream_relay_cancels_runtime_on_delivery_failure():
     with pytest.raises(RuntimeError, match="disconnected"):
         asyncio.run(stream_job_reply(Provider(), "job", "question", None, "stream-1", Context()))
     assert calls == ["start", "cancel"]
+
+
+def test_stream_control_rejects_invalid_identity_and_action_agent(monkeypatch):
+    import pytest
+    runtime = MCPRuntime()
+    _configure(monkeypatch, runtime)
+    provider = JobContextProvider()
+    for values in [
+        {"question": ""}, {"question": "x" * 8001},
+        {"request_id": ""}, {"request_id": "x" * 129},
+        {"conversation_id": "not-a-uuid"},
+    ]:
+        arguments = {"question": "What can you do?", "request_id": "r", "conversation_id": None, **values}
+        with pytest.raises(ValueError):
+            provider.response_stream_command("job-response", control={"action": "start", "cursor": 0}, **arguments)
+    with pytest.raises(job_mcp.JobMCPNotFoundError):
+        provider.response_stream_command("job-agent", "What can you do?", request_id="r", conversation_id=None, control={"action": "start", "cursor": 0})
+    assert runtime.queries == []
+
+
+def test_stream_endpoint_retains_authentication_and_host_protection(monkeypatch):
+    runtime = MCPRuntime()
+    _configure(monkeypatch, runtime, token="top-secret")
+    request = {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
+        "name": "ask_job", "arguments": {"question": "What can you do?", "stream": True},
+    }}
+    with TestClient(create_app(), base_url="http://localhost:54019") as client:
+        assert _mcp_request(client, "job-response", request).status_code == 401
+        response = client.post("/api/v1/jobs/job-response/mcp", json=request, headers={
+            "Accept": "application/json, text/event-stream", "Authorization": "Bearer top-secret", "Host": "untrusted.example:54019",
+        })
+        assert response.status_code == 421
+    assert runtime.queries == []

@@ -303,3 +303,25 @@ definition when overrides are absent or do not change its resolved configuration
 matching `mn job start`. It does not rediscover the catalog, rebuild worker
 resources, or rerun placement against transient node status. Changed configuration
 still passes the normal preparation and revision-checked update before start.
+
+## Streaming read-only Job answers
+
+`ask_job` on response-enabled read-only Job MCP endpoints accepts `stream: bool`,
+default false. Omitted/false returns the existing completed JSON tool result,
+for agent collaboration. True selects SSE on the same authenticated endpoint
+and relays actual visible answer text using MCP progress notifications; callers
+should request progress with a progress token/callback. Each notification message
+is JSON with schema_version `mn.mcp.job_answer_delta.v1`, request_id, sequence
+(starting at 1), and delta. The final result remains `mn.mcp.job_answer.v1`.
+
+The API reads bounded cursor updates over the existing Job response RPC, at most
+once per 50ms with a 250ms idle read wait. It cancels the runtime stream when
+delivery fails or its task is cancelled. An interrupted stream is not converted
+to an unrelated fallback answer. The relay has a 90-second overall deadline.
+Bounded action-agent `ask_job` retains its existing non-streaming turn contract.
+
+The new SSE transport keeps MCP's loopback Host/Origin protection enabled
+(`127.0.0.1`, `localhost`, IPv6 loopback, with explicit ports). Existing JSON
+transports retain their settings. Non-loopback SSE exposure requires an explicit
+trusted-host configuration in the transport before deployment; it must not be
+enabled by disabling rebinding protection.

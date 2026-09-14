@@ -1115,7 +1115,7 @@ class JobMCPGuard:
         if scope.get("type") != "http":
             await self.base_app(scope, receive, send)
             return
-        request = Request(scope)
+        request = Request(scope, receive)
         if auth_enabled(state.config):
             authorization = request.headers.get("authorization", "")
             scheme, _, token = authorization.partition(" ")
