@@ -856,3 +856,56 @@ def test_lifecycle_state_projection_covers_running_failed_paused_and_waiting():
     assert context_state(active_job, {"status": "failed"}, []) == "idle"
     assert context_state(active_job, None, [{"status": "active"}]) == "scheduled_waiting"
     assert context_state({"status": "archived"}, {"status": "running"}, []) == "archived"
+
+
+def test_opt_in_stream_uses_progress_and_preserves_final_answer(monkeypatch):
+    runtime = MCPRuntime()
+    _configure(monkeypatch, runtime)
+    original = runtime.query_job_response
+    controls = []
+    def query(job_id, question, *, context, conversation_id="", request_id=""):
+        control = context.get("_mn_response_stream")
+        if not control:
+            return original(job_id, question, context=context, conversation_id=conversation_id, request_id=request_id)
+        controls.append(control["action"])
+        done = control["action"] == "read"
+        delta = "answer." if done else "Visible "
+        result = json.loads(original(job_id, question, context={"state": "never_run"}, conversation_id=conversation_id, request_id=request_id))
+        result["answer"] = "Visible answer."
+        return json.dumps({"schema_version": "mn.mcp.job_answer_stream.v1", "request_id": request_id,
+                           "cursor": control["cursor"] + len(delta), "delta": delta, "done": done,
+                           "failed": False, "cancelled": False, "response": result if done else None})
+    runtime.query_job_response = query
+    with TestClient(create_app(), base_url="http://localhost") as client:
+        assert _initialize(client, "job-response").status_code == 200
+        response = _mcp_request(client, "job-response", {
+            "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+            "params": {"name": "ask_job", "arguments": {"question": "What can you do?", "request_id": "stream-1", "stream": True},
+                       "_meta": {"progressToken": "progress-1"}},
+        })
+    assert response.status_code == 200
+    assert "text/event-stream" in response.headers["content-type"]
+    events = [json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: ")]
+    updates = [json.loads(event["params"]["message"]) for event in events if event.get("method") == "notifications/progress"]
+    assert [event["delta"] for event in updates] == ["Visible ", "answer."]
+    result = next(event["result"] for event in events if event.get("id") == 3)
+    assert result["structuredContent"]["answer"] == "Visible answer."
+    assert controls == ["start", "read"]
+    assert runtime.jobs["job-response"]["run_count"] == 0
+
+
+def test_stream_relay_cancels_runtime_on_delivery_failure():
+    from mn_api.job_reply_stream import stream_job_reply
+    calls = []
+    class Provider:
+        def response_stream_command(self, job, question, **kwargs):
+            calls.append(kwargs["control"]["action"])
+            return {"schema_version": "mn.mcp.job_answer_stream.v1", "request_id": "stream-1",
+                    "cursor": 5, "delta": "hello", "done": False}
+    class Context:
+        async def report_progress(self, *args, **kwargs):
+            raise RuntimeError("disconnected")
+    import pytest
+    with pytest.raises(RuntimeError, match="disconnected"):
+        asyncio.run(stream_job_reply(Provider(), "job", "question", None, "stream-1", Context()))
+    assert calls == ["start", "cancel"]
