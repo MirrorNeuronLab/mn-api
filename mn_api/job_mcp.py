@@ -1077,6 +1077,22 @@ class JobContextProvider:
                 fallback["effects"] = []
             return fallback
 
+    def response_stream_command(self, job_id, question, *, conversation_id, request_id, control):
+        if not isinstance(question, str) or not question.strip() or len(question) > 8000:
+            raise ValueError("Invalid response question")
+        if not request_id or len(request_id) > 128:
+            raise ValueError("Invalid response request identity")
+        if conversation_id:
+            uuid.UUID(conversation_id)
+        base = self._base_snapshot(job_id)
+        if not base.descriptor.get("response_enabled") or base.descriptor.get("response_agent_enabled"):
+            raise JobMCPNotFoundError("Streaming requires a read-only response service.")
+        context = self._context_for_request(job_id)[0] if control["action"] == "start" else {}
+        return self._service().query_job_response(
+            job_id, question, context={**context, "_mn_response_stream": control},
+            conversation_id=conversation_id or "", request_id=request_id,
+        )
+
     def get_job_turn(self, job_id: str, turn_id: str) -> dict[str, Any]:
         if not self._base_snapshot(job_id).descriptor.get("response_agent_enabled"):
             raise JobMCPNotFoundError("The requested job response agent is unavailable.")
@@ -1088,11 +1104,12 @@ class JobContextProvider:
 
 
 class JobMCPGuard:
-    def __init__(self, base_app, enhanced_app, agent_app, provider: JobContextProvider) -> None:
+    def __init__(self, base_app, enhanced_app, agent_app, provider: JobContextProvider, stream_app=None) -> None:
         self.base_app = base_app
         self.enhanced_app = enhanced_app
         self.agent_app = agent_app
         self.provider = provider
+        self.stream_app = stream_app
 
     async def __call__(self, scope, receive, send) -> None:
         if scope.get("type") != "http":
@@ -1147,6 +1164,27 @@ class JobMCPGuard:
                 "agent": self.agent_app,
                 "response": self.enhanced_app,
             }.get(response_mode, self.base_app)
+            if response_mode == "response" and self.stream_app is not None and request.method == "POST":
+                body = await request.body()
+                try:
+                    message = json.loads(body)
+                    params = message.get("params", {})
+                    wants_stream = (message.get("method") == "tools/call"
+                                    and params.get("name") == "ask_job"
+                                    and params.get("arguments", {}).get("stream") is True)
+                except (ValueError, AttributeError, TypeError):
+                    wants_stream = False
+                if wants_stream:
+                    selected_app = self.stream_app
+                original_receive = receive
+                delivered = False
+                async def replay_body():
+                    nonlocal delivered
+                    if not delivered:
+                        delivered = True
+                        return {"type": "http.request", "body": body, "more_body": False}
+                    return await original_receive()
+                receive = replay_body
             await selected_app(scope, receive, send)
         finally:
             _current_job_id.reset(token)
@@ -1168,6 +1206,10 @@ def create_job_mcp(provider: JobContextProvider | None = None) -> tuple[list[MCP
     enhanced_server = new_server(
         "MirrorNeuron real-time job response",
         "Read safe context or ask grounded, multi-turn questions about the job bound by the MCP URL.",
+    )
+    stream_server = new_server(
+        "MirrorNeuron real-time job response",
+        "Stream visible answer text as progress and return one completed grounded answer.",
     )
     agent_server = new_server(
         "MirrorNeuron bounded job agent",
@@ -1311,7 +1353,9 @@ def create_job_mcp(provider: JobContextProvider | None = None) -> tuple[list[MCP
     register_context_tools(base_server)
     register_context_tools(enhanced_server)
     register_context_tools(agent_server)
+    register_context_tools(stream_server)
 
+    @stream_server.tool(name="ask_job", structured_output=True)
     @enhanced_server.tool(
         name="ask_job",
         description=(
@@ -1320,22 +1364,26 @@ def create_job_mcp(provider: JobContextProvider | None = None) -> tuple[list[MCP
         ),
         structured_output=True,
     )
-    def ask_job(
+    async def ask_job(
         question: str,
         conversation_id: str | None = None,
         request_id: str | None = None,
+        stream: bool = False,
         ctx: Context = None,
     ) -> dict[str, Any] | InputRequiredResult:
         if ctx is not None:
             pending = resolve_human_input(ctx)
             if pending is not None:
                 return pending
-        return context_provider.ask_job(
-            bound_job_id(),
-            question,
-            conversation_id=conversation_id,
-            request_id=request_id,
-        )
+        job_id = bound_job_id()
+        if stream:
+            if ctx is None:
+                raise ValueError("Streaming requires an MCP request context")
+            from mn_api.job_reply_stream import stream_job_reply
+            return await stream_job_reply(context_provider, job_id, question, conversation_id, request_id, ctx)
+        return await anyio.to_thread.run_sync(lambda: context_provider.ask_job(
+            job_id, question, conversation_id=conversation_id, request_id=request_id,
+        ))
 
     @agent_server.tool(
         name="ask_job",
@@ -1370,7 +1418,7 @@ def create_job_mcp(provider: JobContextProvider | None = None) -> tuple[list[MCP
     def get_job_turn(turn_id: str) -> dict[str, Any]:
         return context_provider.get_job_turn(bound_job_id(), turn_id)
 
-    servers = [base_server, enhanced_server, agent_server]
+    servers = [base_server, enhanced_server, agent_server, stream_server]
     return servers, JobMCPGuard(
         base_server.streamable_http_app(
             streamable_http_path="/mcp",
@@ -1391,6 +1439,9 @@ def create_job_mcp(provider: JobContextProvider | None = None) -> tuple[list[MCP
             transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
         ),
         context_provider,
+        stream_app=stream_server.streamable_http_app(
+            streamable_http_path="/mcp", json_response=False, stateless_http=True,
+        ),
     )
 
 
