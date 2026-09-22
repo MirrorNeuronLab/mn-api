@@ -288,7 +288,9 @@ def _job_workflow_shape(job_id: str, source: str) -> dict[str, Any]:
     job = _service().get_job(job_id, include_workflow_definition=True)
     if source == "definition":
         definition = job.get("workflow_definition")
-        return definition_shape(job_id, definition if isinstance(definition, dict) else {})
+        shape = definition_shape(job_id, definition if isinstance(definition, dict) else {})
+        shape["workflow_id"] = shape["workflow_id"] or str(job.get("graph_id") or "")
+        return shape
     run_id = str(job.get("latest_run_id") or "").strip()
     if not run_id:
         raise HTTPException(status_code=404, detail="Job has no latest run.")
@@ -297,7 +299,15 @@ def _job_workflow_shape(job_id: str, source: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="Job has no latest run.")
     runtime_id = _runtime_output_id(run_id)
     snapshot = runtime_job_routes._workflow_progress_snapshot_for_job(runtime_id)
-    return latest_run_shape(job_id, run_id, snapshot)
+    shape = latest_run_shape(job_id, run_id, snapshot)
+    if not shape["steps"]:
+        definition = job.get("workflow_definition")
+        saved = definition_shape(job_id, definition if isinstance(definition, dict) else {})
+        shape["steps"] = saved["steps"]
+        shape["edges"] = saved["edges"]
+        shape["layers"] = saved["layers"]
+        shape["workflow_id"] = shape["workflow_id"] or saved["workflow_id"] or str(job.get("graph_id") or "")
+    return shape
 
 
 @router.get("/jobs/{job_id}/workflow/definition/dag", operation_id="get_job_definition_dag", tags=["jobs"], response_model=WorkflowDag)

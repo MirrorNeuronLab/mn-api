@@ -1293,6 +1293,14 @@ def test_job_workflow_shape_views_and_progress_only(monkeypatch):
     assert "label" not in progress.json()["steps"][1]
     assert "role" not in progress.json()["steps"][1]["agents"][0]
 
+    monkeypatch.setattr(jobs.runtime_job_routes, "_workflow_progress_snapshot_for_job", lambda _id: {
+        "job_id": "runtime-1", "status": "running", "steps": [], "edges": [], "layers": []
+    })
+    empty_runtime_shape = client.get(f"{base}/latest-run/steps")
+    assert empty_runtime_shape.status_code == 200
+    assert [step["id"] for step in empty_runtime_shape.json()["steps"]] == ["start", "left", "right"]
+    assert empty_runtime_shape.json()["run_id"] == "run-1"
+
 
 def test_job_workflow_shape_missing_latest_run_and_empty_definition(monkeypatch):
     client, runtime = _client(monkeypatch)
