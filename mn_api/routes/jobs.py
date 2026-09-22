@@ -674,7 +674,24 @@ def _read_run_resource_usage(run_id: str | None) -> dict[str, Any] | None:
 
 
 def _workflow_progress_snapshot_for_job(job_id: str) -> dict[str, Any]:
-    details = _full_job_detail(job_id)
+    return _workflow_progress_snapshot_from_details(job_id, _full_job_detail(job_id))
+
+
+def _workflow_progress_snapshot_for_run(run_id: str) -> dict[str, Any]:
+    run = json.loads(state.client.get_run(run_id))
+    stable_job_id = _first_string(run.get("job_id"))
+    definition: dict[str, Any] = {}
+    if stable_job_id:
+        stable_job = json.loads(state.client.get_job(stable_job_id, include_workflow_definition=True))
+        candidate = stable_job.get("workflow_definition")
+        if isinstance(candidate, dict):
+            definition = candidate
+    return _workflow_progress_snapshot_from_details(run_id, {"job": run}, manifest_override=definition)
+
+
+def _workflow_progress_snapshot_from_details(
+    job_id: str, details: dict[str, Any], *, manifest_override: dict[str, Any] | None = None
+) -> dict[str, Any]:
     job = _job_from_details(details)
     summary = _summary_from_details(details)
     events, stream_error = _stream_job_events(job_id, limit=_MAX_STATUS_RUNTIME_EVENTS)
@@ -686,7 +703,7 @@ def _workflow_progress_snapshot_for_job(job_id: str) -> dict[str, Any]:
     )
     observability_summary = _read_json_file(run_dir / "observability_summary.json") if run_dir else {}
     manifest = _manifest_with_public_agent_bindings(
-        _manifest_from_job_details(details, run_dir=run_dir, events=events),
+        manifest_override or _manifest_from_job_details(details, run_dir=run_dir, events=events),
         job,
         summary,
     )

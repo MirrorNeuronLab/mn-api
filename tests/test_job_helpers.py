@@ -78,6 +78,47 @@ def test_stream_job_events_handles_bad_json_and_stream_errors(monkeypatch):
     assert error == "stream down"
 
 
+def test_run_workflow_progress_reads_execution_and_stable_definition(monkeypatch):
+    calls = []
+
+    class FakeClient:
+        def get_run(self, run_id):
+            calls.append(("run", run_id))
+            return json.dumps({"run_id": run_id, "job_id": "stable-1", "status": "running"})
+
+        def get_job(self, job_id, *, include_workflow_definition=False):
+            calls.append(("job", job_id, include_workflow_definition))
+            return json.dumps({
+                "job_id": job_id,
+                "workflow_definition": {"workflow": {"steps": [{"id": "prepare"}]}},
+            })
+
+        def stream_events(self, run_id, **_kwargs):
+            calls.append(("events", run_id))
+            yield json.dumps({"type": "workflow_step_started", "step_id": "prepare"})
+
+    captured = {}
+
+    def project(manifest, events, **_kwargs):
+        captured["manifest"] = manifest
+        captured["events"] = events
+        return {"status": "running", "steps": [{"id": "prepare", "status": "running"}]}
+
+    monkeypatch.setattr(state, "client", FakeClient())
+    monkeypatch.setattr(jobs, "workflow_progress_snapshot", project)
+
+    progress = jobs._workflow_progress_snapshot_for_run("execution-2")
+
+    assert calls == [
+        ("run", "execution-2"),
+        ("job", "stable-1", True),
+        ("events", "execution-2"),
+    ]
+    assert captured["manifest"]["workflow"]["steps"][0]["id"] == "prepare"
+    assert captured["events"][0]["step_id"] == "prepare"
+    assert progress["steps"][0]["status"] == "running"
+
+
 def test_extract_nested_string_and_agent_summaries():
     nested = {"payload": [{"meta": {"run_id": "run-1"}}]}
     assert jobs._extract_nested_string(nested, "run_id") == "run-1"

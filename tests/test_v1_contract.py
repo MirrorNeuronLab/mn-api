@@ -545,7 +545,7 @@ def _patch_canonical_projections(monkeypatch):
     monkeypatch.setattr(jobs.runtime_job_routes, "_compact_job_detail", lambda _id: monitor)
     monkeypatch.setattr(
         jobs.runtime_job_routes,
-        "_workflow_progress_snapshot_for_job",
+        "_workflow_progress_snapshot_for_run",
         lambda _id: {"run_id": "runtime-1", "status": "completed", "steps": []},
     )
     monkeypatch.setattr(jobs.runtime_run_routes, "get_run_logs", lambda *_args: {"data": [{"id": "log-1"}]})
@@ -1026,6 +1026,7 @@ def test_run_artifact_projection_resolves_staged_result_reference(monkeypatch, t
 def test_run_monitor_overlays_canonical_terminal_status(monkeypatch):
     client, runtime = _client(monkeypatch)
     _patch_canonical_projections(monkeypatch)
+    monitored_ids = []
     runtime.get_run = lambda run_id: json.dumps(
         {
             "job_id": "job-1",
@@ -1034,14 +1035,14 @@ def test_run_monitor_overlays_canonical_terminal_status(monkeypatch):
             "runtime_run_id": "runtime-1",
         }
     )
-    monkeypatch.setattr(
-        jobs.runtime_job_routes,
-        "_compact_job_detail",
-        lambda _run_id: {
+    def monitor_for_run(run_id):
+        monitored_ids.append(run_id)
+        return {
             "job": {"job_id": "runtime-1", "status": "unknown"},
             "summary": {"status": "unknown"},
-        },
-    )
+        }
+
+    monkeypatch.setattr(jobs.runtime_job_routes, "_compact_job_detail", monitor_for_run)
 
     response = client.get("/api/v1/runs/run-1/monitor")
 
@@ -1049,6 +1050,45 @@ def test_run_monitor_overlays_canonical_terminal_status(monkeypatch):
     assert response.json()["status"] == "completed"
     assert response.json()["job"]["status"] == "completed"
     assert response.json()["summary"]["status"] == "completed"
+    assert monitored_ids == ["run-1"]
+
+
+def test_run_progress_uses_execution_id_when_output_id_differs(monkeypatch):
+    client, runtime = _client(monkeypatch)
+    runtime.get_run = lambda run_id: json.dumps({
+        "job_id": "job-1", "run_id": run_id, "runtime_run_id": "output-1", "status": "completed"
+    })
+    progress_ids = []
+    event_ids = []
+
+    def progress_for_run(run_id):
+        progress_ids.append(run_id)
+        return {
+            "job_id": run_id,
+            "status": "completed",
+            "completed_steps": 1,
+            "total_steps": 1,
+            "steps": [{"id": "prepare", "status": "done"}],
+        }
+
+    def events_for_run(run_id, *_args):
+        event_ids.append(run_id)
+        return {"items": []}
+
+    monkeypatch.setattr(jobs.runtime_job_routes, "_workflow_progress_snapshot_for_run", progress_for_run)
+    monkeypatch.setattr(jobs.runtime_run_routes, "get_run_events", events_for_run)
+
+    response = client.get("/api/v1/runs/run-2/workflow-progress")
+    assert response.status_code == 200
+    assert response.json()["run_id"] == "run-2"
+    assert response.json()["runtime_run_id"] == "output-1"
+    assert response.json()["steps"][0]["status"] == "done"
+
+    stream = client.get("/api/v1/runs/run-2/events/stream?interval=0.25")
+    assert stream.status_code == 200
+    assert '"run_id":"run-2"' in stream.text
+    assert progress_ids == ["run-2", "run-2"]
+    assert event_ids == ["run-2"]
 
 
 def test_canonical_run_detail_and_operations(monkeypatch):
@@ -1265,7 +1305,7 @@ def test_job_workflow_shape_views_and_progress_only(monkeypatch):
         "layers": [["start"], ["dynamic"]],
         "current_step": None,
     }
-    monkeypatch.setattr(jobs.runtime_job_routes, "_workflow_progress_snapshot_for_job", lambda _id: snapshot)
+    monkeypatch.setattr(jobs.runtime_job_routes, "_workflow_progress_snapshot_for_run", lambda _id: snapshot)
 
     base = "/api/v1/jobs/job-1/workflow"
     dag = client.get(f"{base}/definition/dag")
@@ -1293,7 +1333,7 @@ def test_job_workflow_shape_views_and_progress_only(monkeypatch):
     assert "label" not in progress.json()["steps"][1]
     assert "role" not in progress.json()["steps"][1]["agents"][0]
 
-    monkeypatch.setattr(jobs.runtime_job_routes, "_workflow_progress_snapshot_for_job", lambda _id: {
+    monkeypatch.setattr(jobs.runtime_job_routes, "_workflow_progress_snapshot_for_run", lambda _id: {
         "job_id": "runtime-1", "status": "running", "steps": [], "edges": [], "layers": []
     })
     empty_runtime_shape = client.get(f"{base}/latest-run/steps")

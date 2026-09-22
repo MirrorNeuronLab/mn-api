@@ -132,7 +132,7 @@ def _runtime_output_id(run_id: str) -> str:
             if value:
                 return str(value)
     try:
-        snapshot = runtime_job_routes._workflow_progress_snapshot_for_job(run_id)
+        snapshot = runtime_job_routes._workflow_progress_snapshot_for_run(run_id)
         value = snapshot.get("run_id") if isinstance(snapshot, dict) else None
         if value:
             return str(value)
@@ -298,7 +298,7 @@ def _job_workflow_shape(job_id: str, source: str) -> dict[str, Any]:
     if str(run.get("job_id") or "") != job_id:
         raise HTTPException(status_code=404, detail="Job has no latest run.")
     runtime_id = _runtime_output_id(run_id)
-    snapshot = runtime_job_routes._workflow_progress_snapshot_for_job(runtime_id)
+    snapshot = runtime_job_routes._workflow_progress_snapshot_for_run(run_id)
     shape = latest_run_shape(job_id, run_id, snapshot)
     if not shape["steps"]:
         definition = job.get("workflow_definition")
@@ -682,7 +682,7 @@ def create_job_schedule(job_id: str, request: ScheduleCreate, response: Response
 @router.get("/runs/{run_id}/monitor", operation_id="get_run_monitor", tags=["runs"], response_model=ResourceModel)
 def get_run_monitor(run_id: str, _principal=Depends(require_auth)):
     runtime_id = _runtime_output_id(run_id)
-    detail = dict(runtime_job_routes._compact_job_detail(runtime_id))
+    detail = dict(runtime_job_routes._compact_job_detail(run_id))
     canonical_run = _service().get_run(run_id)
     canonical_status = str(canonical_run.get("status") or "").strip().lower()
     if canonical_status:
@@ -702,7 +702,7 @@ def get_run_monitor(run_id: str, _principal=Depends(require_auth)):
 )
 def get_run_workflow_progress(run_id: str, _principal=Depends(require_auth)):
     runtime_id = _runtime_output_id(run_id)
-    snapshot = runtime_job_routes._workflow_progress_snapshot_for_job(runtime_id)
+    snapshot = runtime_job_routes._workflow_progress_snapshot_for_run(run_id)
     return _run_public(progress_only(snapshot), run_id=run_id, runtime_run_id=runtime_id)
 
 
@@ -797,7 +797,7 @@ def stream_run_events(
         seen: set[str] = set()
         yield ": heartbeat\n\n"
         while True:
-            progress = runtime_job_routes._workflow_progress_snapshot_for_job(runtime_id)
+            progress = runtime_job_routes._workflow_progress_snapshot_for_run(run_id)
             emitted += 1
             if emitted > resume_after:
                 yield encode_sse(
@@ -808,7 +808,7 @@ def stream_run_events(
                         data=_run_public(progress_only(progress), run_id=run_id, runtime_run_id=runtime_id),
                     )
                 )
-            payload = runtime_run_routes.get_run_events(runtime_id, 5000, None, principal)
+            payload = runtime_run_routes.get_run_events(run_id, 5000, None, principal)
             for event in records(payload, "items", "events", "data"):
                 identity = json.dumps(event, sort_keys=True, separators=(",", ":"), default=str)
                 if identity in seen:
