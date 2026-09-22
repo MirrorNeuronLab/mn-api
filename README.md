@@ -147,7 +147,8 @@ All paths below are under `/api/v1`.
 - Jobs: `GET/POST /jobs`, `GET/PATCH/DELETE /jobs/{job_id}`,
   `PUT /jobs/{job_id}/bundle`, `POST /jobs/{job_id}/data-resets`, and the
   read-only Streamable HTTP MCP endpoint at `/jobs/{job_id}/mcp` for eligible
-  blueprint jobs.
+  blueprint jobs. Workflow shape is available at
+  `GET /jobs/{job_id}/workflow/{definition|latest-run}/{dag|steps}`.
 - Runs: `POST/GET /jobs/{job_id}/runs` (catalog Jobs may include
   `config_overrides`; the API prepares the updated definition before launch),
   `POST /blueprints/{blueprint_id}/runs`, `GET /runs`, and
@@ -180,10 +181,13 @@ and fall back to the host-local job-data handle. This lets a DockerWorker on a
 federated owner publish its OS-selected listener while the browser continues to
 use only the submit host's `/jobs/{job_id}/ui` route.
 
-Workflow-progress snapshots expose source-facing `edges` and `layers`. When
-Core reports a lowered runtime graph, the API projects dependencies through
-internal start/end/fork/join nodes so desktop clients can render parallel
-branches without reading runtime bundle-cache files.
+Job workflow `dag` responses contain logical step nodes, dependency edges,
+and layers. `steps` responses contain each step and its agents. The
+`definition` view reads the saved Job, including before its first run; the
+`latest-run` view includes steps discovered during the most recent run and
+returns 404 when no run exists. Jobs without logical steps return empty shapes.
+Run workflow-progress snapshots and run event-stream snapshots contain only
+progress data; clients combine them with the Job shape views for display.
 
 `job_id` is a persistent configuration and data owner; `run_id` is one
 execution. Every manual or scheduled start creates a new Run. There is no

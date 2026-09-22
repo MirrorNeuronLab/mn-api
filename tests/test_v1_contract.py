@@ -45,7 +45,7 @@ class CanonicalRuntime:
             }
         )
 
-    def get_job(self, job_id):
+    def get_job(self, job_id, *, include_workflow_definition=False):
         return json.dumps({"job_id": job_id, "status": "active", "revision": 1})
 
     def archive_job(self, job_id, **_kwargs):
@@ -1227,3 +1227,80 @@ def test_staged_final_artifact_errors_preserve_retry_and_integrity_contract(monk
         assert response.json()["code"] == code
         assert str(error) not in response.text
         assert response.headers.get("retry-after") == ("1" if status == 503 else None)
+
+
+def test_job_workflow_shape_views_and_progress_only(monkeypatch):
+    client, runtime = _client(monkeypatch)
+    definition = {
+        "workflow": {
+            "workflow_id": "flow-1",
+            "steps": [
+                {"id": "start", "label": "Start", "run": "start"},
+                {"id": "left", "label": "Left", "run": "left"},
+                {"id": "right", "label": "Right", "run": "right"},
+            ],
+            "edges": [{"from": "start", "to": "left"}, {"from": "start", "to": "right"}],
+        },
+        "runtime": {"bindings": {"left": {"workers": [{"id": "agent-left", "role": "research", "model": "m"}]}}},
+    }
+    runtime.get_job = lambda job_id, **_kwargs: json.dumps({
+        "job_id": job_id,
+        "status": "active",
+        "revision": 1,
+        "latest_run_id": "run-1",
+        "workflow_definition": definition,
+    })
+    snapshot = {
+        "job_id": "runtime-1",
+        "workflow_id": "flow-1",
+        "graph_revision": 2,
+        "status": "completed",
+        "steps": [
+            {"id": "start", "label": "Start", "goal": "", "status": "done", "parents": [], "agents": []},
+            {"id": "dynamic", "label": "Dynamic", "goal": "Inspect", "status": "done", "parents": ["start"],
+             "agents": [{"id": "agent-dynamic", "display_name": "Inspector", "role": "inspect", "model": "m",
+                         "status": "done", "progress": 1.0}]},
+        ],
+        "edges": [{"from": "start", "to": "dynamic"}],
+        "layers": [["start"], ["dynamic"]],
+        "current_step": None,
+    }
+    monkeypatch.setattr(jobs.runtime_job_routes, "_workflow_progress_snapshot_for_job", lambda _id: snapshot)
+
+    base = "/api/v1/jobs/job-1/workflow"
+    dag = client.get(f"{base}/definition/dag")
+    assert dag.status_code == 200, dag.text
+    assert dag.json()["layers"] == [["start"], ["left", "right"]]
+    assert [node["id"] for node in dag.json()["nodes"]] == ["start", "left", "right"]
+    steps = client.get(f"{base}/definition/steps")
+    assert steps.status_code == 200, steps.text
+    assert steps.json()["steps"][1]["agents"] == [
+        {"id": "agent-left", "display_name": "", "role": "research", "model": "m"}
+    ]
+    latest = client.get(f"{base}/latest-run/steps")
+    assert latest.status_code == 200, latest.text
+    assert latest.json()["run_id"] == "run-1"
+    assert latest.json()["steps"][1]["agents"][0]["id"] == "agent-dynamic"
+    assert client.get(f"{base}/latest-run/dag").json()["edges"] == [{"from": "start", "to": "dynamic"}]
+    assert "workflow_definition" not in client.get("/api/v1/jobs/job-1").json()
+
+    progress = client.get("/api/v1/runs/run-1/workflow-progress")
+    assert progress.status_code == 200, progress.text
+    assert progress.json()["steps"][1]["status"] == "done"
+    assert progress.json()["steps"][1]["agents"][0]["progress"] == 1.0
+    assert "edges" not in progress.json()
+    assert "layers" not in progress.json()
+    assert "label" not in progress.json()["steps"][1]
+    assert "role" not in progress.json()["steps"][1]["agents"][0]
+
+
+def test_job_workflow_shape_missing_latest_run_and_empty_definition(monkeypatch):
+    client, runtime = _client(monkeypatch)
+    runtime.get_job = lambda job_id, **_kwargs: json.dumps({"job_id": job_id, "workflow_definition": {}})
+    dag = client.get("/api/v1/jobs/job-1/workflow/definition/dag")
+    assert dag.status_code == 200, dag.text
+    assert dag.json()["nodes"] == []
+    assert client.get("/api/v1/jobs/job-1/workflow/definition/steps").json()["steps"] == []
+    missing = client.get("/api/v1/jobs/job-1/workflow/latest-run/dag")
+    assert missing.status_code == 404
+    assert missing.headers["content-type"].startswith("application/problem+json")

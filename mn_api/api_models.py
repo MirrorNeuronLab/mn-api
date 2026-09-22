@@ -20,6 +20,43 @@ class PageResponse(StrictModel):
     next_page_token: str | None = None
 
 
+class WorkflowAgent(StrictModel):
+    id: str
+    display_name: str
+    role: str
+    model: str
+
+
+class WorkflowStep(StrictModel):
+    id: str
+    label: str
+    goal: str
+    agents: list[WorkflowAgent]
+
+
+class WorkflowNode(StrictModel):
+    id: str
+    label: str
+
+
+class WorkflowShapeBase(StrictModel):
+    job_id: str
+    source: Literal["definition", "latest_run"]
+    run_id: str | None
+    workflow_id: str
+    graph_revision: int | None
+
+
+class WorkflowDag(WorkflowShapeBase):
+    nodes: list[WorkflowNode]
+    edges: list[dict[str, Any]]
+    layers: list[list[str]]
+
+
+class WorkflowSteps(WorkflowShapeBase):
+    steps: list[WorkflowStep]
+
+
 class HealthResponse(StrictModel):
     status: Literal["ok"]
     api_contract: Literal["mirrorneuron.rest.v1"]

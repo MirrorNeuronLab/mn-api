@@ -30,6 +30,8 @@ from mn_api.api_models import (
     RunCreate,
     RunUpdate,
     ScheduleCreate,
+    WorkflowDag,
+    WorkflowSteps,
 )
 from mn_api.blueprints import (
     cleanup_blueprint_run_processes,
@@ -51,6 +53,7 @@ from mn_api.pagination import page, page_tokens
 from mn_api.public import decode, idempotent_response, public_value, records, resource_response
 from mn_api.routes import jobs as runtime_job_routes
 from mn_api.routes import runs as runtime_run_routes
+from mn_api.workflow_shape import dag_view, definition_shape, latest_run_shape, progress_only, steps_view
 
 
 router = APIRouter(prefix=API_PREFIX)
@@ -276,7 +279,45 @@ def list_jobs(
 
 @router.get("/jobs/{job_id}", operation_id="get_job", tags=["jobs"], response_model=ResourceModel)
 def get_job(job_id: str, _principal=Depends(require_auth)):
-    return resource_response(_service().get_job(job_id), etag=True)
+    job = dict(_service().get_job(job_id))
+    job.pop("workflow_definition", None)
+    return resource_response(job, etag=True)
+
+
+def _job_workflow_shape(job_id: str, source: str) -> dict[str, Any]:
+    job = _service().get_job(job_id, include_workflow_definition=True)
+    if source == "definition":
+        definition = job.get("workflow_definition")
+        return definition_shape(job_id, definition if isinstance(definition, dict) else {})
+    run_id = str(job.get("latest_run_id") or "").strip()
+    if not run_id:
+        raise HTTPException(status_code=404, detail="Job has no latest run.")
+    run = _service().get_run(run_id)
+    if str(run.get("job_id") or "") != job_id:
+        raise HTTPException(status_code=404, detail="Job has no latest run.")
+    runtime_id = _runtime_output_id(run_id)
+    snapshot = runtime_job_routes._workflow_progress_snapshot_for_job(runtime_id)
+    return latest_run_shape(job_id, run_id, snapshot)
+
+
+@router.get("/jobs/{job_id}/workflow/definition/dag", operation_id="get_job_definition_dag", tags=["jobs"], response_model=WorkflowDag)
+def get_job_definition_dag(job_id: str, _principal=Depends(require_auth)):
+    return dag_view(_job_workflow_shape(job_id, "definition"))
+
+
+@router.get("/jobs/{job_id}/workflow/definition/steps", operation_id="get_job_definition_steps", tags=["jobs"], response_model=WorkflowSteps)
+def get_job_definition_steps(job_id: str, _principal=Depends(require_auth)):
+    return steps_view(_job_workflow_shape(job_id, "definition"))
+
+
+@router.get("/jobs/{job_id}/workflow/latest-run/dag", operation_id="get_job_latest_run_dag", tags=["jobs"], response_model=WorkflowDag)
+def get_job_latest_run_dag(job_id: str, _principal=Depends(require_auth)):
+    return dag_view(_job_workflow_shape(job_id, "latest_run"))
+
+
+@router.get("/jobs/{job_id}/workflow/latest-run/steps", operation_id="get_job_latest_run_steps", tags=["jobs"], response_model=WorkflowSteps)
+def get_job_latest_run_steps(job_id: str, _principal=Depends(require_auth)):
+    return steps_view(_job_workflow_shape(job_id, "latest_run"))
 
 
 @router.get("/jobs/{job_id}/ui", operation_id="get_job_ui", tags=["jobs"], response_model=ResourceModel)
@@ -652,7 +693,7 @@ def get_run_monitor(run_id: str, _principal=Depends(require_auth)):
 def get_run_workflow_progress(run_id: str, _principal=Depends(require_auth)):
     runtime_id = _runtime_output_id(run_id)
     snapshot = runtime_job_routes._workflow_progress_snapshot_for_job(runtime_id)
-    return _run_public(snapshot, run_id=run_id, runtime_run_id=runtime_id)
+    return _run_public(progress_only(snapshot), run_id=run_id, runtime_run_id=runtime_id)
 
 
 def _page_run_records(
@@ -754,7 +795,7 @@ def stream_run_events(
                         event_id=emitted,
                         event_type="run.snapshot",
                         resource=f"{API_PREFIX}/runs/{run_id}",
-                        data=_run_public(progress, run_id=run_id, runtime_run_id=runtime_id),
+                        data=_run_public(progress_only(progress), run_id=run_id, runtime_run_id=runtime_id),
                     )
                 )
             payload = runtime_run_routes.get_run_events(runtime_id, 5000, None, principal)

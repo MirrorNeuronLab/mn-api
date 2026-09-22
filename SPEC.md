@@ -74,7 +74,9 @@ No artificial completion percentage is inferred from elapsed time.
 - Collection responses contain `items` and an opaque `next_page_token`.
 - Streaming endpoints must terminate on completion, error, timeout, or client
   disconnect and must not leak background tasks.
-- Workflow-progress polling and streams expose public step dependencies. Hidden
+- Job workflow definition and latest-run shape endpoints expose public step
+  dependencies and step-agent membership. Workflow-progress polling and run
+  event-stream snapshots expose status and progress without shape fields. Hidden
   lowered runtime nodes such as start/end/fork/join nodes are transitively
   projected into source-facing edges and layers at the API boundary.
 - Group operations use fixed Core-owned kinds (`cancel_all_jobs`, `clear_jobs`,
