@@ -334,3 +334,6 @@ The new SSE transport keeps MCP's loopback Host/Origin protection enabled
 transports retain their settings. Non-loopback SSE exposure requires an explicit
 trusted-host configuration in the transport before deployment; it must not be
 enabled by disabling rebinding protection.
+# Run result publication
+
+Blueprint submissions that declare result-bearing `mn_storage.output_copy` entries start the background event relay, even without a post-launch hook. The relay copies completed outputs and publishes `run_result_available` events through the run events API so clients can show every declared result.

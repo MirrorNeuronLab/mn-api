@@ -209,6 +209,29 @@ def test_background_relay_config_helpers(monkeypatch):
     assert blueprints.background_event_relay_max_seconds({}) is None
 
 
+def test_result_copy_starts_background_relay_without_post_launch_hook(monkeypatch, tmp_path):
+    storage = {"output_copy": [{"source_path": "/runtime/output", "target_path": str(tmp_path / "result"),
+                                "result": {"kind": "output_folder", "label": "Output folder"}}]}
+    manifest = {"metadata": {"mn_storage": storage}}
+    monkeypatch.setattr(blueprints, "config_bool", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(blueprints, "shared_runs_root", lambda: str(tmp_path / "runs"))
+    monkeypatch.setattr(blueprints, "validate_blueprint_bundle", lambda *_args: tmp_path)
+    monkeypatch.setattr(blueprints, "load_blueprint_config", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(blueprints, "with_shared_run_store_config", lambda config, *_args: config)
+    monkeypatch.setattr(blueprints, "subprocess_environment", lambda: {})
+    monkeypatch.setattr(blueprints, "runtime_path_environment", lambda: {})
+    monkeypatch.setattr(blueprints, "string_env_values", lambda *_args: {})
+    monkeypatch.setattr(blueprints, "process_group_id_for_pid", lambda *_args: None)
+    monkeypatch.setattr(blueprints.subprocess, "Popen", lambda *_args, **_kwargs: SimpleNamespace(pid=1234))
+
+    blueprints.start_background_event_relay_if_needed(
+        tmp_path, {"id": "purchasing_manager"}, "planned-run", "actual-run", json.dumps(manifest)
+    )
+    run_dir = tmp_path / "runs" / "planned-run"
+    assert json.loads((run_dir / "shared_storage.json").read_text()) == storage
+    assert json.loads((run_dir / "event_relay.json").read_text())["execution_id"] == "actual-run"
+
+
 def test_scheduler_job_payload_helpers():
     payload = {
         "data": [

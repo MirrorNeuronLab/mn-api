@@ -2530,10 +2530,11 @@ def start_background_event_relay_if_needed(
         manifest = json.loads(manifest_json)
     except json.JSONDecodeError:
         return
+    storage = relay_result_storage(manifest)
     runs_root = Path(shared_runs_root()).expanduser()
     run_dir = runs_root / run_id
     has_post_launch_hook = (run_dir / "post_launch_hook.json").is_file()
-    if not has_post_launch_hook:
+    if not has_post_launch_hook and not storage:
         return
 
     bundle_root = validate_blueprint_bundle(repo_root, blueprint)
@@ -2545,6 +2546,11 @@ def start_background_event_relay_if_needed(
     max_seconds = background_event_relay_max_seconds(config)
     poll_seconds = background_event_relay_poll_seconds(config)
     run_dir.mkdir(parents=True, exist_ok=True)
+    if storage:
+        storage_path = run_dir / "shared_storage.json"
+        temporary_path = run_dir / "shared_storage.json.tmp"
+        temporary_path.write_text(json.dumps(storage, sort_keys=True) + "\n", encoding="utf-8")
+        temporary_path.replace(storage_path)
     log_path = run_dir / "event_relay.log"
     command = [
         sys.executable,
@@ -2600,6 +2606,19 @@ def start_background_event_relay_if_needed(
     if process_group_id:
         relay_info["process_group_id"] = process_group_id
     (run_dir / "event_relay.json").write_text(json.dumps(relay_info, indent=2, sort_keys=True) + "\n")
+
+
+def relay_result_storage(manifest: dict[str, Any]) -> dict[str, Any]:
+    metadata = manifest.get("metadata") if isinstance(manifest, dict) else None
+    storage = metadata.get("mn_storage") if isinstance(metadata, dict) else None
+    if not isinstance(storage, dict):
+        return {}
+    copies = storage.get("output_copy")
+    if not isinstance(copies, list) or not any(
+        isinstance(spec, dict) and isinstance(spec.get("result"), dict) for spec in copies
+    ):
+        return {}
+    return storage
 
 
 def background_event_relay_poll_seconds(config: Dict[str, Any] | None) -> float:
