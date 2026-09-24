@@ -54,6 +54,7 @@ from mn_api.operations import encode_sse, sse_envelope, start_operation
 from mn_api.pagination import page, page_tokens
 from mn_api.public import decode, idempotent_response, public_value, records, resource_response
 from mn_api.run_recovery import stored_progress, stored_run
+from mn_api.run_store import shared_result_events
 from mn_api.routes import jobs as runtime_job_routes
 from mn_api.routes import runs as runtime_run_routes
 from mn_api.workflow_shape import dag_view, definition_shape, latest_run_shape, progress_only, steps_view
@@ -816,7 +817,36 @@ def list_run_events(
     principal: str = Depends(require_auth),
 ):
     runtime_id = _runtime_output_id(run_id)
-    value = runtime_run_routes.get_run_events(runtime_id, 5000, channel, principal)
+    missing = None
+    try:
+        value = runtime_run_routes.get_run_events(runtime_id, 5000, channel, principal)
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
+        value = {"data": []}
+        missing = exc
+    try:
+        run = _service().get_run(run_id)
+    except Exception:
+        run = {}
+    job = run.get("job") if isinstance(run.get("job"), dict) else {}
+    job_id = str(run.get("job_id") or job.get("job_id") or "")
+    shared = shared_result_events(job_id, runtime_id) if not channel or channel == "results" else []
+    if missing and not shared:
+        raise missing
+    if shared:
+        merged = records(value, "items", "events", "data")
+        seen = {
+            event.get("payload", {}).get("result_id") for event in merged
+            if isinstance(event, dict) and isinstance(event.get("payload"), dict)
+        }
+        for event in shared:
+            result_id = event["payload"].get("result_id")
+            if result_id in seen:
+                continue
+            seen.add(result_id)
+            merged.append(event)
+        value = {"data": merged}
     return _page_run_records(
         value,
         keys=("items", "events", "data"),

@@ -6,12 +6,28 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
-from mn_api.run_store import read_json_file, read_jsonl_file, run_dir_from_id, stream_jsonl_files
+from mn_api.run_store import read_json_file, read_jsonl_file, run_dir_from_id, shared_result_events, stream_jsonl_files
 
 
 class TestRunStore(unittest.TestCase):
+    def test_shared_result_events_only_reads_the_matching_job_and_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            events = root / "submissions" / "job-mc-def-123" / "outputs" / "runs" / "mcv-1" / "events.jsonl"
+            events.parent.mkdir(parents=True)
+            events.write_text("\n".join(json.dumps(event) for event in [
+                {"type": "run_result_available", "payload": {"run_id": "mcv-1", "result_id": "a"}},
+                {"type": "run_result_available", "payload": {"run_id": "other", "result_id": "b"}},
+                {"type": "workflow_step_completed", "payload": {"run_id": "mcv-1"}},
+            ]) + "\n")
+            with patch("mn_api.run_store.RuntimeConfig.from_env", return_value=SimpleNamespace(shared_storage_root=str(root))):
+                self.assertEqual(len(shared_result_events("job-mc", "mcv-1")), 1)
+                self.assertEqual(shared_result_events("other-job", "mcv-1"), [])
+                self.assertEqual(shared_result_events("../job-mc", "mcv-1"), [])
+
     def test_run_dir_from_id_validates_id_and_root_containment(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

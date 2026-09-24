@@ -1108,6 +1108,29 @@ def test_shared_run_events_use_mapped_run_id_before_core_result_reference(monkey
     assert received == ["run-1"]
 
 
+def test_active_service_result_events_are_served_from_shared_submission(monkeypatch):
+    client, runtime = _client(monkeypatch)
+    runtime.get_run = lambda run_id: json.dumps({
+        "run_id": run_id, "job_id": "job-microduck", "status": "running"
+    })
+    monkeypatch.setattr(jobs.runtime_run_routes, "get_run_events", lambda *_args: (
+        (_ for _ in ()).throw(HTTPException(status_code=404, detail="run not found"))
+    ))
+    calls = []
+    monkeypatch.setattr(jobs, "shared_result_events", lambda job_id, run_id: (
+        calls.append((job_id, run_id)) or [{
+            "type": "run_result_available", "timestamp": "2026-01-01T00:00:00Z",
+            "payload": {"run_id": run_id, "result_id": "aaaaaaaaaaaaaaaaaaaaaaaa", "kind": "web_ui"}
+        }]
+    ))
+
+    response = client.get("/api/v1/runs/mcv-live/events")
+
+    assert response.status_code == 200
+    assert calls == [("job-microduck", "mcv-live")]
+    assert response.json()["items"][0]["type"] == "run_result_available"
+
+
 def test_run_event_stream_keeps_snapshot_when_local_event_copy_is_not_ready(monkeypatch):
     from fastapi import HTTPException
 
