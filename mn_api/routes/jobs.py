@@ -191,6 +191,9 @@ def get_job_ui(job_id: str, _auth=Depends(require_auth)):
     job_dir = job_data_dir_from_id(job_id, must_exist=False)
     if job_dir is None:
         raise HTTPException(status_code=400, detail="invalid job id")
+    live_handle = _job_ui_handle_from_services(job_id)
+    if live_handle is not None:
+        return live_handle
     shared_dir = shared_job_ui_dir_from_id(job_id, must_exist=False)
     for candidate in (shared_dir, job_dir):
         handle = _job_ui_handle_from_directory(candidate, job_id)
@@ -206,6 +209,69 @@ def get_job_ui(job_id: str, _auth=Depends(require_auth)):
     if remote_handle is not None:
         return remote_handle
     raise HTTPException(status_code=404, detail="job UI not found")
+
+
+def _job_ui_handle_from_services(job_id: str) -> dict[str, Any] | None:
+    """Project a passing Job UI from the Core registry and node advertisement."""
+    if not hasattr(state.client, "list_services"):
+        return None
+    try:
+        job = _json_object(state.client.get_job(job_id))
+        run_id = str(job.get("latest_run_id") or "").strip()
+        if not run_id:
+            return None
+        listing = _json_object(state.client.list_services(job_id=run_id, passing_only=True, page_size=200))
+        items = listing.get("items") or listing.get("services") or []
+        if not isinstance(items, list):
+            return None
+        summary = _json_object(state.client.get_system_summary())
+    except Exception:
+        return None
+    nodes = {
+        str(node.get("name") or ""): str(node.get("address") or node.get("grpc_host") or "").strip()
+        for node in summary.get("nodes", []) if isinstance(node, dict)
+    }
+    services = [service for service in items if isinstance(service, dict) and
+                service.get("job_id") in (None, run_id) and
+                str(service.get("status") or "").lower() == "passing"]
+    web = [service for service in services if "web_ui" in service.get("tags", [])]
+    if len(web) != 1:
+        return None
+    service = web[0]
+    node = str(service.get("node") or "")
+    host = nodes.get(node, "")
+    try:
+        port = int(service.get("port"))
+    except (TypeError, ValueError):
+        return None
+    if not host or host in {"0.0.0.0", "::"} or any(char in host for char in "/?#") or not 1 <= port <= 65535:
+        return None
+    http_ports = {port}
+    websocket_ports = set()
+    for candidate in services:
+        if candidate.get("node") != node:
+            continue
+        try:
+            candidate_port = int(candidate.get("port"))
+        except (TypeError, ValueError):
+            continue
+        if not 1 <= candidate_port <= 65535:
+            continue
+        tags = set(candidate.get("tags") or [])
+        if tags & {"web_ui", "web_ui_proxy", "video"}:
+            http_ports.add(candidate_port)
+        if "websocket" in tags:
+            websocket_ports.add(candidate_port)
+    title = str((service.get("meta") or {}).get("title") or service.get("name") or "Job Web UI")[:200]
+    metadata = {"job_id": job_id, "service_name": service.get("name"), "node_id": node,
+                "proxy": {"schema_version": "mn.web_ui.proxy.v1", "http_ports": sorted(http_ports),
+                          "websocket_ports": sorted(websocket_ports)}}
+    return {"job_id": job_id,
+            "ui": {"schema_version": "mn.web_ui.external.v1", "renderer": "external-url",
+                   "job_id": job_id, "title": title, "metadata": metadata},
+            "web_ui": {"kind": "service", "adapter": "external-url", "status": "running",
+                       "title": title, "url": f"http://{host}:{port}", "job_id": job_id,
+                       "metadata": metadata}}
 
 
 def _job_ui_handle_from_directory(candidate: Path | None, job_id: str) -> dict[str, Any] | None:

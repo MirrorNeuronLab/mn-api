@@ -195,6 +195,38 @@ def test_get_job_ui_reads_the_durable_job_data_directory(monkeypatch, tmp_path):
     }
 
 
+def test_get_job_ui_uses_selected_runtime_node_for_passing_service(monkeypatch, tmp_path):
+    class FakeClient:
+        def get_job(self, job_id):
+            assert job_id == "job-1"
+            return json.dumps({"latest_run_id": "run-1"})
+
+        def list_services(self, **query):
+            assert query["job_id"] == "run-1"
+            return json.dumps({"items": [
+                {"job_id": "run-1", "name": "warehouse-ui", "node": "mirror_neuron@10.0.4.32",
+                 "address": "10.0.4.26", "port": 8088, "status": "passing", "tags": ["web_ui"],
+                 "meta": {"title": "Warehouse AMR Monitor"}},
+                {"job_id": "run-1", "name": "video", "node": "mirror_neuron@10.0.4.32",
+                 "port": 8080, "status": "passing", "tags": ["video"]},
+                {"job_id": "run-1", "name": "rosbridge", "node": "mirror_neuron@10.0.4.32",
+                 "port": 9090, "status": "passing", "tags": ["websocket"]},
+            ]})
+
+        def get_system_summary(self):
+            return json.dumps({"nodes": [{"name": "mirror_neuron@10.0.4.32", "address": "10.0.4.32"}]})
+
+    monkeypatch.setattr(jobs.state, "client", FakeClient())
+    monkeypatch.setattr(jobs, "job_data_dir_from_id", lambda _job_id, must_exist=False: tmp_path / "job-1")
+    handle = jobs.get_job_ui("job-1")
+    assert handle["web_ui"]["url"] == "http://10.0.4.32:8088"
+    assert handle["web_ui"]["metadata"]["proxy"] == {
+        "schema_version": "mn.web_ui.proxy.v1",
+        "http_ports": [8080, 8088],
+        "websocket_ports": [9090],
+    }
+
+
 def test_get_job_ui_prefers_the_cross_node_shared_handle(monkeypatch, tmp_path):
     local_dir = tmp_path / "local" / "job-1"
     shared_dir = tmp_path / "shared" / "job-1"
