@@ -77,6 +77,8 @@ python3.11 -m venv .venv
 ```
 
 OtterDesk and the Web UI consume the same canonical REST and SSE contract.
+OtterDesk node removal uses `DELETE /api/v1/nodes/{node_id}`, which forwards to
+the Core federated-peer removal contract.
 
 Start the local API:
 
@@ -167,6 +169,9 @@ All paths below are under `/api/v1`.
   operations, and multipart `POST /bundles` returning an opaque `bundle_id`.
 - Scheduling: schedules are created only through
   `POST /jobs/{job_id}/schedules` and are returned with the authoritative job.
+  `Idempotency-Key` is forwarded to Core and replays an identical create request.
+  Schedule detail read and update endpoints are not yet available; clients must
+  not treat a missing schedule detail response as proof that Core deleted it.
 - Infrastructure: `/nodes`, `/models`, `/model-remotes`,
   `/model-proxies`, `/services/{name}/resolution`, and `/service-checks`.
 - Administrative work: `/operations` and `/operations/{id}`.
@@ -312,6 +317,9 @@ definition when overrides are absent or do not change its resolved configuration
 matching `mn job start`. It does not rediscover the catalog, rebuild worker
 resources, or rerun placement against transient node status. Changed configuration
 still passes the normal preparation and revision-checked update before start.
+If another request saves the same resolved configuration during preparation,
+the run uses that prepared Job and discards its redundant preparation. A
+different concurrent configuration change remains a conflict.
 
 ## Streaming read-only Job answers
 

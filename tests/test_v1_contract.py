@@ -6,6 +6,7 @@ from threading import Event
 import time
 from types import SimpleNamespace
 
+import grpc
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
@@ -94,6 +95,7 @@ class CanonicalRuntime:
         yield json.dumps({"operation_id": operation_id, "type": "operation.completed", "status": "completed"})
 
     def create_job_schedule(self, job_id, **_kwargs):
+        self.calls.append(("create_job_schedule", job_id, _kwargs))
         return json.dumps({"job_id": job_id, "schedule_id": "schedule-1", "status": "running", "revision": 1})
 
     def list_schedules(self, **_kwargs):
@@ -128,6 +130,10 @@ class CanonicalRuntime:
 
     def cancel_node_drain(self, node_id, **_kwargs):
         return json.dumps({"node": node_id, "draining": False})
+
+    def remove_federated_peer(self, node_id):
+        self.calls.append(("remove_federated_peer", node_id))
+        return "removed"
 
     def set_node_maintenance(self, node_id, enabled, **kwargs):
         return json.dumps({"node": node_id, "enabled": enabled, **kwargs})
@@ -542,6 +548,197 @@ def test_run_uses_current_job_revision_after_bundle_preparation(monkeypatch):
     assert update_call[3]["expected_revision"] == 2
 
 
+def test_run_accepts_matching_configuration_saved_during_preparation(monkeypatch):
+    client, runtime = _client(monkeypatch)
+    configuration = {"worker": {"mode": "saved"}}
+    cleaned = []
+    mappings = []
+
+    def get_job(job_id, **_kwargs):
+        return json.dumps({
+            "job_id": job_id, "blueprint_id": "worker-1", "status": "active",
+            "revision": 2 if configuration["worker"]["mode"] == "updated" else 1,
+            "resolved_configuration": configuration,
+        })
+
+    def prepare(*_args, **_kwargs):
+        nonlocal configuration
+        configuration = {"worker": {"mode": "updated"}}
+        return '{"graph_id":"prepared-catalog"}', {}
+
+    monkeypatch.setattr(runtime, "get_job", get_job)
+    monkeypatch.setattr(jobs, "find_blueprint", lambda _config, blueprint_id: ("/catalog", {"id": blueprint_id}))
+    monkeypatch.setattr(jobs, "load_blueprint_bundle", prepare)
+    monkeypatch.setattr(jobs, "cleanup_blueprint_run_processes", lambda *args, **kwargs: cleaned.append((args, kwargs)))
+    monkeypatch.setattr(jobs, "write_blueprint_job_mapping", lambda *args, **kwargs: mappings.append((args, kwargs)))
+
+    started = client.post(
+        "/api/v1/jobs/job-1/runs",
+        json={"inputs": {}, "config_overrides": {"worker": {"mode": "updated"}}},
+    )
+    assert started.status_code == 202, started.text
+    assert [call[0] for call in runtime.calls].count("update_job") == 0
+    assert [call[0] for call in runtime.calls].count("start_run") == 1
+    assert cleaned[0][1]["reason"] == "redundant_preparation"
+    assert mappings == []
+
+
+def test_otterdesk_config_patch_can_finish_while_run_prepares(monkeypatch):
+    client, runtime = _client(monkeypatch)
+    job = {
+        "job_id": "job-1", "blueprint_id": "worker-1", "status": "active",
+        "revision": 1, "resolved_configuration": {"worker": {"mode": "saved"}},
+    }
+    prepared = []
+    cleaned = []
+
+    monkeypatch.setattr(runtime, "get_job", lambda *_args, **_kwargs: json.dumps(job))
+
+    def update_job(_job_id, attrs, **kwargs):
+        assert kwargs["expected_revision"] == job["revision"]
+        job.update(attrs)
+        job["revision"] += 1
+        runtime.calls.append(("update_job", attrs))
+        return json.dumps(job)
+
+    def prepare(*_args, **_kwargs):
+        prepared.append(True)
+        if len(prepared) == 1:
+            current = client.get("/api/v1/jobs/job-1")
+            synced = client.patch(
+                "/api/v1/jobs/job-1",
+                headers={"If-Match": current.headers["etag"]},
+                json={"resolved_configuration": {"worker": {"mode": "updated"}}},
+            )
+            assert synced.status_code == 200, synced.text
+        return '{"graph_id":"prepared-catalog"}', {}
+
+    monkeypatch.setattr(runtime, "update_job", update_job)
+    monkeypatch.setattr(jobs, "find_blueprint", lambda _config, blueprint_id: ("/catalog", {"id": blueprint_id}))
+    monkeypatch.setattr(jobs, "load_blueprint_bundle", prepare)
+    monkeypatch.setattr(jobs, "cleanup_blueprint_run_processes", lambda *args, **kwargs: cleaned.append((args, kwargs)))
+
+    started = client.post(
+        "/api/v1/jobs/job-1/runs",
+        json={"inputs": {}, "config_overrides": {"worker": {"mode": "updated"}}},
+    )
+    assert started.status_code == 202, started.text
+    assert len(prepared) == 2
+    assert len([call for call in runtime.calls if call[0] == "update_job"]) == 1
+    assert len([call for call in runtime.calls if call[0] == "start_run"]) == 1
+    assert cleaned[0][1]["reason"] == "redundant_preparation"
+
+
+def test_job_config_patch_rejects_a_concurrent_different_save(monkeypatch):
+    client, runtime = _client(monkeypatch)
+    no_raise_client = TestClient(client.app, raise_server_exceptions=False)
+    job = {
+        "job_id": "job-1", "blueprint_id": "worker-1", "status": "active",
+        "revision": 1, "resolved_configuration": {"worker": {"mode": "saved"}},
+    }
+    prepared = []
+
+    class RevisionMismatch(grpc.RpcError):
+        def code(self):
+            return grpc.StatusCode.ABORTED
+
+        def details(self):
+            return "revision_mismatch"
+
+    monkeypatch.setattr(runtime, "get_job", lambda *_args, **_kwargs: json.dumps(job))
+
+    def update_job(_job_id, attrs, **kwargs):
+        if kwargs["expected_revision"] != job["revision"]:
+            raise RevisionMismatch()
+        job.update(attrs)
+        job["revision"] += 1
+        return json.dumps(job)
+
+    def prepare(*_args, **_kwargs):
+        prepared.append(True)
+        if len(prepared) == 1:
+            current = client.get("/api/v1/jobs/job-1")
+            winner = client.patch(
+                "/api/v1/jobs/job-1",
+                headers={"If-Match": current.headers["etag"]},
+                json={"resolved_configuration": {"worker": {"mode": "winner"}}},
+            )
+            assert winner.status_code == 200, winner.text
+        return '{"graph_id":"prepared-catalog"}', {}
+
+    monkeypatch.setattr(runtime, "update_job", update_job)
+    monkeypatch.setattr(jobs, "find_blueprint", lambda _config, blueprint_id: ("/catalog", {"id": blueprint_id}))
+    monkeypatch.setattr(jobs, "load_blueprint_bundle", prepare)
+
+    initial = no_raise_client.get("/api/v1/jobs/job-1")
+    loser = no_raise_client.patch(
+        "/api/v1/jobs/job-1",
+        headers={"If-Match": initial.headers["etag"]},
+        json={"resolved_configuration": {"worker": {"mode": "loser"}}},
+    )
+    assert loser.status_code == 409
+    assert loser.headers["content-type"] == "application/problem+json"
+    assert loser.json()["code"] == "MN_REVISION_CONFLICT"
+    assert "revision_mismatch" not in loser.json()["detail"]
+    assert job["resolved_configuration"] == {"worker": {"mode": "winner"}}
+    assert job["revision"] == 2
+
+
+def test_run_rejects_different_configuration_saved_during_preparation(monkeypatch):
+    client, runtime = _client(monkeypatch)
+    configuration = {"worker": {"mode": "saved"}}
+    cleaned = []
+
+    def get_job(job_id, **_kwargs):
+        return json.dumps({
+            "job_id": job_id, "blueprint_id": "worker-1", "status": "active",
+            "revision": 2 if configuration["worker"]["mode"] == "other" else 1,
+            "resolved_configuration": configuration,
+        })
+
+    def prepare(*_args, **_kwargs):
+        nonlocal configuration
+        configuration = {"worker": {"mode": "other"}}
+        return '{"graph_id":"prepared-catalog"}', {}
+
+    monkeypatch.setattr(runtime, "get_job", get_job)
+    monkeypatch.setattr(jobs, "find_blueprint", lambda _config, blueprint_id: ("/catalog", {"id": blueprint_id}))
+    monkeypatch.setattr(jobs, "load_blueprint_bundle", prepare)
+    monkeypatch.setattr(jobs, "cleanup_blueprint_run_processes", lambda *args, **kwargs: cleaned.append((args, kwargs)))
+
+    rejected = client.post(
+        "/api/v1/jobs/job-1/runs",
+        json={"inputs": {}, "config_overrides": {"worker": {"mode": "updated"}}},
+    )
+    assert rejected.status_code == 409
+    assert rejected.json()["detail"] == "Job configuration changed during run preparation."
+    assert [call[0] for call in runtime.calls].count("start_run") == 0
+    assert cleaned[0][1]["reason"] == "launch_conflict"
+
+
+def test_otterdesk_schedule_creation_retries_are_idempotent(monkeypatch):
+    client, runtime = _client(monkeypatch)
+    headers = {"Idempotency-Key": "otterdesk-schedule-1"}
+    payload = {"schedule": {"kind": "periodic", "crons": ["0 9 * * *"]}}
+
+    first = client.post("/api/v1/jobs/job-1/schedules", headers=headers, json=payload)
+    replay = client.post("/api/v1/jobs/job-1/schedules", headers=headers, json=payload)
+    assert first.status_code == replay.status_code == 201
+    assert first.json() == replay.json()
+    assert replay.headers["idempotency-replayed"] == "true"
+    creates = [call for call in runtime.calls if call[0] == "create_job_schedule"]
+    assert len(creates) == 1
+    assert creates[0][2]["idempotency_key"] == headers["Idempotency-Key"]
+
+    conflict = client.post(
+        "/api/v1/jobs/job-1/schedules",
+        headers=headers,
+        json={"schedule": {"kind": "periodic", "crons": ["0 10 * * *"]}},
+    )
+    assert conflict.status_code == 409
+    assert len([call for call in runtime.calls if call[0] == "create_job_schedule"]) == 1
+
+
 def _patch_canonical_projections(monkeypatch):
     blueprint = {"id": "worker-1", "name": "Worker", "installed": True, "revision": "abc"}
     monkeypatch.setattr(blueprints, "load_blueprint_catalog", lambda _config: (None, [blueprint]))
@@ -931,6 +1128,10 @@ def test_canonical_resource_happy_paths(monkeypatch):
 
     assert client.put("/api/v1/runtime/resources", json={"cpu": 8, "memory_mb": 4096}).status_code == 200
     assert client.post("/api/v1/nodes", json={"host": "node-2", "token": "join-token"}).status_code == 201
+    removed_node = client.delete("/api/v1/nodes/node-2")
+    assert removed_node.status_code == 200
+    assert removed_node.json() == {"node_name": "node-2", "status": "removed"}
+    assert ("remove_federated_peer", "node-2") in runtime.calls
     assert client.put("/api/v1/nodes/node-1/drain", json={}).status_code == 202
     assert client.delete("/api/v1/nodes/node-1/drain").status_code == 204
     assert client.patch("/api/v1/nodes/node-1", json={"maintenance": True}).status_code == 200

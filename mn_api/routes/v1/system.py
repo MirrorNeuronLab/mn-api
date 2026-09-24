@@ -105,6 +105,11 @@ def create_node(request: NodeCreate, response: Response, _principal=Depends(requ
     return public_value(result)
 
 
+@router.delete("/nodes/{node_id}", operation_id="delete_node", tags=["nodes"], response_model=ResourceModel)
+def delete_node(node_id: str, _principal=Depends(require_auth)):
+    return {"node_name": node_id, "status": state.client.remove_federated_peer(node_id)}
+
+
 @router.put("/nodes/{node_id}/drain", status_code=status.HTTP_202_ACCEPTED, operation_id="create_node_drain", tags=["nodes"])
 def create_node_drain(node_id: str, request: NodeDrain, _principal=Depends(require_auth)):
     operation = start_operation("drain_node", {"node": node_id, **request.model_dump()})

@@ -72,6 +72,8 @@ No artificial completion percentage is inferred from elapsed time.
 - The surface includes runtime/system health, blueprints, bundles, jobs, runs,
   schedules/events, deployments, models, services, resources, artifacts, and
   realtime progress.
+- `DELETE /api/v1/nodes/{node_id}` removes a federated peer through Core and
+  returns its node name and removal status.
 - Existing model-remote and model-proxy REST paths are compatibility adapters
   over the SDK-owned `$MN_HOME/models/registry.json`; they do not restore the
   removed CLI proxy/manual-remote lifecycle or project legacy ledgers.
@@ -111,6 +113,8 @@ No artificial completion percentage is inferred from elapsed time.
   `replace_existing_run` requires a fresh caller-supplied `run_id` and returns
   that run plus optional replaced-run and deferred-cleanup metadata.
   Retry/recovery attempts retain their run ID.
+- Schedule creation accepts `Idempotency-Key` and replays identical requests.
+  Schedule detail read and update are pending Core/SDK RPC support.
 - Archive retains shared data. Data reset and permanent job deletion are
   explicit operations; confirmed deletion is rejected while runs are active.
   Individual run deletion never deletes job data.
@@ -266,6 +270,9 @@ definition when overrides are absent or do not change its resolved configuration
 matching `mn job start`. It does not rediscover the catalog, rebuild worker
 resources, or rerun placement against transient node status. Changed configuration
 still passes the normal preparation and revision-checked update before start.
+If another request saves the same resolved configuration during preparation,
+the run uses that prepared Job and discards its redundant preparation. A
+different concurrent configuration change remains a conflict.
 
 ## Streaming read-only Job answers
 

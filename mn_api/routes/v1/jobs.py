@@ -513,13 +513,21 @@ def create_job_run(
                 validate_inputs=True,
                 blueprint_run_id=blueprint_run_id,
             )
+            configuration_already_saved = False
             if request.config_overrides:
                 # Preparing the bundle can take minutes. Status/context updates
                 # may advance the Job revision in that interval, so use the
                 # latest revision when its configuration is still unchanged.
                 for attempt in range(3):
                     latest = public_value(_service().get_job(job_id))
-                    if latest.get("resolved_configuration") != saved_configuration:
+                    latest_configuration = latest.get("resolved_configuration") or {}
+                    if latest_configuration == resolved_configuration:
+                        # A concurrent configuration sync prepared this exact
+                        # Job while the run request was preparing its bundle.
+                        configuration_already_saved = True
+                        break
+                    if latest_configuration != saved_configuration:
+                        cleanup_blueprint_run_processes(blueprint_run_id, reason="launch_conflict")
                         raise HTTPException(status_code=409, detail="Job configuration changed during run preparation.")
                     try:
                         _service().update_job(
@@ -537,7 +545,10 @@ def create_job_run(
                             or "revision_mismatch" not in (exc.details() or "")
                         ):
                             raise
-            relay = (repo_root, blueprint, blueprint_run_id, manifest_json, resolved_configuration, current)
+            if configuration_already_saved:
+                cleanup_blueprint_run_processes(blueprint_run_id, reason="redundant_preparation")
+            else:
+                relay = (repo_root, blueprint, blueprint_run_id, manifest_json, resolved_configuration, current)
         try:
             run = _service().start_run(
                 job_id,
@@ -724,12 +735,26 @@ def delete_run(run_id: str, _principal=Depends(require_auth)):
     tags=["schedules"],
     response_model=ResourceModel,
 )
-def create_job_schedule(job_id: str, request: ScheduleCreate, response: Response, _principal=Depends(require_auth)):
-    schedule = _service().create_job_schedule(job_id, schedule=request.schedule, source=request.source)
-    schedule_id = str(schedule.get("schedule_id") or schedule.get("id") or "")
-    if schedule_id:
-        response.headers["Location"] = f"{API_PREFIX}/jobs/{job_id}"
-    return public_value(schedule)
+def create_job_schedule(
+    job_id: str,
+    request: ScheduleCreate,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", max_length=255),
+    principal: str = Depends(require_auth),
+):
+    return idempotent_response(
+        principal=principal,
+        route=f"{API_PREFIX}/jobs/{job_id}/schedules",
+        key=idempotency_key,
+        body=request.model_dump(),
+        call=lambda: _service().create_job_schedule(
+            job_id,
+            schedule=request.schedule,
+            source=request.source,
+            idempotency_key=idempotency_key or "",
+        ),
+        status_code=status.HTTP_201_CREATED,
+        location=f"{API_PREFIX}/jobs/{job_id}",
+    )
 
 
 @router.get("/runs/{run_id}/monitor", operation_id="get_run_monitor", tags=["runs"], response_model=ResourceModel)
