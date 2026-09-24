@@ -175,7 +175,7 @@ def _client(monkeypatch) -> tuple[TestClient, CanonicalRuntime]:
     monkeypatch.setattr(
         state,
         "config",
-        SimpleNamespace(api_token="", request_size_limit_bytes=1024 * 1024, cors_allow_origins=[], shared_storage_root="/tmp/test-shared"),
+        SimpleNamespace(api_token="", request_size_limit_bytes=1024 * 1024, cors_allow_origins=[]),
     )
     manifest = json.dumps(
         {
@@ -454,6 +454,7 @@ def test_job_configuration_and_run_overrides_reprepare_catalog_definition(monkey
     def load_submission(*args):
         submission_lookups.append(args)
         return {"output_copy": [{"source_path": "/runtime/output", "target_path": "/host/output"}]}
+    monkeypatch.setattr(jobs.RuntimeConfig, "from_env", lambda: SimpleNamespace(shared_storage_root="/tmp/test-shared"))
     monkeypatch.setattr(jobs, "load_submission_storage", load_submission)
     monkeypatch.setattr(jobs, "start_background_run_relay", lambda *args, **kwargs: output_relays.append((args, kwargs)))
 
@@ -511,7 +512,7 @@ def test_job_configuration_and_run_overrides_reprepare_catalog_definition(monkey
     assert len(prepared) == 2
     assert len(mappings) == 1
     assert len(relays) == 1
-    assert submission_lookups[-1][1] == "job-1-def-current"
+    assert submission_lookups[-1] == ("/tmp/test-shared", "job-1-def-current")
     assert output_relays[-1][0][0:2] == ("run-1", "run-1")
     assert output_relays[-1][0][2]["output_copy"][0]["target_path"] == "/host/output"
 
@@ -527,6 +528,50 @@ def test_job_configuration_and_run_overrides_reprepare_catalog_definition(monkey
     )
     assert repeated.status_code == 202, repeated.text
     assert len([call for call in runtime.calls if call[0] == "update_job"]) == update_count
+
+
+def test_otterdesk_stable_service_start_acknowledges_run_with_runtime_shared_storage(monkeypatch):
+    client, runtime = _client(monkeypatch)
+    monkeypatch.setattr(
+        runtime,
+        "get_job",
+        lambda job_id: json.dumps({
+            "job_id": job_id,
+            "blueprint_id": "cctv_operator",
+            "status": "active",
+            "revision": 1,
+            "resolved_configuration": {"input": "sample"},
+            "native_resource_ownership": {"submission_id": "job-co-definition"},
+        }),
+    )
+    monkeypatch.setattr(jobs.RuntimeConfig, "from_env", lambda: SimpleNamespace(shared_storage_root="/runtime/shared"))
+    storage_calls = []
+    relay_calls = []
+
+    def load_storage(root, submission_id):
+        storage_calls.append((root, submission_id))
+        return {"output_copy": [{"target_path": "/host/output"}]}
+
+    monkeypatch.setattr(jobs, "load_submission_storage", load_storage)
+    monkeypatch.setattr(jobs, "start_background_run_relay", lambda *args, **kwargs: relay_calls.append((args, kwargs)))
+    monkeypatch.setattr(jobs, "find_blueprint", lambda *_args: (_ for _ in ()).throw(
+        AssertionError("An unchanged Job must use its prepared definition")
+    ))
+    headers = {"Idempotency-Key": "otterdesk-sample-start"}
+    body = {"inputs": {}, "config_overrides": {"input": "sample"}}
+
+    started = client.post("/api/v1/jobs/job-co/runs", headers=headers, json=body)
+    assert started.status_code == 202, started.text
+    assert started.json()["run_id"] == "run-1"
+    assert storage_calls == [("/runtime/shared", "job-co-definition")]
+    assert relay_calls[0][0][:2] == ("run-1", "run-1")
+
+    replay = client.post("/api/v1/jobs/job-co/runs", headers=headers, json=body)
+    assert replay.status_code == 202, replay.text
+    assert replay.headers["idempotency-replayed"] == "true"
+    assert replay.json()["run_id"] == "run-1"
+    assert sum(call[0] == "start_run" for call in runtime.calls) == 1
+    assert len(relay_calls) == 1
 
 
 def test_run_uses_current_job_revision_after_bundle_preparation(monkeypatch):

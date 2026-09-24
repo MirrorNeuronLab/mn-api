@@ -311,7 +311,6 @@ def _job_workflow_shape(job_id: str, source: str) -> dict[str, Any]:
     run = _service().get_run(run_id)
     if str(run.get("job_id") or "") != job_id:
         raise HTTPException(status_code=404, detail="Job has no latest run.")
-    runtime_id = _runtime_output_id(run_id)
     snapshot = runtime_job_routes._workflow_progress_snapshot_for_run(run_id)
     shape = latest_run_shape(job_id, run_id, snapshot)
     if not shape["steps"]:
@@ -596,7 +595,7 @@ def create_job_run(
             submission_id = str(ownership.get("submission_id") or "").strip() if isinstance(ownership, dict) else ""
             if execution_id and submission_id:
                 runtime_config = state.refresh_config_from_env()
-                storage = load_submission_storage(runtime_config.shared_storage_root, submission_id)
+                storage = load_submission_storage(RuntimeConfig.from_env().shared_storage_root, submission_id)
                 if storage.get("output_copy"):
                     start_background_run_relay(
                         execution_id, execution_id, storage, config=resolved_configuration,
