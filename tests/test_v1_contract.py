@@ -1091,6 +1091,43 @@ def test_run_progress_uses_execution_id_when_output_id_differs(monkeypatch):
     assert event_ids == ["run-2"]
 
 
+def test_shared_run_events_use_mapped_run_id_before_core_result_reference(monkeypatch):
+    client, runtime = _client(monkeypatch)
+    runtime.get_run = lambda run_id: json.dumps({
+        "run_id": run_id, "status": "failed", "result_ref": {"run_id": "bootstrap-old"},
+    })
+    monkeypatch.setattr(jobs, "shared_run_dir", lambda _run_id: object())
+    received = []
+    monkeypatch.setattr(jobs.runtime_run_routes, "get_run_events", lambda run_id, *_args: (
+        received.append(run_id) or {"data": [{"type": "workflow_step_failed", "timestamp": "2026-01-01T00:00:00Z"}]}
+    ))
+
+    response = client.get("/api/v1/runs/run-1/events?page_size=2")
+
+    assert response.status_code == 200
+    assert received == ["run-1"]
+
+
+def test_run_event_stream_keeps_snapshot_when_local_event_copy_is_not_ready(monkeypatch):
+    from fastapi import HTTPException
+
+    client, runtime = _client(monkeypatch)
+    runtime.get_run = lambda run_id: json.dumps({
+        "job_id": "job-1", "run_id": run_id, "status": "completed"
+    })
+    monkeypatch.setattr(jobs.runtime_job_routes, "_workflow_progress_snapshot_for_run", lambda _id: {
+        "job_id": "job-1", "status": "completed", "steps": [],
+    })
+    monkeypatch.setattr(jobs.runtime_run_routes, "get_run_events", lambda *_args: (_ for _ in ()).throw(
+        HTTPException(status_code=404, detail="run not found")
+    ))
+
+    response = client.get("/api/v1/runs/run-2/events/stream?interval=0.25")
+
+    assert response.status_code == 200
+    assert '"type":"run.snapshot"' in response.text
+
+
 def test_canonical_run_detail_and_operations(monkeypatch):
     client, _runtime = _client(monkeypatch)
     _patch_canonical_projections(monkeypatch)

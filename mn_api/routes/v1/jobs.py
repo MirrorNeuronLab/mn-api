@@ -9,6 +9,8 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 from fastapi.responses import StreamingResponse
 from mn_sdk import RuntimeConfig, RuntimeService, generate_job_definition_submission_id, generate_stable_job_id
+from mn_sdk.blueprint_support.observability import list_runs as list_local_runs
+from mn_sdk.shared_run_store import shared_run_dir
 from mn_sdk.staged_artifacts import (
     ArtifactIntegrityError,
     ArtifactNotReadyError,
@@ -51,6 +53,7 @@ from mn_api.launch_progress import launch_activity, observe_submission, progress
 from mn_api.operations import encode_sse, sse_envelope, start_operation
 from mn_api.pagination import page, page_tokens
 from mn_api.public import decode, idempotent_response, public_value, records, resource_response
+from mn_api.run_recovery import stored_progress, stored_run
 from mn_api.routes import jobs as runtime_job_routes
 from mn_api.routes import runs as runtime_run_routes
 from mn_api.workflow_shape import dag_view, definition_shape, latest_run_shape, progress_only, steps_view
@@ -120,7 +123,14 @@ def _upstream_page(
 
 
 def _runtime_output_id(run_id: str) -> str:
-    run = _service().get_run(run_id)
+    if shared_run_dir(run_id) is not None:
+        return run_id
+    try:
+        run = _service().get_run(run_id)
+    except Exception:
+        if stored_run(run_id) is None:
+            raise
+        return run_id
     for key in ("runtime_run_id", "runtime_job_id", "output_run_id"):
         value = run.get(key)
         if value:
@@ -563,13 +573,32 @@ def create_job_run(
 
 
 def _all_runs() -> list[dict[str, Any]]:
-    runs: list[dict[str, Any]] = []
-    jobs = records(_service().list_jobs(include_archived=True), "items", "jobs", "data")
+    runs: dict[str, dict[str, Any]] = {
+        str(run["run_id"]): run
+        for run in list_local_runs()
+        if isinstance(run, dict) and run.get("run_id")
+    }
+    try:
+        jobs = records(_service().list_jobs(include_archived=True), "items", "jobs", "data")
+    except Exception:
+        jobs = []
+    core_ids: set[str] = set()
     for job in jobs:
         job_id = str(job.get("job_id") or "")
         if job_id:
-            runs.extend(records(_service().list_runs(job_id), "items", "runs", "data"))
-    return runs
+            try:
+                job_runs = records(_service().list_runs(job_id), "items", "runs", "data")
+            except Exception:
+                continue
+            for run in job_runs:
+                run_id = str(run.get("run_id") or "")
+                if run_id:
+                    core_ids.add(run_id)
+                    runs[run_id] = {**runs.get(run_id, {}), **run}
+    for run_id, run in runs.items():
+        if run_id not in core_ids and str(run.get("status") or "").lower() not in _TERMINAL | {"unknown"}:
+            run["status"] = "unknown"
+    return list(runs.values())
 
 
 def _page_runs(
@@ -637,7 +666,13 @@ def list_runs(
 
 @router.get("/runs/{run_id}", operation_id="get_run", tags=["runs"], response_model=ResourceModel)
 def get_run(run_id: str, _principal=Depends(require_auth)):
-    return public_value(_service().get_run(run_id))
+    try:
+        return public_value(_service().get_run(run_id))
+    except Exception:
+        recovered = stored_run(run_id)
+        if recovered is None:
+            raise
+        return public_value(recovered)
 
 
 @router.patch("/runs/{run_id}", operation_id="update_run", tags=["runs"], response_model=ResourceModel)
@@ -682,8 +717,17 @@ def create_job_schedule(job_id: str, request: ScheduleCreate, response: Response
 @router.get("/runs/{run_id}/monitor", operation_id="get_run_monitor", tags=["runs"], response_model=ResourceModel)
 def get_run_monitor(run_id: str, _principal=Depends(require_auth)):
     runtime_id = _runtime_output_id(run_id)
+    try:
+        canonical_run = _service().get_run(run_id)
+    except Exception:
+        canonical_run = stored_run(run_id)
+        if canonical_run is None:
+            raise
+        progress = stored_progress(run_id) or {}
+        return _run_public({"job": canonical_run, "summary": canonical_run,
+                            "events": progress.get("recent_events") or [],
+                            "workflow_progress": progress}, run_id=run_id, runtime_run_id=runtime_id)
     detail = dict(runtime_job_routes._compact_job_detail(run_id))
-    canonical_run = _service().get_run(run_id)
     canonical_status = str(canonical_run.get("status") or "").strip().lower()
     if canonical_status:
         detail["status"] = canonical_status
@@ -702,7 +746,12 @@ def get_run_monitor(run_id: str, _principal=Depends(require_auth)):
 )
 def get_run_workflow_progress(run_id: str, _principal=Depends(require_auth)):
     runtime_id = _runtime_output_id(run_id)
-    snapshot = runtime_job_routes._workflow_progress_snapshot_for_run(run_id)
+    try:
+        snapshot = runtime_job_routes._workflow_progress_snapshot_for_run(run_id)
+    except Exception:
+        snapshot = stored_progress(run_id)
+        if snapshot is None:
+            raise
     return _run_public(progress_only(snapshot), run_id=run_id, runtime_run_id=runtime_id)
 
 
@@ -797,7 +846,12 @@ def stream_run_events(
         seen: set[str] = set()
         yield ": heartbeat\n\n"
         while True:
-            progress = runtime_job_routes._workflow_progress_snapshot_for_run(run_id)
+            try:
+                progress = runtime_job_routes._workflow_progress_snapshot_for_run(run_id)
+            except Exception:
+                progress = stored_progress(run_id)
+                if progress is None:
+                    raise
             emitted += 1
             if emitted > resume_after:
                 yield encode_sse(
@@ -808,7 +862,12 @@ def stream_run_events(
                         data=_run_public(progress_only(progress), run_id=run_id, runtime_run_id=runtime_id),
                     )
                 )
-            payload = runtime_run_routes.get_run_events(run_id, 5000, None, principal)
+            try:
+                payload = runtime_run_routes.get_run_events(run_id, 5000, None, principal)
+            except HTTPException as exc:
+                if exc.status_code != 404:
+                    raise
+                payload = {"data": []}
             for event in records(payload, "items", "events", "data"):
                 identity = json.dumps(event, sort_keys=True, separators=(",", ":"), default=str)
                 if identity in seen:
@@ -826,13 +885,18 @@ def stream_run_events(
                         data=event,
                     )
                 )
-            snapshot = _service().get_run(run_id)
-            if str(snapshot.get("status") or "").lower() in _TERMINAL:
+            try:
+                snapshot = _service().get_run(run_id)
+            except Exception:
+                snapshot = stored_run(run_id)
+                if snapshot is None:
+                    raise
+            if str(snapshot.get("status") or "").lower() in _TERMINAL | {"unknown"}:
                 emitted += 1
                 yield encode_sse(
                     sse_envelope(
                         event_id=emitted,
-                        event_type="run.completed",
+                        event_type="run.unavailable" if snapshot.get("status") == "unknown" else "run.completed",
                         resource=f"{API_PREFIX}/runs/{run_id}",
                         data=snapshot,
                     )

@@ -20,6 +20,11 @@ After a run starts, the API uses the SDK run-store writer to persist the same
 public monitor manifest as the CLI, keeping generated control nodes and
 internal runtime staff out of the workflow step view.
 
+For older runs whose owner is no longer visible to Core, run detail, workflow
+progress, and events can be read from a mapped replicated submission. A shared
+record that still says `running` is presented as `unknown` rather than as a
+live run.
+
 Blueprint run requests may include `secret_environment`, a bounded map whose
 values are treated as secrets by request validation. Every name must be
 declared by the selected blueprint through `pass_env`; the API injects each

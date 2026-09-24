@@ -46,15 +46,15 @@ def list_blueprint_runs(
 
 def compare_runs(req: RunCompareRequest, _auth=Depends(require_auth)):
     try:
-        record_a = load_run(req.run_a, runs_root=_runs_root(), include_observability=True)
-        record_b = load_run(req.run_b, runs_root=_runs_root(), include_observability=True)
+        record_a = load_run(req.run_a, runs_root=_ensure_run_exists(req.run_a).parent, include_observability=True)
+        record_b = load_run(req.run_b, runs_root=_ensure_run_exists(req.run_b).parent, include_observability=True)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return _run_compare_payload(req.run_a, record_a, req.run_b, record_b)
 
 
 def _run_dir(run_id: str) -> Path:
-    run_dir = run_dir_from_id(run_id, must_exist=False)
+    run_dir = run_dir_from_id(run_id, must_exist=True) or run_dir_from_id(run_id, must_exist=False)
     if run_dir is None:
         raise HTTPException(status_code=400, detail="invalid run id")
     return run_dir
@@ -117,7 +117,7 @@ def export_run(
     _auth=Depends(require_auth),
 ):
     try:
-        record = load_run(run_id, runs_root=_runs_root(), include_observability=True)
+        record = load_run(run_id, runs_root=_ensure_run_exists(run_id).parent, include_observability=True)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     normalized_format = format.lower().strip()
@@ -182,12 +182,12 @@ def get_run_events(
     channel: str | None = Query(default=None),
     _auth=Depends(require_auth),
 ):
-    _ensure_run_exists(run_id)
+    run_dir = _ensure_run_exists(run_id)
     tools = _observability_tools()
     if channel == "human":
-        events = tools["read_human_events"](run_id, runs_root=_runs_root(), limit=limit)
+        events = tools["read_human_events"](run_id, runs_root=run_dir.parent, limit=limit)
     else:
-        events = tools["read_run_events"](run_id, runs_root=_runs_root(), limit=limit)
+        events = tools["read_run_events"](run_id, runs_root=run_dir.parent, limit=limit)
         if channel:
             events = [event for event in events if event.get("channel") == channel]
     return {"run_id": run_id, "data": events[-limit:] if limit else events}
@@ -200,13 +200,13 @@ def get_run_logs(
     since: str | None = Query(default=None),
     _auth=Depends(require_auth),
 ):
-    _ensure_run_exists(run_id)
+    run_dir = _ensure_run_exists(run_id)
     tools = _observability_tools()
     return {
         "run_id": run_id,
         "data": tools["read_run_logs"](
             run_id,
-            runs_root=_runs_root(),
+            runs_root=run_dir.parent,
             level=level,
             limit=limit,
             since=since,
@@ -220,13 +220,13 @@ def get_run_timeline(
     since: str | None = Query(default=None),
     _auth=Depends(require_auth),
 ):
-    _ensure_run_exists(run_id)
+    run_dir = _ensure_run_exists(run_id)
     tools = _observability_tools()
     return {
         "run_id": run_id,
         "data": tools["read_run_timeline"](
             run_id,
-            runs_root=_runs_root(),
+            runs_root=run_dir.parent,
             limit=limit,
             since=since,
         ),
@@ -234,9 +234,9 @@ def get_run_timeline(
 
 
 def get_run_observability_summary(run_id: str, _auth=Depends(require_auth)):
-    _ensure_run_exists(run_id)
+    run_dir = _ensure_run_exists(run_id)
     tools = _observability_tools()
-    summary = tools["read_run_observability_summary"](run_id, runs_root=_runs_root())
+    summary = tools["read_run_observability_summary"](run_id, runs_root=run_dir.parent)
     if not summary:
         raise HTTPException(status_code=404, detail="observability summary not found")
     return summary
@@ -249,7 +249,7 @@ def stream_run_observability(
     interval: float = Query(1.0, ge=1.0, le=60.0),
     _auth=Depends(require_auth),
 ):
-    _ensure_run_exists(run_id)
+    run_dir = _ensure_run_exists(run_id)
     selected_channels = [item.strip() for item in channels.split(",") if item.strip()]
 
     def event_source():
@@ -259,7 +259,7 @@ def stream_run_observability(
         while True:
             records = tools["read_run_stream_records"](
                 run_id,
-                runs_root=_runs_root(),
+                runs_root=run_dir.parent,
                 channels=selected_channels,
                 level=level,
                 limit=500,
@@ -289,11 +289,11 @@ def get_run_resources(
     bucket: str = Query("1h"),
     _auth=Depends(require_auth),
 ):
-    _ensure_run_exists(run_id)
+    run_dir = _ensure_run_exists(run_id)
     tools = _observability_tools()
     return tools["read_run_resources"](
         run_id,
-        runs_root=_runs_root(),
+        runs_root=run_dir.parent,
         window_hours=_duration_seconds(window) / 3600.0,
         bucket_seconds=max(int(_duration_seconds(bucket)), 1),
     )
@@ -304,12 +304,12 @@ def stream_run_resources(
     interval: float = Query(5.0, ge=1.0, le=60.0),
     _auth=Depends(require_auth),
 ):
-    _ensure_run_exists(run_id)
+    run_dir = _ensure_run_exists(run_id)
 
     def event_source():
         tools = _observability_tools()
         while True:
-            payload = tools["read_run_resources"](run_id, runs_root=_runs_root())
+            payload = tools["read_run_resources"](run_id, runs_root=run_dir.parent)
             yield f"event: resources\ndata: {json.dumps(payload, sort_keys=True)}\n\n"
             time.sleep(interval)
 
@@ -321,12 +321,12 @@ def get_run_human_events(
     status: str | None = Query(default=None),
     _auth=Depends(require_auth),
 ):
-    _ensure_run_exists(run_id)
+    run_dir = _ensure_run_exists(run_id)
     tools = _observability_tools()
     events = (
-        tools["list_pending_human_requests"](run_id, runs_root=_runs_root())
+        tools["list_pending_human_requests"](run_id, runs_root=run_dir.parent)
         if status == "pending"
-        else tools["read_human_events"](run_id, runs_root=_runs_root(), status=status)
+        else tools["read_human_events"](run_id, runs_root=run_dir.parent, status=status)
     )
     return {"run_id": run_id, "data": events}
 
@@ -337,7 +337,8 @@ def post_run_human_response(
     payload: dict[str, Any],
     _auth=Depends(require_auth),
 ):
-    _ensure_run_exists(run_id)
+    if _ensure_run_exists(run_id).parent != _runs_root():
+        raise HTTPException(status_code=409, detail="historical run is read-only")
     tools = _observability_tools()
     return tools["record_human_response"](run_id, request_id, payload, runs_root=_runs_root())
 
@@ -348,7 +349,8 @@ def post_run_human_ack(
     payload: dict[str, Any] | None = None,
     _auth=Depends(require_auth),
 ):
-    _ensure_run_exists(run_id)
+    if _ensure_run_exists(run_id).parent != _runs_root():
+        raise HTTPException(status_code=409, detail="historical run is read-only")
     tools = _observability_tools()
     return tools["acknowledge_human_notice"](run_id, notice_id, payload or {}, runs_root=_runs_root())
 

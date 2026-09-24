@@ -15,6 +15,10 @@ This specification covers only this repository. Core runtime semantics and
 shared Python behavior are external contracts consumed through
 `mirrorneuron-python-sdk`.
 
+Run read endpoints may project a run from a verified SDK local mapping and its
+replicated submission when Core cannot return the run. A nonterminal shared
+record is reported as `unknown`; writable run operations still require Core.
+
 Launch keeps the compatibility phase identifier `model_install`, but it is a
 blocking preflight: every declared DMR model is selected, installed or reused,
 and published through the selected node's LiteLLM gateway before a job is
