@@ -336,4 +336,4 @@ trusted-host configuration in the transport before deployment; it must not be
 enabled by disabling rebinding protection.
 # Run result publication
 
-Blueprint submissions that declare result-bearing `mn_storage.output_copy` entries start the background event relay, even without a post-launch hook. The relay copies completed outputs and publishes `run_result_available` events through the run events API so clients can show every declared result.
+Blueprint submissions with shared output copies start the background event relay, even without a post-launch hook. While a run is active, the relay mirrors published `run_result_available` events into the actual execution's local run store, which the run events API serves. On completion it copies stable outputs and publishes their result events. Clients can show every declared result without depending on blueprint-specific configuration.

@@ -210,8 +210,7 @@ def test_background_relay_config_helpers(monkeypatch):
 
 
 def test_result_copy_starts_background_relay_without_post_launch_hook(monkeypatch, tmp_path):
-    storage = {"output_copy": [{"source_path": "/runtime/output", "target_path": str(tmp_path / "result"),
-                                "result": {"kind": "output_folder", "label": "Output folder"}}]}
+    storage = {"output_copy": [{"source_path": "/runtime/output", "target_path": str(tmp_path / "result")}]}
     manifest = {"metadata": {"mn_storage": storage}}
     monkeypatch.setattr(blueprints, "config_bool", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(blueprints, "shared_runs_root", lambda: str(tmp_path / "runs"))

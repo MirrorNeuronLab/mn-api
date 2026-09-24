@@ -2614,9 +2614,7 @@ def relay_result_storage(manifest: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(storage, dict):
         return {}
     copies = storage.get("output_copy")
-    if not isinstance(copies, list) or not any(
-        isinstance(spec, dict) and isinstance(spec.get("result"), dict) for spec in copies
-    ):
+    if not isinstance(copies, list) or not copies:
         return {}
     return storage
 
