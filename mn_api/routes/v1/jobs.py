@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import grpc
 from pathlib import Path
 from typing import Any
 
@@ -513,13 +514,29 @@ def create_job_run(
                 blueprint_run_id=blueprint_run_id,
             )
             if request.config_overrides:
-                _service().update_job(
-                    job_id,
-                    {"resolved_configuration": resolved_configuration},
-                    manifest_json=manifest_json,
-                    payloads=payloads,
-                    expected_revision=_revision(current),
-                )
+                # Preparing the bundle can take minutes. Status/context updates
+                # may advance the Job revision in that interval, so use the
+                # latest revision when its configuration is still unchanged.
+                for attempt in range(3):
+                    latest = public_value(_service().get_job(job_id))
+                    if latest.get("resolved_configuration") != saved_configuration:
+                        raise HTTPException(status_code=409, detail="Job configuration changed during run preparation.")
+                    try:
+                        _service().update_job(
+                            job_id,
+                            {"resolved_configuration": resolved_configuration},
+                            manifest_json=manifest_json,
+                            payloads=payloads,
+                            expected_revision=_revision(latest),
+                        )
+                        break
+                    except grpc.RpcError as exc:
+                        if (
+                            attempt == 2
+                            or exc.code() not in {grpc.StatusCode.ABORTED, grpc.StatusCode.FAILED_PRECONDITION}
+                            or "revision_mismatch" not in (exc.details() or "")
+                        ):
+                            raise
             relay = (repo_root, blueprint, blueprint_run_id, manifest_json, resolved_configuration, current)
         try:
             run = _service().start_run(

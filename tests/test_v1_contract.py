@@ -484,6 +484,7 @@ def test_job_configuration_and_run_overrides_reprepare_catalog_definition(monkey
     assert relays[-1][0][3] == "run-1"
     assert relays[-1][1]["config_overrides"]["execution"]["quick_test"] is True
 
+
     update_count = len([call for call in runtime.calls if call[0] == "update_job"])
     started_without_overrides = client.post(
         "/api/v1/jobs/job-1/runs",
@@ -509,6 +510,36 @@ def test_job_configuration_and_run_overrides_reprepare_catalog_definition(monkey
     )
     assert repeated.status_code == 202, repeated.text
     assert len([call for call in runtime.calls if call[0] == "update_job"]) == update_count
+
+
+def test_run_uses_current_job_revision_after_bundle_preparation(monkeypatch):
+    client, runtime = _client(monkeypatch)
+    revision = 1
+
+    def get_job(job_id, **_kwargs):
+        return json.dumps({
+            "job_id": job_id, "blueprint_id": "worker-1", "status": "active",
+            "revision": revision, "resolved_configuration": {"worker": {"mode": "saved"}},
+        })
+
+    def prepare(*_args, **_kwargs):
+        nonlocal revision
+        revision += 1  # A background Job update completes during bundle preparation.
+        return '{"graph_id":"prepared-catalog"}', {}
+
+    monkeypatch.setattr(runtime, "get_job", get_job)
+    monkeypatch.setattr(jobs, "find_blueprint", lambda _config, blueprint_id: ("/catalog", {"id": blueprint_id}))
+    monkeypatch.setattr(jobs, "load_blueprint_bundle", prepare)
+    monkeypatch.setattr(jobs, "write_blueprint_job_mapping", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(jobs, "start_background_event_relay_if_needed", lambda *_args, **_kwargs: None)
+
+    started = client.post(
+        "/api/v1/jobs/job-1/runs",
+        json={"inputs": {}, "config_overrides": {"worker": {"mode": "updated"}}},
+    )
+    assert started.status_code == 202, started.text
+    update_call = next(call for call in runtime.calls if call[0] == "update_job")
+    assert update_call[3]["expected_revision"] == 2
 
 
 def _patch_canonical_projections(monkeypatch):
