@@ -18,6 +18,12 @@ shared Python behavior are external contracts consumed through
 Run read endpoints may project a run from a verified SDK local mapping and its
 replicated submission when Core cannot return the run. A nonterminal shared
 record is reported as `unknown`; writable run operations still require Core.
+API-started durable Job runs with a declared host output copy start the SDK host
+delivery relay, including starts that reuse an unchanged definition. The API
+loads the committed submission's copy contract without rebuilding the catalog
+bundle. It also reconciles completed Core-scheduled runs from replicated
+completion receipts. The relay reports delivery separately from Core execution
+completion.
 
 Launch keeps the compatibility phase identifier `model_install`, but it is a
 blocking preflight: every declared DMR model is selected, installed or reused,

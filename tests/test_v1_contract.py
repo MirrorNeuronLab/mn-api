@@ -175,7 +175,7 @@ def _client(monkeypatch) -> tuple[TestClient, CanonicalRuntime]:
     monkeypatch.setattr(
         state,
         "config",
-        SimpleNamespace(api_token="", request_size_limit_bytes=1024 * 1024, cors_allow_origins=[]),
+        SimpleNamespace(api_token="", request_size_limit_bytes=1024 * 1024, cors_allow_origins=[], shared_storage_root="/tmp/test-shared"),
     )
     manifest = json.dumps(
         {
@@ -418,6 +418,7 @@ def test_job_configuration_and_run_overrides_reprepare_catalog_definition(monkey
     prepared = []
     mappings = []
     relays = []
+    output_relays = []
 
     monkeypatch.setattr(
         runtime,
@@ -429,6 +430,7 @@ def test_job_configuration_and_run_overrides_reprepare_catalog_definition(monkey
             "revision": 1,
             "owner_node": "mirror_neuron@gpu-node",
             "resolved_configuration": {"worker": {"mode": "saved"}},
+            "native_resource_ownership": {"submission_id": "job-1-def-current"},
         }),
     )
     monkeypatch.setattr(
@@ -448,6 +450,12 @@ def test_job_configuration_and_run_overrides_reprepare_catalog_definition(monkey
         "start_background_event_relay_if_needed",
         lambda *args, **kwargs: relays.append((args, kwargs)),
     )
+    submission_lookups = []
+    def load_submission(*args):
+        submission_lookups.append(args)
+        return {"output_copy": [{"source_path": "/runtime/output", "target_path": "/host/output"}]}
+    monkeypatch.setattr(jobs, "load_submission_storage", load_submission)
+    monkeypatch.setattr(jobs, "start_background_run_relay", lambda *args, **kwargs: output_relays.append((args, kwargs)))
 
     current = client.get("/api/v1/jobs/job-1")
     updated = client.patch(
@@ -503,6 +511,9 @@ def test_job_configuration_and_run_overrides_reprepare_catalog_definition(monkey
     assert len(prepared) == 2
     assert len(mappings) == 1
     assert len(relays) == 1
+    assert submission_lookups[-1][1] == "job-1-def-current"
+    assert output_relays[-1][0][0:2] == ("run-1", "run-1")
+    assert output_relays[-1][0][2]["output_copy"][0]["target_path"] == "/host/output"
 
     def unexpected_preparation(*args, **kwargs):
         raise AssertionError("An unchanged prepared Job must not access the catalog or prepare placement")

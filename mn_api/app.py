@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+from contextlib import asynccontextmanager
 import uuid
 
 from fastapi import FastAPI, HTTPException, Request
@@ -18,6 +20,7 @@ from mn_api.errors import (
     unexpected_exception_handler,
 )
 from mn_api.job_mcp import create_job_mcp, job_mcp_lifespan
+from mn_api.host_output_delivery import host_output_delivery_loop
 from mn_sdk.errors import AppError
 from mn_api.routes import bundles
 from mn_api.routes.v1 import blueprints, infrastructure, jobs, operations, system
@@ -25,12 +28,27 @@ from mn_api.routes.v1 import blueprints, infrastructure, jobs, operations, syste
 
 def create_app() -> FastAPI:
     job_mcp_servers, job_mcp_app = create_job_mcp()
+    mcp_lifespan = job_mcp_lifespan(job_mcp_servers)
+
+    @asynccontextmanager
+    async def runtime_lifespan(app: FastAPI):
+        async with mcp_lifespan(app):
+            delivery_task = asyncio.create_task(host_output_delivery_loop())
+            try:
+                yield
+            finally:
+                delivery_task.cancel()
+                try:
+                    await delivery_task
+                except asyncio.CancelledError:
+                    pass
+
     app = FastAPI(
         title="MirrorNeuron API",
         version="1.0",
         openapi_url="/api/v1/openapi.json",
         responses=COMMON_PROBLEM_RESPONSES,
-        lifespan=job_mcp_lifespan(job_mcp_servers),
+        lifespan=runtime_lifespan,
     )
 
     app.add_exception_handler(AppError, app_error_exception_handler)

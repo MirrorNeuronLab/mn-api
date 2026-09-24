@@ -2543,7 +2543,35 @@ def start_background_event_relay_if_needed(
         run_id,
         str(runs_root),
     )
+    start_background_run_relay(
+        run_id, execution_id, storage, config=config,
+        env_overrides=env_overrides, grpc_target=grpc_target,
+        grpc_auth_token=grpc_auth_token,
+        grpc_timeout_seconds=grpc_timeout_seconds,
+    )
+
+
+def start_background_run_relay(
+    run_id: str,
+    execution_id: str,
+    storage: Dict[str, Any],
+    *,
+    config: Dict[str, Any] | None = None,
+    env_overrides: Dict[str, str] | None = None,
+    grpc_target: str | None = None,
+    grpc_auth_token: str | None = None,
+    grpc_timeout_seconds: float | None = None,
+) -> None:
+    """Deliver declared host outputs for a durable run on the submitting host."""
+    if not config_bool("MN_RUN_BACKGROUND_EVENT_RELAY", default=True):
+        return
+    runs_root = Path(shared_runs_root()).expanduser()
+    run_dir = runs_root / run_id
+    if not storage and not (run_dir / "post_launch_hook.json").is_file():
+        return
     max_seconds = background_event_relay_max_seconds(config)
+    if storage.get("output_copy") and config_optional_value("MN_RUN_EVENT_RELAY_MAX_SECONDS") is None:
+        max_seconds = None
     poll_seconds = background_event_relay_poll_seconds(config)
     run_dir.mkdir(parents=True, exist_ok=True)
     if storage:

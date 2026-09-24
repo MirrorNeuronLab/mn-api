@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 from fastapi.responses import StreamingResponse
 from mn_sdk import RuntimeConfig, RuntimeService, generate_job_definition_submission_id, generate_stable_job_id
+from mn_sdk.blueprint_support.shared_outputs import load_submission_storage
 from mn_sdk.blueprint_support.observability import list_runs as list_local_runs
 from mn_sdk.shared_run_store import shared_run_dir
 from mn_sdk.staged_artifacts import (
@@ -44,6 +45,7 @@ from mn_api.blueprints import (
     load_blueprint_bundle,
     local_blueprint_from_path,
     start_background_event_relay_if_needed,
+    start_background_run_relay,
     write_blueprint_job_mapping,
 )
 from mn_api.bundles import uploaded_bundle_root
@@ -588,6 +590,20 @@ def create_job_run(
                     grpc_auth_token=getattr(runtime_config, "grpc_auth_token", None),
                     grpc_timeout_seconds=getattr(runtime_config, "grpc_timeout_seconds", None),
                 )
+        else:
+            execution_id = str(run.get("run_id") or run.get("id") or "").strip()
+            ownership = current.get("native_resource_ownership") or {}
+            submission_id = str(ownership.get("submission_id") or "").strip() if isinstance(ownership, dict) else ""
+            if execution_id and submission_id:
+                runtime_config = state.refresh_config_from_env()
+                storage = load_submission_storage(runtime_config.shared_storage_root, submission_id)
+                if storage.get("output_copy"):
+                    start_background_run_relay(
+                        execution_id, execution_id, storage, config=resolved_configuration,
+                        grpc_target=getattr(runtime_config, "grpc_target", None),
+                        grpc_auth_token=getattr(runtime_config, "grpc_auth_token", None),
+                        grpc_timeout_seconds=getattr(runtime_config, "grpc_timeout_seconds", None),
+                    )
         return run
 
     return idempotent_response(

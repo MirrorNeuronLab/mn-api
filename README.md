@@ -19,6 +19,11 @@ path, the same path used by `mn blueprint run`.
 After a run starts, the API uses the SDK run-store writer to persist the same
 public monitor manifest as the CLI, keeping generated control nodes and
 internal runtime staff out of the workflow step view.
+For durable Job runs, it starts the shared host output relay even when the
+definition and configuration are unchanged. The relay waits for the terminal
+file inventory to replicate, copies the declared output folder, and records
+delivery status separately from run completion. A host reconciliation loop also
+starts missing relays for completed runs dispatched directly by Core schedules.
 
 For older runs whose owner is no longer visible to Core, run detail, workflow
 progress, and events can be read from a mapped replicated submission. A shared
