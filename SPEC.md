@@ -17,7 +17,11 @@ shared Python behavior are external contracts consumed through
 
 Run read endpoints may project a run from a verified SDK local mapping and its
 replicated submission when Core cannot return the run. A nonterminal shared
-record is reported as `unknown`; writable run operations still require Core.
+record is reported as `unknown`; writable Core run operations still require Core.
+Human review annotations are separate from Core run control: an authenticated
+response to a pending request writes to the verified mapped submission ledger
+when that ledger exists, and otherwise to the local run ledger. Unknown or
+closed requests return HTTP 409.
 API-started durable Job runs with a declared host output copy start the SDK host
 delivery relay, including starts that reuse an unchanged definition. The API
 loads the committed submission's copy contract without rebuilding the catalog

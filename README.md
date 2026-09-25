@@ -29,6 +29,10 @@ For older runs whose owner is no longer visible to Core, run detail, workflow
 progress, and events can be read from a mapped replicated submission. A shared
 record that still says `running` is presented as `unknown` rather than as a
 live run.
+Human review requests use the mapped submission's human-event ledger when one
+exists. An authenticated response to a pending request is appended there, so a
+completed blueprint review can be answered from OtterDesk even when its report
+is stored in shared outputs. Duplicate or unknown request IDs return HTTP 409.
 
 Blueprint run requests may include `secret_environment`, a bounded map whose
 values are treated as secrets by request validation. Every name must be

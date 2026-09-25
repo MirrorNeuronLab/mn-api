@@ -30,6 +30,7 @@ from mn_api.run_outputs import output_content_type, output_path_by_index, output
 from mn_api.run_store import read_json_file as _read_json_object
 from mn_api.run_store import run_dir_from_id
 from mn_api.run_store import runs_root as _runs_root
+from mn_sdk.shared_run_store import shared_run_dir
 from mn_api.schemas import RunCompareRequest
 
 
@@ -321,7 +322,7 @@ def get_run_human_events(
     status: str | None = Query(default=None),
     _auth=Depends(require_auth),
 ):
-    run_dir = _ensure_run_exists(run_id)
+    run_dir = _human_event_run_dir(run_id)
     tools = _observability_tools()
     events = (
         tools["list_pending_human_requests"](run_id, runs_root=run_dir.parent)
@@ -337,10 +338,12 @@ def post_run_human_response(
     payload: dict[str, Any],
     _auth=Depends(require_auth),
 ):
-    if _ensure_run_exists(run_id).parent != _runs_root():
-        raise HTTPException(status_code=409, detail="historical run is read-only")
+    run_dir = _human_event_run_dir(run_id)
     tools = _observability_tools()
-    return tools["record_human_response"](run_id, request_id, payload, runs_root=_runs_root())
+    pending = tools["list_pending_human_requests"](run_id, runs_root=run_dir.parent)
+    if not any((event.get("payload") or {}).get("request_id") == request_id for event in pending):
+        raise HTTPException(status_code=409, detail="human request is not pending")
+    return tools["record_human_response"](run_id, request_id, payload, runs_root=run_dir.parent)
 
 
 def post_run_human_ack(
@@ -349,10 +352,16 @@ def post_run_human_ack(
     payload: dict[str, Any] | None = None,
     _auth=Depends(require_auth),
 ):
-    if _ensure_run_exists(run_id).parent != _runs_root():
-        raise HTTPException(status_code=409, detail="historical run is read-only")
+    run_dir = _human_event_run_dir(run_id)
     tools = _observability_tools()
-    return tools["acknowledge_human_notice"](run_id, notice_id, payload or {}, runs_root=_runs_root())
+    return tools["acknowledge_human_notice"](run_id, notice_id, payload or {}, runs_root=run_dir.parent)
+
+
+def _human_event_run_dir(run_id: str) -> Path:
+    """Use a verified mapped submission when it owns the run's human ledger."""
+    run_dir = _ensure_run_exists(run_id)
+    shared = shared_run_dir(run_id)
+    return shared or run_dir
 
 
 def _ensure_run_exists(run_id: str) -> Path:
