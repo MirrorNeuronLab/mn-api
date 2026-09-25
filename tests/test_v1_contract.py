@@ -973,6 +973,32 @@ def test_blueprint_run_preserves_launch_error_response(monkeypatch):
     assert "location" not in response.headers
 
 
+def test_job_run_reports_scheduler_rejection_without_accepting_a_run(monkeypatch):
+    _client_with_raised_exceptions, runtime = _client(monkeypatch)
+    client = TestClient(create_app(), raise_server_exceptions=False)
+
+    class AdmissionError(grpc.RpcError):
+        def code(self):
+            return grpc.StatusCode.INTERNAL
+
+        def details(self):
+            return "resource_overloaded: memory is busy"
+
+    def reject_run(*_args, **_kwargs):
+        raise AdmissionError()
+
+    monkeypatch.setattr(runtime, "start_run", reject_run)
+    response = client.post(
+        "/api/v1/jobs/job-1/runs",
+        headers={"Idempotency-Key": "busy-run-1"},
+        json={"inputs": {}},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "MN_RESOURCE_EXHAUSTED"
+    assert "location" not in response.headers
+
+
 def test_async_blueprint_requests_preserve_federated_owner_node():
     run_request = blueprints.legacy_blueprints.resolve_async_blueprint_run_request(
         "worker-1",

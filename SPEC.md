@@ -116,6 +116,10 @@ No artificial completion percentage is inferred from elapsed time.
   HTTP workflow.
 - `job_id` is stable and owns configuration, schedules, and shared data;
   `run_id` is the execution/control identity. Batch starts create fresh runs.
+  A rejected run start caused by temporary runtime resource overload returns
+  HTTP 503 Problem Details with code `MN_RESOURCE_EXHAUSTED`; no schedulable
+  runtime node returns `MN_SCHEDULING_UNAVAILABLE`. These run-start responses
+  do not create an accepted run. Other operations keep their existing errors.
   A blueprint-owned Web UI is optional singular Job state: its durable handle
   is served only at `GET /api/v1/jobs/{job_id}/ui` and is shared by every run
   of that Job. Run UI paths are not mounted. The local `mn-web-ui-server` may

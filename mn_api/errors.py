@@ -2,12 +2,41 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+import grpc
 from fastapi import HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from mn_api import state
 from mn_sdk.errors import AppError, normalize_exception, sanitize_context
+
+
+def run_start_admission_error(error: Exception) -> AppError | None:
+    """Project Core's run-admission rejections without changing other operations."""
+    if isinstance(error, grpc.RpcError) and error.code() in {
+        grpc.StatusCode.UNAVAILABLE,
+        grpc.StatusCode.INTERNAL,
+        grpc.StatusCode.RESOURCE_EXHAUSTED,
+    }:
+        detail = str(error.details() or "").lower()
+        if "resource_overloaded:" in detail:
+            return AppError(
+                "MN_RESOURCE_EXHAUSTED",
+                "No runtime resources are available to run this workflow right now.",
+                hint="Wait for active jobs to finish or cancel a paused job that holds the required resources, then try again.",
+                http_status=503,
+                cause=error,
+            )
+        if "no schedulable runtime nodes are available" in detail:
+            return AppError(
+                "MN_SCHEDULING_UNAVAILABLE",
+                "No runtime node is available to start this run right now.",
+                hint="Check the runtime nodes and try again when one is available.",
+                http_status=503,
+                cause=error,
+            )
+    return None
+
 
 def problem_response(
     *,
@@ -78,8 +107,8 @@ def app_error_response(app_error: AppError, *, request: Request | None = None, c
     )
 
 
-def handle_grpc_error(error: Exception):
-    app_error = normalize_exception(error)
+def handle_grpc_error(error: Exception, *, run_start: bool = False):
+    app_error = (run_start_admission_error(error) if run_start else None) or normalize_exception(error)
     _log_exception(error, app_error, {"handler": "handle_grpc_error"})
     return app_error_response(app_error)
 

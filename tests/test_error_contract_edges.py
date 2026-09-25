@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import grpc
+import pytest
 
 from mn_api.errors import handle_grpc_error
 
@@ -26,6 +27,37 @@ def test_resource_overloaded_uses_current_app_error_contract():
 
     assert response.status_code == 503
     assert json.loads(response.body)["code"] == "MN_RESOURCE_EXHAUSTED"
+
+
+@pytest.mark.parametrize("status", [grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.INTERNAL])
+def test_run_admission_overload_returns_retryable_capacity_problem(status):
+    response = handle_grpc_error(RpcError(status, "resource_overloaded: memory=0.99 token=private"), run_start=True)
+
+    body = json.loads(response.body)
+    assert response.status_code == 503
+    assert body["code"] == "MN_RESOURCE_EXHAUSTED"
+    assert "Wait for active jobs" in body["hint"]
+    assert "private" not in json.dumps(body)
+
+
+@pytest.mark.parametrize("status", [grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.INTERNAL])
+def test_no_schedulable_node_returns_distinct_problem(status):
+    response = handle_grpc_error(
+        RpcError(status, "no schedulable runtime nodes are available"), run_start=True
+    )
+
+    body = json.loads(response.body)
+    assert response.status_code == 503
+    assert body["code"] == "MN_SCHEDULING_UNAVAILABLE"
+    assert "node" in body["detail"]
+
+
+def test_other_operations_keep_their_existing_runtime_error_contract():
+    response = handle_grpc_error(
+        RpcError(grpc.StatusCode.UNAVAILABLE, "resource_overloaded: memory is busy")
+    )
+
+    assert json.loads(response.body)["code"] == "MN_RUNTIME_UNAVAILABLE"
 
 
 def test_failed_precondition_does_not_parse_detail_encoded_validation_reports():

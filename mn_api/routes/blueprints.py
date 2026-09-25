@@ -1202,7 +1202,7 @@ def run_blueprint_record(
         record_launch_progress(
             progress_id, "launch", "failed", "Blueprint launch failed during submit.", {"run_id": run_id}
         )
-        return handle_grpc_error(exc)
+        return handle_grpc_error(exc, run_start=True)
 
 
 def resolve_launch_source(req: BlueprintLaunchRequest) -> dict:

@@ -51,6 +51,7 @@ from mn_api.blueprints import (
 from mn_api.bundles import uploaded_bundle_root
 from mn_api.contracts import API_PREFIX, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 from mn_api.dependencies import require_auth
+from mn_api.errors import run_start_admission_error
 from mn_api.http_semantics import require_if_match
 from mn_api.launch_progress import launch_activity, observe_submission, progress_reporter
 from mn_api.operations import encode_sse, sse_envelope, start_operation
@@ -568,9 +569,12 @@ def create_job_run(
                 idempotency_key=idempotency_key or "",
                 replace_existing_run=request.replace_existing_run,
             )
-        except Exception:
+        except Exception as exc:
             if relay:
                 cleanup_blueprint_run_processes(relay[2], reason="launch_failed")
+            admission_error = run_start_admission_error(exc)
+            if admission_error is not None:
+                raise admission_error from exc
             raise
         run.setdefault("status", "pending")
         if relay:
