@@ -48,6 +48,19 @@ def _load_durable_operation_locked(operation_id: str) -> dict[str, Any] | None:
     _local_operation_ids.add(operation_id)
     _durable_local_operation_ids.add(operation_id)
     _local_operation_events[operation_id] = events[-200:]
+    if operation.get("status") in {"pending", "running"}:
+        operation = dict(operation)
+        operation["status"] = "interrupted"
+        previous_progress = operation.get("progress") or {}
+        operation["progress"] = {
+            "percent": previous_progress.get("percent", 0),
+            "stage": "reconcile",
+            "label": "Reconnect launch",
+            "detail": "The API restarted. Resubmit the same launch request to reconcile its result.",
+        }
+        _operations[operation_id] = operation
+        _append_local_event_locked(operation_id, "operation.interrupted", operation)
+        _persist_durable_operation_locked(operation_id)
     return operation
 
 
@@ -226,13 +239,22 @@ def update_local_operation(
             else "operation.progress"
         )
         _append_local_event_locked(operation_id, event_type, stored)
+        _persist_durable_operation_locked(operation_id)
         _condition.notify_all()
         return stored
 
 
-def start_local_operation(kind: str, options: dict[str, Any], work) -> dict[str, Any]:
+def start_local_operation(
+    kind: str,
+    options: dict[str, Any],
+    work,
+    *,
+    operation_id: str | None = None,
+    request_fingerprint: str | None = None,
+    durable: bool = False,
+) -> dict[str, Any]:
     now = _now()
-    operation_id = f"op-local-{uuid.uuid4().hex}"
+    operation_id = operation_id or f"op-local-{uuid.uuid4().hex}"
     operation = {
         "operation_id": operation_id,
         "kind": kind,
@@ -240,6 +262,7 @@ def start_local_operation(kind: str, options: dict[str, Any], work) -> dict[str,
         "created_at": now,
         "updated_at": now,
         "options": public_value(options),
+        **({"request_fingerprint": request_fingerprint} if request_fingerprint else {}),
         "progress": {
             "percent": 0,
             "stage": "queued",
@@ -248,24 +271,42 @@ def start_local_operation(kind: str, options: dict[str, Any], work) -> dict[str,
         },
     }
     with _condition:
+        existing = _load_durable_operation_locked(operation_id) if durable else _operations.get(operation_id)
+        if existing:
+            if request_fingerprint and existing.get("request_fingerprint") != request_fingerprint:
+                raise HTTPException(status_code=409, detail="The Idempotency-Key was already used with another request.")
+            if (
+                existing.get("status") == "completed"
+                or (
+                    existing.get("status") == "failed"
+                    and not (existing.get("error") or {}).get("retryable")
+                )
+                or operation_id in _active_local_operation_ids
+            ):
+                return dict(existing)
+            operation["created_at"] = existing.get("created_at", now)
         _local_operation_ids.add(operation_id)
+        if durable:
+            _durable_local_operation_ids.add(operation_id)
+        _active_local_operation_ids.add(operation_id)
         stored = _store_operation_locked(operation)
         _append_local_event_locked(operation_id, "operation.accepted", stored)
+        _persist_durable_operation_locked(operation_id)
         _condition.notify_all()
 
     def report_progress(**progress):
         update_local_operation(operation_id, status="running", **progress)
 
     def run():
-        update_local_operation(
-            operation_id,
-            status="running",
-            percent=1,
-            stage="starting",
-            label="Starting",
-            detail="The local API host started the operation.",
-        )
         try:
+            update_local_operation(
+                operation_id,
+                status="running",
+                percent=1,
+                stage="starting",
+                label="Starting",
+                detail="The local API host started the operation.",
+            )
             result = work(report_progress)
         except Exception as exc:
             update_local_operation(
@@ -273,16 +314,20 @@ def start_local_operation(kind: str, options: dict[str, Any], work) -> dict[str,
                 status="failed",
                 error=_operation_error(exc),
             )
-            return
-        update_local_operation(
-            operation_id,
-            status="completed",
-            percent=100,
-            stage="completed",
-            label="Completed",
-            detail="The operation completed successfully.",
-            result=result,
-        )
+        else:
+            update_local_operation(
+                operation_id,
+                status="completed",
+                percent=100,
+                stage="completed",
+                label="Completed",
+                detail="The operation completed successfully.",
+                result=result,
+            )
+        finally:
+            with _condition:
+                _active_local_operation_ids.discard(operation_id)
+                _condition.notify_all()
 
     threading.Thread(target=run, name=f"mn-api-{kind}-{operation_id[-8:]}", daemon=True).start()
     return stored
@@ -290,6 +335,7 @@ def start_local_operation(kind: str, options: dict[str, Any], work) -> dict[str,
 
 def is_local_operation(operation_id: str) -> bool:
     with _lock:
+        _load_durable_operation_locked(operation_id)
         return operation_id in _local_operation_ids
 
 
@@ -297,6 +343,7 @@ def stream_local_operation_events(operation_id: str, *, resume_after: int = 0):
     next_sequence = max(0, resume_after) + 1
     while True:
         with _condition:
+            _load_durable_operation_locked(operation_id)
             while True:
                 events = [
                     dict(event)
@@ -309,6 +356,7 @@ def stream_local_operation_events(operation_id: str, *, resume_after: int = 0):
                     "failed",
                     "cancelled",
                     "canceled",
+                    "interrupted",
                 }
                 if events or terminal or operation is None:
                     break
@@ -326,9 +374,11 @@ def stream_local_operation_events(operation_id: str, *, resume_after: int = 0):
 
 def get_operation(operation_id: str) -> dict[str, Any]:
     with _lock:
-        local = _operations.get(operation_id)
+        local = _load_durable_operation_locked(operation_id)
     if operation_id.startswith("op-local-") and local is not None:
         return dict(local)
+    if operation_id.startswith("op-local-"):
+        raise HTTPException(status_code=404, detail="Operation not found.")
     resource = register_operation(state.client.get_operation(operation_id))
     if not resource.get("operation_id"):
         resource["operation_id"] = operation_id

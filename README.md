@@ -170,6 +170,8 @@ All paths below are under `/api/v1`.
   `GET /jobs/{job_id}/workflow/{definition|latest-run}/{dag|steps}`.
 - Runs: `POST/GET /jobs/{job_id}/runs` (catalog Jobs may include
   `config_overrides`; the API prepares the updated definition before launch),
+  asynchronous `POST /jobs/{job_id}/run-operations` with a required
+  `Idempotency-Key` and progress at `/operations/{id}/events/stream`,
   `POST /blueprints/{blueprint_id}/runs`, `GET /runs`, and
   `GET/PATCH/DELETE /runs/{run_id}`.
 - Run detail: logs, events, resources, human requests, UI, artifacts, outputs,

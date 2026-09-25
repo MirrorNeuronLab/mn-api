@@ -1128,6 +1128,159 @@ def _wait_for_operation(client: TestClient, operation_id: str, terminal: set[str
     raise AssertionError(f"operation {operation_id} did not reach {sorted(terminal)}")
 
 
+def test_job_run_operation_accepts_immediately_streams_and_recovers_snapshot(monkeypatch, tmp_path):
+    from mn_api import operations
+
+    monkeypatch.setattr(operations, "resolve_mn_home", lambda: tmp_path)
+    client, runtime = _client(monkeypatch)
+    started = Event()
+    release = Event()
+    original_start = runtime.start_run
+
+    def delayed_start(*args, **kwargs):
+        started.set()
+        assert release.wait(2)
+        return original_start(*args, **kwargs)
+
+    monkeypatch.setattr(runtime, "start_run", delayed_start)
+    headers = {"Idempotency-Key": "async-launch-1"}
+    body = {"inputs": {"scenario": "review"}}
+    accepted = client.post("/api/v1/jobs/job-1/run-operations", headers=headers, json=body)
+    assert accepted.status_code == 202
+    operation_id = accepted.json()["operation_id"]
+    assert accepted.headers["location"] == f"/api/v1/operations/{operation_id}"
+    assert started.wait(1)
+    replay = client.post("/api/v1/jobs/job-1/run-operations", headers=headers, json=body)
+    assert replay.json()["operation_id"] == operation_id
+    conflict = client.post("/api/v1/jobs/job-1/run-operations", headers=headers, json={"inputs": {"other": True}})
+    assert conflict.status_code == 409
+    release.set()
+    completed = _wait_for_operation(client, operation_id)
+    assert completed["status"] == "completed"
+    assert completed["result"]["run_id"] == "run-1"
+    assert sum(call[0] == "start_run" for call in runtime.calls) == 1
+    stream = client.get(f"/api/v1/operations/{operation_id}/events/stream")
+    assert "event: operation.completed" in stream.text
+    with operations._condition:
+        operations._operations.clear()
+        operations._local_operation_ids.clear()
+        operations._local_operation_events.clear()
+        operations._durable_local_operation_ids.clear()
+    restored = client.get(f"/api/v1/operations/{operation_id}")
+    assert restored.json()["result"]["run_id"] == "run-1"
+    # An API restart during launch leaves a durable record that the same
+    # request can resume without creating another Core run.
+    path = operations._durable_operation_path(operation_id)
+    record = json.loads(path.read_text(encoding="utf-8"))
+    record["operation"]["status"] = "running"
+    path.write_text(json.dumps(record), encoding="utf-8")
+    with operations._condition:
+        operations._operations.clear()
+        operations._local_operation_ids.clear()
+        operations._local_operation_events.clear()
+        operations._durable_local_operation_ids.clear()
+    interrupted = client.get(f"/api/v1/operations/{operation_id}")
+    assert interrupted.json()["status"] == "interrupted"
+    resumed = client.post("/api/v1/jobs/job-1/run-operations", headers=headers, json=body)
+    assert resumed.json()["operation_id"] == operation_id
+    assert _wait_for_operation(client, operation_id)["status"] == "completed"
+    assert sum(call[0] == "start_run" for call in runtime.calls) == 1
+
+
+def test_job_run_operation_reconciles_a_committed_core_update_after_deadline(monkeypatch, tmp_path):
+    from mn_api import operations
+
+    monkeypatch.setattr(operations, "resolve_mn_home", lambda: tmp_path)
+    client, runtime = _client(monkeypatch)
+    configuration = {"worker": {"mode": "old"}}
+    updates = []
+
+    def get_job(job_id, **_kwargs):
+        return json.dumps({
+            "job_id": job_id, "blueprint_id": "worker-1", "status": "active",
+            "revision": 1 + len(updates), "resolved_configuration": configuration,
+        })
+
+    class Deadline(grpc.RpcError):
+        def code(self):
+            return grpc.StatusCode.DEADLINE_EXCEEDED
+
+    def update_job(_job_id, attrs, **_kwargs):
+        nonlocal configuration
+        updates.append(attrs)
+        configuration = attrs["resolved_configuration"]
+        raise Deadline()
+
+    monkeypatch.setattr(runtime, "get_job", get_job)
+    monkeypatch.setattr(runtime, "update_job", update_job)
+    monkeypatch.setattr(jobs, "find_blueprint", lambda *_args: ("/catalog", {"id": "worker-1"}))
+    monkeypatch.setattr(jobs, "_prepare_catalog_job_update", lambda *_args, **_kwargs: ('{"graph_id":"prepared"}', {}))
+    monkeypatch.setattr(jobs, "write_blueprint_job_mapping", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(jobs, "start_background_event_relay_if_needed", lambda *_args, **_kwargs: None)
+
+    accepted = client.post(
+        "/api/v1/jobs/job-1/run-operations",
+        headers={"Idempotency-Key": "deadline-reconcile-1"},
+        json={"inputs": {}, "config_overrides": {"worker": {"mode": "new"}}},
+    )
+    assert accepted.status_code == 202
+    completed = _wait_for_operation(client, accepted.json()["operation_id"])
+    assert completed["status"] == "completed"
+    assert completed["result"]["run_id"] == "run-1"
+    assert len(updates) == 1
+    assert sum(call[0] == "start_run" for call in runtime.calls) == 1
+
+
+def test_job_run_operation_preserves_a_core_admission_rejection(monkeypatch, tmp_path):
+    from mn_api import operations
+
+    monkeypatch.setattr(operations, "resolve_mn_home", lambda: tmp_path)
+    client, runtime = _client(monkeypatch)
+
+    class AdmissionError(grpc.RpcError):
+        def code(self):
+            return grpc.StatusCode.INTERNAL
+
+        def details(self):
+            return "resource_overloaded: memory is busy"
+
+    def reject_run(*_args, **_kwargs):
+        runtime.calls.append(("start_run",))
+        raise AdmissionError()
+
+    monkeypatch.setattr(runtime, "start_run", reject_run)
+    headers = {"Idempotency-Key": "busy-async-run-1"}
+    body = {"inputs": {}}
+    accepted = client.post("/api/v1/jobs/job-1/run-operations", headers=headers, json=body)
+    assert accepted.status_code == 202
+    failed = _wait_for_operation(client, accepted.json()["operation_id"])
+    assert failed["error"]["code"] == "MN_RESOURCE_EXHAUSTED"
+    assert failed["error"]["retryable"] is True
+    assert "resource_overloaded" not in failed["error"]["detail"]
+
+
+def test_job_run_operation_replays_a_nonretryable_failure(monkeypatch, tmp_path):
+    from mn_api import operations
+
+    monkeypatch.setattr(operations, "resolve_mn_home", lambda: tmp_path)
+    client, runtime = _client(monkeypatch)
+
+    def missing_job(*_args, **_kwargs):
+        runtime.calls.append(("get_job",))
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    monkeypatch.setattr(runtime, "get_job", missing_job)
+    headers = {"Idempotency-Key": "missing-async-run-1"}
+    body = {"inputs": {}}
+    accepted = client.post("/api/v1/jobs/job-1/run-operations", headers=headers, json=body)
+    failed = _wait_for_operation(client, accepted.json()["operation_id"])
+    assert failed["error"]["retryable"] is False
+    replay = client.post("/api/v1/jobs/job-1/run-operations", headers=headers, json=body)
+    assert replay.json()["status"] == "failed"
+    assert runtime.calls == [("get_job",)]
+
+
+
 def test_blueprint_addition_exposes_real_progress_result_and_local_sse(monkeypatch):
     client, _runtime = _client(monkeypatch)
     started = Event()

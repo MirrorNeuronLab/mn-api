@@ -116,6 +116,12 @@ No artificial completion percentage is inferred from elapsed time.
   HTTP workflow.
 - `job_id` is stable and owns configuration, schedules, and shared data;
   `run_id` is the execution/control identity. Batch starts create fresh runs.
+  `POST /jobs/{job_id}/run-operations` accepts an `Idempotency-Key` and returns
+  a durable API launch operation immediately. Its authenticated operation SSE
+  stream reports progress and terminal success with the created `run_id`, or a
+  sanitized failure. Replaying the same request after an API restart resumes an
+  interrupted operation and reconciles a Core update that may have committed
+  before its RPC deadline. A changed body with the same key is rejected.
   A rejected run start caused by temporary runtime resource overload returns
   HTTP 503 Problem Details with code `MN_RESOURCE_EXHAUSTED`; no schedulable
   runtime node returns `MN_SCHEDULING_UNAVAILABLE`. These run-start responses

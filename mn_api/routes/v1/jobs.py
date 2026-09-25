@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from hashlib import sha256
 import grpc
 from pathlib import Path
 from typing import Any
@@ -52,9 +53,9 @@ from mn_api.bundles import uploaded_bundle_root
 from mn_api.contracts import API_PREFIX, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 from mn_api.dependencies import require_auth
 from mn_api.errors import run_start_admission_error
-from mn_api.http_semantics import require_if_match
+from mn_api.http_semantics import idempotency_records, require_if_match
 from mn_api.launch_progress import launch_activity, observe_submission, progress_reporter
-from mn_api.operations import encode_sse, sse_envelope, start_operation
+from mn_api.operations import encode_sse, sse_envelope, start_local_operation, start_operation
 from mn_api.pagination import page, page_tokens
 from mn_api.public import decode, idempotent_response, public_value, records, resource_response
 from mn_api.run_recovery import stored_progress, stored_run
@@ -627,6 +628,65 @@ def create_job_run(
         call=start,
         status_code=status.HTTP_202_ACCEPTED,
         location=lambda result: f"{API_PREFIX}/runs/{result.get('run_id') or result.get('id')}",
+    )
+
+
+@router.post(
+    "/jobs/{job_id}/run-operations",
+    status_code=status.HTTP_202_ACCEPTED,
+    operation_id="create_job_run_operation",
+    tags=["runs"],
+    response_model=ResourceModel,
+)
+def create_job_run_operation(
+    job_id: str,
+    request: RunCreate,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", max_length=255),
+    principal: str = Depends(require_auth),
+):
+    if not idempotency_key:
+        raise HTTPException(status_code=400, detail="Idempotency-Key is required for an asynchronous launch.")
+    route = f"{API_PREFIX}/jobs/{job_id}/run-operations"
+    operation_id = "op-local-" + sha256(
+        json.dumps([principal, route, idempotency_key], separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    fingerprint = idempotency_records.fingerprint(request.model_dump())
+
+    def launch(report_progress):
+        # A Core deadline can arrive after UpdateJob committed. The next attempt
+        # reads the Job first, skips an already committed configuration, and
+        # starts the Run with the same Core idempotency key.
+        for attempt in range(10):
+            report_progress(
+                percent=min(10 + attempt * 8, 85),
+                stage="submit",
+                label="Start run",
+                detail="Reconciling the Job and submitting its run." if attempt else "Submitting the run to MirrorNeuron.",
+            )
+            try:
+                response = create_job_run(job_id, request, idempotency_key, principal)
+                result = json.loads(response.body)
+                if not isinstance(result, dict) or not result.get("run_id"):
+                    raise RuntimeError("MirrorNeuron did not return the started Run ID.")
+                return result
+            except grpc.RpcError as exc:
+                if exc.code() not in {grpc.StatusCode.DEADLINE_EXCEEDED, grpc.StatusCode.UNAVAILABLE} or attempt == 9:
+                    raise
+                time.sleep(min(2 ** attempt, 30))
+        raise RuntimeError("The run could not be submitted.")
+
+    operation = start_local_operation(
+        "create_job_run",
+        {"job_id": job_id},
+        launch,
+        operation_id=operation_id,
+        request_fingerprint=fingerprint,
+        durable=True,
+    )
+    return resource_response(
+        operation,
+        status_code=status.HTTP_202_ACCEPTED,
+        location=f"{API_PREFIX}/operations/{operation_id}",
     )
 
 
