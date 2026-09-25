@@ -639,6 +639,37 @@ def test_run_accepts_matching_configuration_saved_during_preparation(monkeypatch
     assert mappings == []
 
 
+def test_repeated_job_config_patch_reuses_prepared_definition(monkeypatch):
+    client, runtime = _client(monkeypatch)
+    monkeypatch.setattr(runtime, "get_job", lambda job_id, **_kwargs: json.dumps({
+        "job_id": job_id, "blueprint_id": "cctv_operator", "status": "active",
+        "revision": 7, "resolved_configuration": {"input": "sample"},
+    }))
+    monkeypatch.setattr(jobs, "find_blueprint", lambda *_args: (_ for _ in ()).throw(
+        AssertionError("An unchanged configuration must not load the catalog")
+    ))
+    current = client.get("/api/v1/jobs/job-co")
+    repeated = client.patch(
+        "/api/v1/jobs/job-co",
+        headers={"If-Match": current.headers["etag"]},
+        json={"resolved_configuration": {"input": "sample"}},
+    )
+    assert repeated.status_code == 200, repeated.text
+    assert repeated.json()["revision"] == 7
+    assert repeated.headers["etag"] == current.headers["etag"]
+    assert not any(call[0] == "update_job" for call in runtime.calls)
+
+    renamed = client.patch(
+        "/api/v1/jobs/job-co",
+        headers={"If-Match": current.headers["etag"]},
+        json={"display_name": "Camera", "resolved_configuration": {"input": "sample"}},
+    )
+    assert renamed.status_code == 200, renamed.text
+    update = next(call for call in runtime.calls if call[0] == "update_job")
+    assert update[2] == {"display_name": "Camera"}
+    assert "manifest_json" not in update[3]
+
+
 def test_otterdesk_config_patch_can_finish_while_run_prepares(monkeypatch):
     client, runtime = _client(monkeypatch)
     job = {

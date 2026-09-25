@@ -280,6 +280,10 @@ SDK format-v1 maximum of 32 GiB. Multipart framing has a 1 MiB allowance. Other
 requests retain the ordinary HTTP body-size policy. Upload files and extracted
 contents are independently checked before a package can be launched.
 
+A Job configuration PATCH that repeats the saved resolved configuration reuses
+the prepared definition and keeps the Job revision unchanged. Other requested
+attributes still update normally.
+
 Starting a saved Job through `POST /api/v1/jobs/{job_id}/runs` reuses its prepared
 definition when overrides are absent or do not change its resolved configuration,
 matching `mn job start`. It does not rediscover the catalog, rebuild worker

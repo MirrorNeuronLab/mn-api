@@ -31,8 +31,8 @@ def test_reconciles_completed_scheduled_run_without_desktop_copy(monkeypatch, tm
     local_run.mkdir(parents=True)
     calls = []
     monkeypatch.setattr(
-        host_output_delivery.state,
-        "refresh_config_from_env",
+        host_output_delivery.RuntimeConfig,
+        "from_env",
         lambda: SimpleNamespace(shared_storage_root=str(shared)),
     )
     monkeypatch.setattr(host_output_delivery, "shared_runs_root", lambda: str(local_runs))

@@ -394,7 +394,17 @@ def update_job(
         attrs = {key: value for key, value in request.model_dump(exclude_none=True).items() if key != "status"}
         if request.status:
             attrs["status"] = request.status
-        if request.resolved_configuration is not None:
+        if (
+            request.resolved_configuration is not None
+            and isinstance(current.get("resolved_configuration"), dict)
+            and request.resolved_configuration == current["resolved_configuration"]
+        ):
+            # A repeated configuration sync must not rebuild the bundle or
+            # advance the revision while a run is preparing from this Job.
+            attrs.pop("resolved_configuration", None)
+            if not attrs:
+                return resource_response(current, etag=True)
+        if "resolved_configuration" in attrs:
             manifest_json, payloads = _prepare_catalog_job_update(
                 job_id,
                 current,

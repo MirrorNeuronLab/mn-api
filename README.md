@@ -324,6 +324,9 @@ Uploaded Job definitions, bundle replacements, and catalog Job definitions pass 
 blueprint preparation before submission, including configuration overrides,
 dependencies, topology lowering, and runtime staging.
 
+Repeated configuration PATCH requests with the already saved resolved
+configuration reuse the prepared definition and keep the Job revision unchanged.
+
 Starting a saved Job through `POST /api/v1/jobs/{job_id}/runs` reuses its prepared
 definition when overrides are absent or do not change its resolved configuration,
 matching `mn job start`. It does not rediscover the catalog, rebuild worker

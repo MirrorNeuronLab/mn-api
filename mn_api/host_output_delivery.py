@@ -9,9 +9,9 @@ import os
 from pathlib import Path
 import re
 
+from mn_sdk import RuntimeConfig
 from mn_sdk.blueprint_support.shared_outputs import load_submission_storage
 
-from mn_api import state
 from mn_api.blueprints import shared_runs_root, start_background_run_relay
 
 
@@ -33,8 +33,7 @@ def _relay_running(run_dir: Path) -> bool:
 
 def reconcile_host_output_delivery() -> int:
     """Start missing host relays after a completed Core run receipt replicates."""
-    config = state.refresh_config_from_env()
-    shared_root = Path(config.shared_storage_root).expanduser().resolve()
+    shared_root = Path(RuntimeConfig.from_env().shared_storage_root).expanduser().resolve()
     submissions = shared_root / "submissions"
     runs_root = Path(shared_runs_root()).expanduser()
     started = 0
