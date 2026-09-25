@@ -19,6 +19,9 @@ path, the same path used by `mn blueprint run`.
 After a run starts, the API uses the SDK run-store writer to persist the same
 public monitor manifest as the CLI, keeping generated control nodes and
 internal runtime staff out of the workflow step view.
+Run workflow-progress reads that saved execution manifest before the stable Job
+definition and replays the recent runtime history needed to reconstruct its
+step state. Active progress exposes a failure only when the run has failed.
 For durable Job runs, it starts the shared host output relay even when the
 definition and configuration are unchanged. The relay waits for the terminal
 file inventory to replicate, copies the declared output folder, and records

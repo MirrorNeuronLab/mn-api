@@ -95,6 +95,11 @@ No artificial completion percentage is inferred from elapsed time.
   event-stream snapshots expose status and progress without shape fields. Hidden
   lowered runtime nodes such as start/end/fork/join nodes are transitively
   projected into source-facing edges and layers at the API boundary.
+- Run workflow-progress uses the saved manifest for that execution ahead of a
+  mutable stable Job definition. It uses the durable workflow ledger for step
+  state when available and replays up to 5,000 recent events for activity; runs
+  without a durable ledger replay the full event history. A root failure is
+  present only while the run is failed; earlier retry errors remain in events.
 - Group operations use fixed Core-owned kinds (`cancel_all_jobs`, `clear_jobs`,
   `reconcile_node`, and `drain_node`). Their item events are replayable by
   sequence cursor. `cancellation_pending` is accepted durable work, while

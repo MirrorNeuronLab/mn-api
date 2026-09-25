@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import json
 import queue
 import re
@@ -65,6 +66,7 @@ from mn_api.run_store import stream_jsonl_files as _stream_jsonl_files
 _MAX_COMPACT_STRING = 2000
 _MAX_COMPACT_LIST = 25
 _MAX_STATUS_RUNTIME_EVENTS = 25
+_MAX_WORKFLOW_PROGRESS_EVENTS = 5000
 _TERMINAL_EVENT_TYPES = {"job_completed", "job_failed", "job_cancelled"}
 _IMMEDIATE_PROGRESS_EVENTS = {
     "job_pending",
@@ -422,8 +424,8 @@ def _is_success_status(value: Any) -> bool:
     return normalized in {"completed", "complete", "done", "finished", "succeeded", "success"}
 
 
-def _clear_success_failure(snapshot: dict[str, Any]) -> None:
-    if _is_success_status(snapshot.get("status")):
+def _clear_nonfailed_failure(snapshot: dict[str, Any]) -> None:
+    if _normalized_status(snapshot.get("status")) != "failed":
         snapshot.pop("failure", None)
 
 
@@ -464,7 +466,7 @@ def _find_run_dir_for_job(job_id: str) -> tuple[Path | None, dict[str, Any]]:
 
 
 def _stream_job_events(job_id: str, *, limit: int = 200) -> tuple[list[dict[str, Any]], str | None]:
-    events: deque[dict[str, Any]] = deque(maxlen=limit)
+    events: deque[dict[str, Any]] = deque(maxlen=limit or None)
     try:
         for event_json in state.client.stream_events(job_id, follow=False, limit=limit):
             try:
@@ -748,24 +750,46 @@ def _workflow_progress_snapshot_for_run(run_id: str) -> dict[str, Any]:
     stable_job_id = _first_string(run.get("job_id"))
     definition: dict[str, Any] = {}
     if stable_job_id:
-        stable_job = json.loads(state.client.get_job(stable_job_id, include_workflow_definition=True))
-        candidate = stable_job.get("workflow_definition")
-        if isinstance(candidate, dict):
-            definition = candidate
-    return _workflow_progress_snapshot_from_details(run_id, {"job": run}, manifest_override=definition)
+        try:
+            stable_job = json.loads(state.client.get_job(stable_job_id, include_workflow_definition=True))
+            candidate = stable_job.get("workflow_definition")
+            if isinstance(candidate, dict):
+                definition = candidate
+        except Exception:
+            # A removed or replaced definition cannot invalidate its run's
+            # saved public manifest and execution ledger.
+            pass
+    # The stable definition can change between runs. It is only a fallback when
+    # this execution has no saved public manifest or runtime workflow ledger.
+    workflow_state = _workflow_state_from_job(run, {})
+    has_durable_steps = bool(
+        isinstance(workflow_state, dict)
+        and workflow_state.get("enabled") is True
+        and isinstance(workflow_state.get("steps"), dict)
+        and workflow_state["steps"]
+    )
+    return _workflow_progress_snapshot_from_details(
+        run_id,
+        {"job": {**run, "run_id": run_id}, "manifest": definition},
+        event_limit=_MAX_WORKFLOW_PROGRESS_EVENTS if has_durable_steps else 0,
+    )
 
 
 def _workflow_progress_snapshot_from_details(
-    job_id: str, details: dict[str, Any], *, manifest_override: dict[str, Any] | None = None
+    job_id: str,
+    details: dict[str, Any],
+    *,
+    manifest_override: dict[str, Any] | None = None,
+    event_limit: int = _MAX_STATUS_RUNTIME_EVENTS,
 ) -> dict[str, Any]:
     job = _job_from_details(details)
     summary = _summary_from_details(details)
-    events, stream_error = _stream_job_events(job_id, limit=_MAX_STATUS_RUNTIME_EVENTS)
+    events, stream_error = _stream_job_events(job_id, limit=event_limit)
     run_dir = _run_dir_for_details(details, events, job_id=job_id)
     events = _merge_events(
         events,
-        _run_store_events(run_dir, limit=_MAX_STATUS_RUNTIME_EVENTS),
-        limit=_MAX_STATUS_RUNTIME_EVENTS,
+        _run_store_events(run_dir, limit=event_limit),
+        limit=event_limit,
     )
     observability_summary = _read_json_file(run_dir / "observability_summary.json") if run_dir else {}
     manifest = _manifest_with_public_agent_bindings(
@@ -795,8 +819,8 @@ def _workflow_progress_snapshot_from_details(
         )
     _apply_default_assigned_node(snapshot, details)
     _enrich_workflow_progress_activity(snapshot, events)
-    _clear_success_failure(snapshot)
-    if not snapshot.get("failure") and not _is_success_status(snapshot.get("status")):
+    _clear_nonfailed_failure(snapshot)
+    if not snapshot.get("failure") and _normalized_status(snapshot.get("status")) == "failed":
         failure = _failure_from_sources(events, job, summary)
         if failure:
             snapshot["failure"] = failure
@@ -836,7 +860,12 @@ def _manifest_from_job_details(
     public_manifest = _public_workflow_manifest_from_job(job, summary, events=events)
     run_manifest = _manifest_from_run_dir(run_dir)
     blueprint_manifest = _blueprint_manifest_from_run_mapping(run_dir)
-    for candidate in (run_manifest, blueprint_manifest):
+    # The saved monitor manifest belongs to this execution and carries its
+    # exact public step and agent mapping. The runtime ledger can lag it or
+    # contain lowered control nodes while the run is still starting.
+    if _workflow_step_ids(run_manifest) and not _is_lowered_runtime_projection(run_manifest, public_manifest):
+        return run_manifest
+    for candidate in (blueprint_manifest,):
         if _matches_public_workflow_contract(candidate, public_manifest) or _is_lowered_runtime_projection(
             public_manifest, candidate
         ):
@@ -1079,10 +1108,24 @@ def _run_store_events(run_dir: Path | None, *, limit: int = 5000) -> list[dict[s
         return []
     records: list[dict[str, Any]] = []
     for path in _stream_jsonl_files(run_dir, "events.jsonl"):
-        records.extend(_read_jsonl_file(path, limit=limit))
-        if limit is not None and limit >= 0 and len(records) > limit:
+        if limit == 0:
+            try:
+                opener = gzip.open if path.suffix == ".gz" else Path.open
+                with opener(path, "rt", encoding="utf-8") as handle:
+                    for line in handle:
+                        try:
+                            event = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if isinstance(event, dict):
+                            records.append(event)
+            except (OSError, UnicodeDecodeError):
+                continue
+        else:
+            records.extend(_read_jsonl_file(path, limit=limit))
+        if limit > 0 and len(records) > limit:
             records = records[-limit:]
-    return records[-limit:] if limit is not None and limit >= 0 else records
+    return records[-limit:] if limit > 0 else records
 
 
 def _merge_events(*event_groups: list[dict[str, Any]], limit: int = 5000) -> list[dict[str, Any]]:
@@ -1100,7 +1143,7 @@ def _merge_events(*event_groups: list[dict[str, Any]], limit: int = 5000) -> lis
             merged.append((index, event))
             index += 1
     merged.sort(key=lambda item: (str(item[1].get("timestamp") or item[1].get("ts") or ""), item[0]))
-    return [event for _index, event in merged[-limit:]]
+    return [event for _index, event in (merged[-limit:] if limit > 0 else merged)]
 
 
 def _apply_default_assigned_node(snapshot: dict[str, Any], details: dict[str, Any]) -> None:
@@ -1273,7 +1316,7 @@ def stream_job_workflow_progress(
         initial = tracker.snapshot(job=job, summary=summary)
         _apply_default_assigned_node(initial, details)
         _enrich_workflow_progress_activity(initial, activity_events)
-        _clear_success_failure(initial)
+        _clear_nonfailed_failure(initial)
         trace_id = _first_string(
             initial.get("trace_id"),
             observability_summary.get("trace_id"),
@@ -1367,7 +1410,7 @@ def stream_job_workflow_progress(
                 snapshot = tracker.snapshot(job=job, summary=summary)
                 _apply_default_assigned_node(snapshot, details)
                 _enrich_workflow_progress_activity(snapshot, activity_events)
-                _clear_success_failure(snapshot)
+                _clear_nonfailed_failure(snapshot)
                 now = time.monotonic()
                 immediate = _progress_event_should_flush(event_type)
                 if immediate or now - last_sent_at >= emit_interval:

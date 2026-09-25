@@ -53,8 +53,15 @@ def test_job_status_and_failure_helpers():
     assert jobs._is_success_status("Succeeded!") is True
 
     snapshot = {"status": "completed", "failure": {"message": "old"}}
-    jobs._clear_success_failure(snapshot)
+    jobs._clear_nonfailed_failure(snapshot)
     assert "failure" not in snapshot
+
+    active = {"status": "running", "failure": {"message": "previous attempt failed"}}
+    jobs._clear_nonfailed_failure(active)
+    assert "failure" not in active
+    failed = {"status": "failed", "failure": {"message": "current failure"}}
+    jobs._clear_nonfailed_failure(failed)
+    assert failed["failure"]["message"] == "current failure"
 
     assert jobs._infer_status([{"type": "job_failed"}], {}, {}) == "failed"
     assert jobs._infer_status([{"type": "workflow_completed"}], {}, {}) == "completed"
@@ -117,6 +124,71 @@ def test_run_workflow_progress_reads_execution_and_stable_definition(monkeypatch
     assert captured["manifest"]["workflow"]["steps"][0]["id"] == "prepare"
     assert captured["events"][0]["step_id"] == "prepare"
     assert progress["steps"][0]["status"] == "running"
+
+
+def test_run_progress_prefers_saved_run_manifest_and_replays_older_events(monkeypatch, tmp_path):
+    run_id = "execution-2"
+    run_dir = tmp_path / run_id
+    run_dir.mkdir()
+    (run_dir / "manifest.json").write_text(json.dumps({
+        "apiVersion": "mn.workflow/v1",
+        "kind": "Workflow",
+        "id": "research-assistant",
+        "name": "This execution",
+        "contract": {},
+        "agents": {},
+        "workflow": {"steps": [{"id": "prepare"}, {"id": "publish"}]},
+        "runtime": {"bindings": {}},
+    }), encoding="utf-8")
+    monkeypatch.setattr(jobs, "_run_dir_from_id", lambda identifier: run_dir if identifier == run_id else None)
+
+    event_history = [
+        {"type": "workflow_step_completed", "payload": {"step": "prepare"}},
+        *({"type": "runtime_heartbeat", "index": index} for index in range(30)),
+        {"type": "workflow_step_started", "payload": {"step": "publish"}},
+    ]
+    requested_limits = []
+
+    class FakeClient:
+        def get_run(self, _run_id):
+            return json.dumps({"run_id": run_id, "job_id": "stable-1", "status": "running", "reason": "running"})
+
+        def get_job(self, _job_id, *, include_workflow_definition=False):
+            return json.dumps({"workflow_definition": {"workflow": {"steps": [{"id": "old-definition"}]}}})
+
+        def stream_events(self, _run_id, *, limit, **_kwargs):
+            requested_limits.append(limit)
+            yield from (json.dumps(event) for event in (event_history[-limit:] if limit else event_history))
+
+    monkeypatch.setattr(state, "client", FakeClient())
+    snapshot = jobs._workflow_progress_snapshot_for_run(run_id)
+
+    assert [step["id"] for step in snapshot["steps"]] == ["prepare", "publish"]
+    assert snapshot["steps"][0]["status"] == "done"
+    assert snapshot["steps"][1]["status"] == "running"
+    assert sum(step["status"] == "done" for step in snapshot["steps"]) == 1
+    assert "failure" not in snapshot
+    assert requested_limits == [0]
+
+    def missing_definition(_job_id, *, include_workflow_definition=False):
+        raise RuntimeError("stable definition has been removed")
+
+    monkeypatch.setattr(state.client, "get_job", missing_definition)
+    without_definition = jobs._workflow_progress_snapshot_for_run(run_id)
+    assert [step["id"] for step in without_definition["steps"]] == ["prepare", "publish"]
+
+
+def test_run_store_progress_replays_all_events_without_durable_ledger(tmp_path):
+    run_dir = tmp_path / "run-1"
+    run_dir.mkdir()
+    (run_dir / "events.jsonl").write_text("".join(
+        json.dumps({"type": "workflow_step_completed", "payload": {"step": f"step-{index}"}}) + "\n"
+        for index in range(30)
+    ), encoding="utf-8")
+
+    events = jobs._run_store_events(run_dir, limit=0)
+    assert len(events) == 30
+    assert len(jobs._merge_events(events, limit=0)) == 30
 
 
 def test_extract_nested_string_and_agent_summaries():
