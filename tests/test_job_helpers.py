@@ -178,6 +178,45 @@ def test_run_progress_prefers_saved_run_manifest_and_replays_older_events(monkey
     assert [step["id"] for step in without_definition["steps"]] == ["prepare", "publish"]
 
 
+def test_run_progress_recovers_retried_public_step_from_runtime_worker_events(monkeypatch, tmp_path):
+    run_id = "execution-retry"
+    run_dir = tmp_path / run_id
+    run_dir.mkdir()
+    (run_dir / "manifest.json").write_text(json.dumps({
+        "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "research",
+        "contract": {}, "agents": {},
+        "workflow": {"steps": [{"id": "develop", "run": "develop__start"}]},
+        "runtime": {"bindings": {"develop__start": {
+            "workers": [{"id": "researcher"}]
+        }}},
+    }), encoding="utf-8")
+    monkeypatch.setattr(jobs, "_run_dir_from_id", lambda identifier: run_dir if identifier == run_id else None)
+
+    class FakeClient:
+        def get_run(self, _run_id):
+            return json.dumps({"run_id": run_id, "status": "running"})
+
+        def stream_events(self, _run_id, **_kwargs):
+            for event in (
+                {"type": "workflow_step_failed", "payload": {"step": "develop", "error": "old failure"}},
+                {"type": "workflow_step_attempt_started", "payload": {
+                    "step": "develop", "worker": "develop__researcher", "attempt": 2
+                }},
+                {"type": "docker_worker_command_started", "payload": {
+                    "step": "develop", "worker": "develop__researcher"
+                }},
+            ):
+                yield json.dumps(event)
+
+    monkeypatch.setattr(state, "client", FakeClient())
+    snapshot = jobs._workflow_progress_snapshot_for_run(run_id)
+
+    assert snapshot["current_step_id"] == "develop"
+    assert snapshot["steps"][0]["status"] == "running"
+    assert snapshot["steps"][0]["failure"] is None
+    assert snapshot["steps"][0]["agents"][0]["progress"] == 0.55
+
+
 def test_run_store_progress_replays_all_events_without_durable_ledger(tmp_path):
     run_dir = tmp_path / "run-1"
     run_dir.mkdir()
