@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections import OrderedDict
 from datetime import datetime, timezone
 import json
+import os
+from pathlib import Path
 import threading
 from typing import Any
 import uuid
@@ -11,6 +13,7 @@ from fastapi import HTTPException
 
 from mn_api import state
 from mn_api.public import decode, first_identifier, public_value
+from mn_api.path_utils import resolve_mn_home
 from mn_sdk.errors import AppError, normalize_exception
 
 
@@ -20,6 +23,48 @@ _lock = threading.Lock()
 _condition = threading.Condition(_lock)
 _local_operation_ids: set[str] = set()
 _local_operation_events: dict[str, list[dict[str, Any]]] = {}
+_durable_local_operation_ids: set[str] = set()
+_active_local_operation_ids: set[str] = set()
+
+
+def _durable_operation_path(operation_id: str) -> Path:
+    if not operation_id.startswith("op-local-") or not operation_id[9:].isalnum():
+        raise ValueError("Invalid local operation ID.")
+    return resolve_mn_home() / "api_operations" / f"{operation_id}.json"
+
+
+def _load_durable_operation_locked(operation_id: str) -> dict[str, Any] | None:
+    if operation_id in _operations:
+        return _operations[operation_id]
+    try:
+        record = json.loads(_durable_operation_path(operation_id).read_text(encoding="utf-8"))
+    except (FileNotFoundError, ValueError, OSError):
+        return None
+    operation = record.get("operation")
+    events = record.get("events")
+    if not isinstance(operation, dict) or operation.get("operation_id") != operation_id or not isinstance(events, list):
+        return None
+    _operations[operation_id] = operation
+    _local_operation_ids.add(operation_id)
+    _durable_local_operation_ids.add(operation_id)
+    _local_operation_events[operation_id] = events[-200:]
+    return operation
+
+
+def _persist_durable_operation_locked(operation_id: str) -> None:
+    if operation_id not in _durable_local_operation_ids:
+        return
+    destination = _durable_operation_path(operation_id)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(f"{destination.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(json.dumps({
+            "operation": _operations[operation_id],
+            "events": _local_operation_events.get(operation_id, []),
+        }, separators=(",", ":")), encoding="utf-8")
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _now() -> str:
