@@ -396,3 +396,9 @@ Run `mn_test --suite performance.api` from `mn-system-tests` for isolated HTTP
 latency and duplicate-work regressions. It includes real local blueprint
 preparation with an injected Core, unchanged configuration sync, prepared starts,
 and streaming Chat first-content/final-answer timings.
+
+All-Runs aggregation overlaps up to eight independent owner reads per request.
+Runtime diagnostics overlaps the runtime, Docker, and gateway probes. Partial
+failures and response ordering are preserved; transport deadlines still apply.
+The API benchmark suite includes slow-dependency fixtures with a five-second
+per-sample regression budget, separately from its ordinary 500 ms p95 budget.
