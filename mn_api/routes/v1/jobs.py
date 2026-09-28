@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from hashlib import sha256
 import grpc
 from pathlib import Path
@@ -706,14 +707,20 @@ def _all_runs() -> list[dict[str, Any]]:
     except Exception:
         jobs = []
     core_ids: set[str] = set()
-    for job in jobs:
+    def job_runs(job):
         job_id = str(job.get("job_id") or "")
-        if job_id:
-            try:
-                job_runs = records(_service().list_runs(job_id), "items", "runs", "data")
-            except Exception:
-                continue
-            for run in job_runs:
+        if not job_id:
+            return []
+        try:
+            return records(_service().list_runs(job_id), "items", "runs", "data")
+        except Exception:
+            return []
+
+    # Bound fan-out so one slow owner does not serialize every other Job.
+    # Merge on this thread in input order, preserving existing precedence.
+    with ThreadPoolExecutor(max_workers=8, thread_name_prefix="mn-run-list") as executor:
+        for result in executor.map(job_runs, jobs):
+            for run in result:
                 run_id = str(run.get("run_id") or "")
                 if run_id:
                     core_ids.add(run_id)

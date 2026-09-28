@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import socket
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable
 
 from fastapi import Depends, HTTPException
@@ -57,11 +58,14 @@ def runtime_health(timeout: float = 3.0, _auth=Depends(require_auth)):
 
 
 def runtime_doctor(timeout: float = 3.0, _auth=Depends(require_auth)):
-    status = runtime_status(timeout=timeout, _auth=_auth)
-    foundation = [
-        _foundation_component("docker_model_runner", docker_status),
-        _foundation_component("litellm_gateway", lambda: litellm_gateway_health(timeout=timeout)),
-    ]
+    with ThreadPoolExecutor(max_workers=3, thread_name_prefix="mn-diagnostics") as executor:
+        runtime = executor.submit(runtime_status, timeout=timeout, _auth=_auth)
+        docker = executor.submit(_foundation_component, "docker_model_runner", docker_status)
+        gateway = executor.submit(
+            _foundation_component, "litellm_gateway", lambda: litellm_gateway_health(timeout=timeout)
+        )
+        status = runtime.result()
+        foundation = [docker.result(), gateway.result()]
     components = list(status.get("components") or []) + foundation
     overall = _overall_status(components)
     return {

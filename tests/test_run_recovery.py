@@ -54,3 +54,40 @@ def test_api_run_list_keeps_mapped_runs_and_prefers_core_status(monkeypatch):
     assert result["old"]["status"] == "failed"
     assert result["stale"]["status"] == "unknown"
     assert result["live"]["status"] == "running"
+
+
+def test_all_runs_bounds_parallel_reads_and_preserves_partial_results(monkeypatch):
+    from threading import Barrier, Lock
+    barrier = Barrier(8, timeout=2)
+    lock = Lock()
+    active = 0
+    peak = 0
+    monkeypatch.setattr(jobs, "list_local_runs", lambda: [
+        {"run_id": "failed-owner", "status": "running"},
+        {"run_id": "saved", "status": "completed"},
+    ])
+
+    class Service:
+        def list_jobs(self, **kwargs):
+            return {"items": [{"job_id": str(i)} for i in range(16)] + [{}]}
+
+        def list_runs(self, job_id):
+            nonlocal active, peak
+            with lock:
+                active += 1
+                peak = max(peak, active)
+            try:
+                barrier.wait()
+                if job_id == "0":
+                    raise RuntimeError("owner unavailable")
+                return {"items": [{"run_id": job_id, "status": "running"}]}
+            finally:
+                with lock:
+                    active -= 1
+
+    monkeypatch.setattr(jobs, "_service", Service)
+    result = {item["run_id"]: item for item in jobs._all_runs()}
+    assert peak == 8
+    assert result["failed-owner"]["status"] == "unknown"
+    assert result["saved"]["status"] == "completed"
+    assert all(result[str(i)]["status"] == "running" for i in range(1, 16))

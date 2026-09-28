@@ -383,3 +383,16 @@ The matching Core and SDK are required (HTTP 426 for unsupported capability). MC
 review elicitation includes the durable interaction identity in metadata and
 resumes that identity even if another request becomes pending. Full legacy
 producer migration and coordinated draining remain required before cutover.
+
+### API preparation performance
+
+Changed-configuration Job launches reuse a single resolved catalog entry for
+preparation and the output relay. Input validation, model/resource preparation,
+and optimistic revision checks still run. Monitor and snapshot requests reuse
+their canonical Run read when resolving output identity; no Run state is cached
+across requests.
+
+Run `mn_test --suite performance.api` from `mn-system-tests` for isolated HTTP
+latency and duplicate-work regressions. It includes real local blueprint
+preparation with an injected Core, unchanged configuration sync, prepared starts,
+and streaming Chat first-content/final-answer timings.
