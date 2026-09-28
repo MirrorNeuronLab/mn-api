@@ -362,3 +362,24 @@ enabled by disabling rebinding protection.
 # Run result publication
 
 Blueprint submissions with shared output copies start the background event relay, even without a post-launch hook. While a run is active, the run events API also reads published `run_result_available` events directly from the job's shared submission. This makes service results available before a local run store or completion relay exists. On completion the relay copies stable outputs and publishes their result events. Clients can show every declared result without depending on blueprint-specific configuration.
+
+## Interaction API (coordinated upgrade)
+
+Authenticated resources under `/api/v1`:
+
+- `GET /interactions`: snapshot plus opaque replay cursor.
+- `GET /interactions/{id}`: authoritative request and receipt.
+- `GET /interactions/events/stream`: push-driven SSE; send the snapshot cursor in
+  `Last-Event-ID`. A resync event requires another snapshot. Disconnect cancels
+  the gRPC subscription, never the interaction.
+- `POST /interactions/{id}/responses` and `/acknowledgements`: send an
+  `Idempotency-Key` header and `expected_revision`; responses also carry `answer`.
+  Conflicts return HTTP 409 with a structured error code.
+- `POST /interaction-test-sessions`, `POST /interaction-test-sessions/{id}/examples`
+  with a named `preset`, and `DELETE /interaction-test-sessions/{id}` create and
+  dispose isolated examples. These invoke no real co-worker actions.
+
+The matching Core and SDK are required (HTTP 426 for unsupported capability). MCP
+review elicitation includes the durable interaction identity in metadata and
+resumes that identity even if another request becomes pending. Full legacy
+producer migration and coordinated draining remain required before cutover.

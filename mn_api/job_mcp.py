@@ -833,48 +833,18 @@ class JobContextProvider:
         }
 
     def get_pending_human_request(self, job_id: str) -> dict[str, Any] | None:
-        """Return the latest pending runtime request safe for MCP elicitation."""
-        _context, snapshot = self._context_for_request(job_id, evidence_limit=1)
-        if snapshot is None or not snapshot.active_service_run_id:
+        """The durable interaction ID is also the MCP elicitation identity."""
+        from mn_sdk.interactions import InteractionClient
+        from mn_api import state
+        pending = [record for record in InteractionClient(state.get_client()).snapshot()["items"]
+                   if record["scope"].get("job_id") == job_id and record["state"] == "pending"
+                   and record["kind"] in {"approval", "choice", "input"}]
+        if not pending:
             return None
-        try:
-            result = runtime_run_routes.get_run_human_events(
-                snapshot.active_service_run_id,
-                "pending",
-                "authenticated",
-            )
-        except Exception:
-            return None
-        result_record = _as_record(result)
-        items = result_record.get("data")
-        if not isinstance(items, list):
-            items = result_record.get("items")
-        requests = [item for item in (items or []) if isinstance(item, Mapping)]
-        if not requests:
-            return None
-        event = requests[-1]
-        payload = event.get("payload") if isinstance(event.get("payload"), Mapping) else event
-        request_id = _safe_text(payload.get("request_id") or payload.get("requestId"), limit=256)
-        prompt = _safe_text(
-            payload.get("prompt") or payload.get("message") or "I need your input before I continue.",
-            limit=4_000,
-        )
-        if not request_id or not prompt:
-            return None
-        options = [
-            _safe_text(option.get("label") if isinstance(option, Mapping) else option, limit=240)
-            for option in (payload.get("options") if isinstance(payload.get("options"), list) else [])
-        ]
-        return {
-            "request_id": request_id,
-            "prompt": prompt,
-            "options": [option for option in options if option][:12],
-            "decision_type": _safe_text(
-                payload.get("decision_type") or payload.get("decisionType"),
-                limit=160,
-            ),
-            "runtime_run_id": snapshot.active_service_run_id,
-        }
+        record = min(pending, key=lambda value: value["created_at"])
+        return {"request_id": record["id"], "prompt": record["presentation"]["title"],
+                "options": [option["id"] for option in record["options"]],
+                "decision_type": record["kind"], "runtime_run_id": record["scope"].get("execution_id")}
 
     def get_next_activity(
         self,
@@ -985,29 +955,22 @@ class JobContextProvider:
         except ValueError:
             return None
 
-    def record_pending_human_response(
-        self,
-        job_id: str,
-        request_id: str,
-        response: str,
-    ) -> dict[str, Any]:
-        pending = self.get_pending_human_request(job_id)
-        if pending is None or pending["request_id"] != request_id:
-            raise ValueError("The pending co-worker request changed before the response arrived.")
-        answer = _safe_text(response, limit=8_000)
-        if not answer:
-            raise ValueError("response is required")
-        return runtime_run_routes.post_run_human_response(
-            pending["runtime_run_id"],
-            request_id,
-            {
-                "decision": answer,
-                "notes": answer,
-                "approved": answer.lower() in {"approve", "approved", "yes"},
-                "reviewer": "mcp_mrtr",
-            },
-            "authenticated",
-        )
+    def record_pending_human_response(self, job_id: str, request_id: str, response: str) -> dict[str, Any]:
+        from mn_sdk.interactions import InteractionClient
+        from mn_api import state
+        interactions = InteractionClient(state.get_client())
+        record = interactions.get(request_id)
+        if record["scope"].get("job_id") != job_id:
+            raise ValueError("The request does not belong to this co-worker.")
+        # The desktop may already have committed the decision before resuming MCP.
+        answer = {"option_id": response} if record["options"] else {"text": response}
+        if record["state"] == "responded":
+            receipt = record.get("receipt", {}).get("answer", {})
+            if any(receipt.get(key) != value for key, value in answer.items()):
+                raise ValueError("The request already received a different decision.")
+            return record
+        return interactions.respond(request_id, expected_revision=record["revision"],
+                                    command_id="mcp-" + request_id, answer=answer)
 
     def ask_job(
         self,
@@ -1224,17 +1187,15 @@ def create_job_mcp(provider: JobContextProvider | None = None) -> tuple[list[MCP
 
     def resolve_human_input(ctx: Context) -> InputRequiredResult | None:
         job_id = bound_job_id()
-        pending = context_provider.get_pending_human_request(job_id)
-        if pending is None:
-            return None
-        request_key = f"human-response:{pending['request_id']}"
         if ctx.request_state:
             try:
                 state_payload = json.loads(ctx.request_state)
             except (TypeError, ValueError, json.JSONDecodeError) as error:
                 raise ValueError("The MCP request state was invalid.") from error
-            if _first_text(state_payload.get("request_id")) != pending["request_id"]:
-                raise ValueError("The pending co-worker request changed before the response arrived.")
+            request_id = _first_text(state_payload.get("request_id"))
+            if not request_id:
+                raise ValueError("The MCP request state was invalid.")
+            request_key = f"human-response:{request_id}"
             response = (ctx.input_responses or {}).get(request_key)
             if response is None:
                 return None
@@ -1243,10 +1204,14 @@ def create_job_mcp(provider: JobContextProvider | None = None) -> tuple[list[MCP
             if action == "accept" and isinstance(content, Mapping):
                 context_provider.record_pending_human_response(
                     job_id,
-                    pending["request_id"],
+                    request_id,
                     _first_text(content.get("response")),
                 )
             return None
+        pending = context_provider.get_pending_human_request(job_id)
+        if pending is None:
+            return None
+        request_key = f"human-response:{pending['request_id']}"
         property_schema: dict[str, Any] = {
             "type": "string",
             "title": "Response",
@@ -1260,6 +1225,7 @@ def create_job_mcp(provider: JobContextProvider | None = None) -> tuple[list[MCP
                 request_key: ElicitRequest(
                     params=ElicitRequestFormParams(
                         message=pending["prompt"],
+                        meta={"mn.interaction.id": pending["request_id"]},
                         requested_schema={
                             "type": "object",
                             "properties": {"response": property_schema},

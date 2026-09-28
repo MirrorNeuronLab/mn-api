@@ -20,10 +20,30 @@ from mn_api.job_mcp import (
     safe_context_value,
 )
 from mn_api import job_mcp
+from mn_sdk import interactions as interaction_sdk
+
+
+class InteractionRuntime:
+    def __init__(self):
+        self.items = []
+        self.commands = []
+
+    def snapshot(self):
+        return {"items": self.items, "cursor": "cursor"}
+
+    def get(self, identity):
+        return next(item for item in self.items if item["id"] == identity)
+
+    def respond(self, identity, **command):
+        record = self.get(identity)
+        self.commands.append((identity, command))
+        record.update(state="responded", revision=record["revision"] + 1, receipt={"answer": command["answer"]})
+        return record
 
 
 class MCPRuntime:
     def __init__(self) -> None:
+        self.interactions = InteractionRuntime()
         self.jobs = {
             "job-1": {
                 "job_id": "job-1",
@@ -185,6 +205,7 @@ def _blueprint(_config, blueprint_id):
 
 def _configure(monkeypatch, runtime: MCPRuntime, *, token: str = "") -> None:
     monkeypatch.setattr(state, "client", runtime)
+    monkeypatch.setattr(interaction_sdk, "InteractionClient", lambda _client: runtime.interactions)
     monkeypatch.setattr(
         state,
         "config",
@@ -270,26 +291,12 @@ def test_job_context_uses_mrtr_for_pending_runtime_input(monkeypatch):
 
     runtime = MCPRuntime()
     _configure(monkeypatch, runtime)
-    recorded = []
-    pending_event = {
-        "type": "human_input_requested",
-        "payload": {
-            "request_id": "review-loading-bay",
-            "prompt": "Which area should I inspect next?",
-            "options": ["Loading bay", "Main entrance"],
-            "decision_type": "inspection_area",
-        },
-    }
-    monkeypatch.setattr(
-        job_mcp.runtime_run_routes,
-        "get_run_human_events",
-        lambda *_args: {"data": [pending_event]},
-    )
-    monkeypatch.setattr(
-        job_mcp.runtime_run_routes,
-        "post_run_human_response",
-        lambda *args: recorded.append(args) or {"ok": True},
-    )
+    runtime.interactions.items = [{
+        "id": "review-loading-bay", "kind": "choice", "state": "pending", "revision": 1,
+        "scope": {"job_id": "job-agent", "execution_id": "run-agent"}, "created_at": 1,
+        "presentation": {"title": "Which area should I inspect next?"},
+        "options": [{"id": "loading-bay", "label": "Loading bay", "action": "choose"}],
+    }]
 
     async def scenario():
         servers, _app = job_mcp.create_job_mcp(JobContextProvider())
@@ -297,7 +304,7 @@ def test_job_context_uses_mrtr_for_pending_runtime_input(monkeypatch):
 
         async def elicit(_context, params):
             prompts.append(params.message)
-            return ElicitResult(action="accept", content={"response": "Loading bay"})
+            return ElicitResult(action="accept", content={"response": "loading-bay"})
 
         token = job_mcp._current_job_id.set("job-agent")
         try:
@@ -315,9 +322,9 @@ def test_job_context_uses_mrtr_for_pending_runtime_input(monkeypatch):
 
     assert prompts == ["Which area should I inspect next?"]
     assert result.structured_content["identity"]["job_id"] == "job-agent"
-    assert recorded
-    assert recorded[0][0:2] == ("runtime-run-agent", "review-loading-bay")
-    assert recorded[0][2]["decision"] == "Loading bay"
+    assert runtime.interactions.commands == [("review-loading-bay", {
+        "expected_revision": 1, "command_id": "mcp-review-loading-bay", "answer": {"option_id": "loading-bay"},
+    })]
 
 
 def test_job_activity_watch_relays_worker_mcp_activity_through_mrtr(monkeypatch):
