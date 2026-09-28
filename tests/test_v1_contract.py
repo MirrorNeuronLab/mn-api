@@ -419,6 +419,7 @@ def test_job_configuration_and_run_overrides_reprepare_catalog_definition(monkey
     mappings = []
     relays = []
     output_relays = []
+    catalog_reads = []
 
     monkeypatch.setattr(
         runtime,
@@ -436,7 +437,7 @@ def test_job_configuration_and_run_overrides_reprepare_catalog_definition(monkey
     monkeypatch.setattr(
         jobs,
         "find_blueprint",
-        lambda _config, blueprint_id: ("/catalog", {"id": blueprint_id}),
+        lambda _config, blueprint_id: (catalog_reads.append(blueprint_id) or "/catalog", {"id": blueprint_id}),
     )
 
     def prepare(root, blueprint, run_id, **kwargs):
@@ -510,6 +511,7 @@ def test_job_configuration_and_run_overrides_reprepare_catalog_definition(monkey
     assert prepared[-1][3]["validate_inputs"] is True
     assert len([call for call in runtime.calls if call[0] == "update_job"]) == update_count
     assert len(prepared) == 2
+    assert catalog_reads == ["worker-1", "worker-1"]
     assert len(mappings) == 1
     assert len(relays) == 1
     assert submission_lookups[-1] == ("/tmp/test-shared", "job-1-def-current")
@@ -1525,7 +1527,8 @@ def test_run_monitor_overlays_canonical_terminal_status(monkeypatch):
     client, runtime = _client(monkeypatch)
     _patch_canonical_projections(monkeypatch)
     monitored_ids = []
-    runtime.get_run = lambda run_id: json.dumps(
+    reads = []
+    runtime.get_run = lambda run_id: reads.append(run_id) or json.dumps(
         {
             "job_id": "job-1",
             "run_id": run_id,
@@ -1549,6 +1552,7 @@ def test_run_monitor_overlays_canonical_terminal_status(monkeypatch):
     assert response.json()["job"]["status"] == "completed"
     assert response.json()["summary"]["status"] == "completed"
     assert monitored_ids == ["run-1"]
+    assert reads == ["run-1"]
 
 
 def test_run_progress_uses_execution_id_when_output_id_differs(monkeypatch):
@@ -1910,3 +1914,42 @@ def test_job_workflow_shape_missing_latest_run_and_empty_definition(monkeypatch)
     missing = client.get("/api/v1/jobs/job-1/workflow/latest-run/dag")
     assert missing.status_code == 404
     assert missing.headers["content-type"].startswith("application/problem+json")
+
+
+def test_monitor_reuses_identity_but_refreshes_run_on_next_request(monkeypatch):
+    client, runtime = _client(monkeypatch)
+    reads = []
+    states = iter([("running", "output-1"), ("completed", "output-2")])
+
+    def get_run(run_id):
+        reads.append(run_id)
+        status, output = next(states)
+        return json.dumps({"run_id": run_id, "status": status, "result_ref": {"run_id": output}})
+
+    monkeypatch.setattr(runtime, "get_run", get_run)
+    monkeypatch.setattr(jobs, "shared_run_dir", lambda _: None)
+    monkeypatch.setattr(jobs.runtime_job_routes, "_compact_job_detail", lambda _: {"job": {}, "summary": {}})
+    first = client.get("/api/v1/runs/run-1/monitor")
+    second = client.get("/api/v1/runs/run-1/monitor")
+    assert first.status_code == second.status_code == 200
+    assert (first.json()["status"], first.json()["runtime_run_id"]) == ("running", "output-1")
+    assert (second.json()["status"], second.json()["runtime_run_id"]) == ("completed", "output-2")
+    assert reads == ["run-1", "run-1"]
+
+
+def test_monitor_recovers_after_one_failed_core_read(monkeypatch):
+    client, runtime = _client(monkeypatch)
+    reads = []
+
+    def unavailable(run_id):
+        reads.append(run_id)
+        raise RuntimeError("unavailable")
+
+    monkeypatch.setattr(runtime, "get_run", unavailable)
+    monkeypatch.setattr(jobs, "stored_run", lambda _: {"run_id": "run-1", "status": "completed"})
+    monkeypatch.setattr(jobs, "stored_progress", lambda _: {"recent_events": [{"type": "completed"}]})
+    response = client.get("/api/v1/runs/run-1/monitor")
+    assert response.status_code == 200
+    assert response.json()["job"]["status"] == "completed"
+    assert response.json()["events"] == [{"type": "completed"}]
+    assert reads == ["run-1"]

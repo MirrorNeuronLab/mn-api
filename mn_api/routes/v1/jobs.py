@@ -128,15 +128,16 @@ def _upstream_page(
     return {"items": items, "next_page_token": next_page_token}
 
 
-def _runtime_output_id(run_id: str) -> str:
+def _runtime_output_id(run_id: str, *, run: dict[str, Any] | None = None) -> str:
     if shared_run_dir(run_id) is not None:
         return run_id
-    try:
-        run = _service().get_run(run_id)
-    except Exception:
-        if stored_run(run_id) is None:
-            raise
-        return run_id
+    if run is None:
+        try:
+            run = _service().get_run(run_id)
+        except Exception:
+            if stored_run(run_id) is None:
+                raise
+            return run_id
     for key in ("runtime_run_id", "runtime_job_id", "output_run_id"):
         value = run.get(key)
         if value:
@@ -360,6 +361,7 @@ def _prepare_catalog_job_update(
     *,
     validate_inputs: bool,
     blueprint_run_id: str | None = None,
+    catalog_entry: tuple[Path, dict[str, Any]] | None = None,
 ) -> tuple[str, dict[str, bytes]]:
     blueprint_id = str(current.get("blueprint_id") or "").strip()
     if not blueprint_id:
@@ -367,7 +369,9 @@ def _prepare_catalog_job_update(
             status_code=422,
             detail="Catalog configuration overrides require a Job with a blueprint_id.",
         )
-    repo_root, blueprint = find_blueprint(state.refresh_config_from_env(), blueprint_id)
+    repo_root, blueprint = catalog_entry if catalog_entry is not None else find_blueprint(
+        state.refresh_config_from_env(), blueprint_id
+    )
     owner_node = str(current.get("owner_node") or "").strip()
     return load_blueprint_bundle(
         repo_root,
@@ -525,6 +529,7 @@ def create_job_run(
                 resolved_configuration,
                 validate_inputs=True,
                 blueprint_run_id=blueprint_run_id,
+                catalog_entry=(repo_root, blueprint),
             )
             configuration_already_saved = False
             if request.config_overrides:
@@ -848,7 +853,6 @@ def create_job_schedule(
 
 @router.get("/runs/{run_id}/monitor", operation_id="get_run_monitor", tags=["runs"], response_model=ResourceModel)
 def get_run_monitor(run_id: str, _principal=Depends(require_auth)):
-    runtime_id = _runtime_output_id(run_id)
     try:
         canonical_run = _service().get_run(run_id)
     except Exception:
@@ -858,7 +862,10 @@ def get_run_monitor(run_id: str, _principal=Depends(require_auth)):
         progress = stored_progress(run_id) or {}
         return _run_public({"job": canonical_run, "summary": canonical_run,
                             "events": progress.get("recent_events") or [],
-                            "workflow_progress": progress}, run_id=run_id, runtime_run_id=runtime_id)
+                            "workflow_progress": progress}, run_id=run_id, runtime_run_id=run_id)
+    # Reuse this request's canonical read; never retain mutable Run state
+    # across requests. This also keeps status and output identity consistent.
+    runtime_id = _runtime_output_id(run_id, run=canonical_run)
     detail = dict(runtime_job_routes._compact_job_detail(run_id))
     canonical_status = str(canonical_run.get("status") or "").strip().lower()
     if canonical_status:
