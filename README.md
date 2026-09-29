@@ -413,3 +413,11 @@ CLI JSON and API Problem Details include numeric `problem_code` (for example,
 1001 for memory requirements or 3001 for scheduling), `category`, `retryable`, and bounded
 structured placement `details.blockers`. See [SPEC.md](SPEC.md#shared-admission-error-contract)
 for codes and retry semantics.
+
+## Job performance
+
+Authenticated `GET /api/v1/jobs/{job_id}/analysis` returns the SDK job analysis:
+`job_id`, `snapshot_at`, `scope: recorded_history`, `history_complete`, `runs`,
+`running_time`, and `tokens`. Coverage accompanies nullable duration/token values.
+Unknown jobs use the normal not-found problem response; analysis deadlines return
+504. Disconnects cancel further collection. No model calls or runtime starts occur.

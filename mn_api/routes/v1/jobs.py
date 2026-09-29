@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import asyncio
+import threading
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -9,7 +11,7 @@ import grpc
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, Request, status
 from fastapi.responses import StreamingResponse
 from mn_sdk import RuntimeConfig, RuntimeService, generate_job_definition_submission_id, generate_stable_job_id
 from mn_sdk.blueprint_support.shared_outputs import load_submission_storage
@@ -23,6 +25,8 @@ from mn_sdk.staged_artifacts import (
     resolve_json_reference,
 )
 
+from mn_api.errors import handle_grpc_error
+from mn_api.job_analysis_models import JobAnalysis
 from mn_api import state
 from mn_api.agent_graph import build_agent_graph
 from mn_api.api_models import (
@@ -752,6 +756,27 @@ def _page_runs(
         identity=lambda item: str(item.get("run_id") or ""),
         reverse=True,
     )
+
+
+@router.get("/jobs/{job_id}/analysis", operation_id="get_job_analysis", tags=["jobs"], response_model=JobAnalysis)
+async def get_job_analysis(job_id: str, request: Request, principal=Depends(require_auth)):
+    cancelled = threading.Event()
+    task = asyncio.create_task(asyncio.to_thread(_service().analyze_job, job_id, cancelled=cancelled.is_set))
+    try:
+        while not task.done():
+            if await request.is_disconnected():
+                cancelled.set()
+                raise HTTPException(status_code=499, detail="Analysis request cancelled")
+            await asyncio.wait({task}, timeout=0.1)
+        return await task
+    except grpc.RpcError as error:
+        return handle_grpc_error(error)
+    except TimeoutError:
+        raise HTTPException(status_code=504, detail="Job analysis timed out. Try again.") from None
+    finally:
+        cancelled.set()
+        if not task.done():
+            task.cancel()
 
 
 @router.get("/jobs/{job_id}/runs", operation_id="list_job_runs", tags=["runs"], response_model=PageResponse)
