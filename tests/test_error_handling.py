@@ -52,3 +52,30 @@ def test_grpc_permission_error_uses_stable_code_without_detail_leak():
     assert "MN_GRPC_ADMIN_TOKEN" not in payload
     assert "secret-token" not in payload
     log.assert_called_once()
+
+
+def test_placement_failure_returns_shared_hardware_problem():
+    from mn_sdk.admission_errors import placement_error
+
+    app = create_app()
+
+    @app.get("/placement-test")
+    def placement_test():
+        raise placement_error(
+            {"secret-node": ["host_memory_total_mb=24576 < required=49152"]},
+            "token=secret /Users/private/file",
+        )
+
+    with patch("mn_api.state.logger.error"):
+        response = TestClient(app, raise_server_exceptions=False).get("/placement-test")
+    body = response.json()
+    assert response.status_code == 422
+    assert response.headers["content-type"] == "application/problem+json"
+    assert body["code"] == "MN_MEMORY_REQUIREMENT_UNMET"
+    assert body["problem_code"] == 1001
+    assert body["category"] == "hardware"
+    assert body["retryable"] is False
+    assert "requires 48 GiB; available 24 GiB" in body["detail"]
+    assert body["details"]["blockers"][0]["available"] == 24
+    assert "secret" not in response.text
+    assert "/Users" not in response.text

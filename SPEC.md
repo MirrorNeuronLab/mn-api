@@ -324,3 +324,84 @@ The new SSE transport keeps MCP's loopback Host/Origin protection enabled
 transports retain their settings. Non-loopback SSE exposure requires an explicit
 trusted-host configuration in the transport before deployment; it must not be
 enabled by disabling rebinding protection.
+
+## Shared admission error contract
+
+CLI and API use `mn_sdk.error_catalog.ERROR_CATALOG` for admission error codes,
+category, safe message, remediation hint, HTTP status and retryability. Existing
+codes remain stable. Unknown errors retain `MN_EXECUTION_FAILED`; raw exception
+text never becomes an admission explanation. Applications must branch on codes,
+not message text. `AppError.category` and `AppError.retryable` are additive.
+
+| Problem code | Symbolic code | Category | HTTP | Retryable |
+| --- | --- | --- | --- | --- |
+| 1001 | `MN_MEMORY_REQUIREMENT_UNMET` | hardware | 422 | false |
+| 1002 | `MN_CPU_REQUIREMENT_UNMET` | hardware | 422 | false |
+| 1003 | `MN_GPU_REQUIREMENT_UNMET` | hardware | 422 | false |
+| 2001 | `MN_GPU_MEMORY_UNAVAILABLE` | capacity | 503 | true |
+| 2002 | `MN_DISK_UNAVAILABLE` | capacity | 503 | true |
+| 2003 | `MN_RESOURCE_EXHAUSTED` | capacity | 503 | true |
+| 3001 | `MN_SCHEDULING_UNAVAILABLE` | scheduling | 503 | true |
+| 4001 | `MN_PLACEMENT_UNSATISFIED` | placement | 422 | false |
+
+Hardware errors require a configuration or hardware change. Capacity and
+scheduling errors may succeed after availability changes; retryable is not a
+promise of success or authorization to replay a submission automatically.
+A mixed placement failure reports all observed blockers rather than claiming
+that every node lacks memory. Unknown/mixed causes require inspection.
+
+Placement errors include bounded `details.blockers` with code, safe message,
+one-based node index, and (when measured) required/available amounts and unit.
+Node indices refer to the sorted placement snapshot, not persistent node IDs.
+Host memory uses total capacity; GPU memory uses free capacity. Memory values
+are displayed in GiB (1024 MiB), matching placement's existing conversion.
+Missing measurements are not invented. Raw node names, paths and diagnostics
+are excluded from public blockers. The human summary shows up to eight blockers;
+structured details contain up to 100. Legacy `RuntimeError` catches continue to
+work for rejected placement, while SDK normalization retains the structured
+identity, including through launch exception wrappers.
+
+Core's legacy overload and no-schedulable-node markers are normalized centrally
+in the SDK at run-start boundaries. Other operations retain their existing
+transport error interpretation. No Core wire protocol change is required.
+
+### Numeric problem codes for automation
+
+`problem_code` is a stable integer shared across SDK errors, CLI JSON, API
+Problem Details and individual placement blockers. It is independent of HTTP
+status and process exit code. Human CLI output also prints the numeric code.
+Existing symbolic `code` remains backward compatible. SDK consumers use
+`ProblemCode` (IntEnum), `PROBLEM_CODES` (numeric-to-symbolic lookup), and
+`problem_code(symbol)`; `ERROR_CATALOG` holds admission defaults.
+Assigned values must never be renumbered or reused. Message wording can evolve
+without changing a problem code. Clients must handle unrecognized values as
+unknown errors and must not automatically retry them. An unregistered SDK
+symbol maps to 9000; an unexpected execution failure maps to 9001.
+
+Ranges reserve related problem families: 1xxx hardware, 2xxx capacity,
+3xxx scheduling, 4xxx placement, 5xxx input/configuration,
+6xxx access/resource state, 7xxx runtime/transport, 8xxx cancellation,
+9xxx unknown/internal failures. Exact codes, rather than ranges or message
+matching, drive automated remediation. `category` provides a finer label.
+
+Example API problem (HTTP 422):
+
+```json
+{
+  "problem_code": 1001,
+  "code": "MN_MEMORY_REQUIREMENT_UNMET",
+  "category": "hardware",
+  "status": 422,
+  "detail": "Host memory: requires 48 GiB; available 24 GiB.",
+  "hint": "Select a node with enough memory or reduce the workflow's memory requirement.",
+  "retryable": false
+}
+```
+
+```python
+from mn_sdk import ProblemCode
+
+if response["problem_code"] == ProblemCode.MEMORY_REQUIREMENT_UNMET:
+    # Choose a larger runtime or change requirements before submitting again.
+    pass
+```
