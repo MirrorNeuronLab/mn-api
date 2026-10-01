@@ -440,6 +440,9 @@ runtime context. It does not accept permissions, effects, or arbitrary actions;
 accepted-task bounded-agent plans are restricted to read-only steps. The existing
 response-service enablement requirement still applies to Job answers.
 
+The API requires `mn-python-sdk-common>=1.3.58.dev0,<2.0`, which includes
+matching SCM development builds for local installation and the final release.
+
 Deploy the updated SDK common/job-response components before this API, then
 release desktop clients that depend on the assistance endpoint. Missing endpoints
 are explicit incompatibilities, not a reason to recreate the runtime policy.

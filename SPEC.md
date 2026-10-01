@@ -416,6 +416,9 @@ Unknown jobs use the normal not-found problem response; analysis deadlines retur
 
 ## Shared assistance adapter
 
+The common dependency floor is `1.3.58.dev0`, below `2.0`, so both SCM
+development builds and final releases providing this contract can be installed.
+
 `POST /api/v1/assistance/evaluations` is authenticated and read-only. Strict
 request models accept a selected blueprint, optional stable Job/execution,
 non-secret local setup readiness/mode/revision, dispositions, and an explicit
