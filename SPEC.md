@@ -413,3 +413,29 @@ Authenticated `GET /api/v1/jobs/{job_id}/analysis` returns the SDK job analysis:
 `running_time`, and `tokens`. Coverage accompanies nullable duration/token values.
 Unknown jobs use the normal not-found problem response; analysis deadlines return
 504. Disconnects cancel further collection. No model calls or runtime starts occur.
+
+## Shared assistance adapter
+
+`POST /api/v1/assistance/evaluations` is authenticated and read-only. Strict
+request models accept a selected blueprint, optional stable Job/execution,
+non-secret local setup readiness/mode/revision, dispositions, and an explicit
+requested help kind. The API verifies identities against its runtime context,
+projects pending input and declared batch capabilities, and delegates evaluation
+to SDK common. Strict response models expose `mn.assistance.v1`, a revision,
+bounded context, and a typed supported action opportunity. Context-only access
+does not relax the separate response-service gate for MCP/Job answers. Existing
+setup, scheduler, lifecycle, and interaction APIs remain authoritative for effects.
+Optional `assistance_task` on Job answers and streaming starts has only bounded
+goal/state/execution/next-question metadata. It is checked against the current
+execution; it cannot grant permissions or expand the bounded-agent effects.
+
+## Durable checkpoint retry
+
+Authenticated v1 run resources expose POST `retry-plans` and `retries`.
+Planning accepts only bounded explicit integer/string setting overrides.
+Submission requires a positive expected attempt, SHA-256 checkpoint revision and
+an `Idempotency-Key` header. Unknown fields and malformed selections are rejected
+before Core invocation. Core is the sole eligibility/idempotency authority.
+Submission returns 202 and the accepted attempt identity under the same run ID.
+Stored history remains inspectable with its record source and missing/unavailable
+control status; historical presence must not mask Core unavailability for retry.

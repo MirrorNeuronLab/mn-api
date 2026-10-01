@@ -23,7 +23,7 @@ from mn_api.job_mcp import create_job_mcp, job_mcp_lifespan
 from mn_api.host_output_delivery import host_output_delivery_loop
 from mn_sdk.errors import AppError
 from mn_api.routes import bundles
-from mn_api.routes.v1 import blueprints, infrastructure, interactions, jobs, operations, system
+from mn_api.routes.v1 import assistance, blueprints, infrastructure, interactions, jobs, operations, system
 
 
 def create_app() -> FastAPI:
@@ -82,6 +82,7 @@ def create_app() -> FastAPI:
     app.include_router(jobs.router)
     app.include_router(operations.router)
     app.include_router(interactions.router)
+    app.include_router(assistance.router)
     app.include_router(infrastructure.router)
     app.mount("/api/v1/jobs/{job_id}", job_mcp_app, name="job-mcp")
     return app

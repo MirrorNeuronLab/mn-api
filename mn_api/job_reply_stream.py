@@ -5,7 +5,7 @@ import uuid
 import anyio
 
 
-async def stream_job_reply(provider, job_id, question, conversation_id, request_id, ctx):
+async def stream_job_reply(provider, job_id, question, conversation_id, request_id, ctx, *, assistance_task=None):
     request_id = request_id or str(uuid.uuid4())
     cursor = 0
     sequence = 0
@@ -16,6 +16,7 @@ async def stream_job_reply(provider, job_id, question, conversation_id, request_
         return await anyio.to_thread.run_sync(lambda: provider.response_stream_command(
             job_id, question, conversation_id=conversation_id, request_id=request_id,
             control={"action": action, "cursor": cursor},
+            **({"assistance_task": assistance_task} if assistance_task is not None else {}),
         ), abandon_on_cancel=True)
 
     try:

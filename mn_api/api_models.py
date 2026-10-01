@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
 
 class StrictModel(BaseModel):
@@ -131,6 +131,15 @@ class BlueprintRunCreate(RunCreate):
 
 class RunUpdate(StrictModel):
     desired_state: Literal["running", "paused", "cancelled"]
+
+
+class RunRetryPlan(StrictModel):
+    configuration_overrides: dict[str, StrictInt | StrictStr] = Field(default_factory=dict, max_length=32)
+
+
+class RunRetryCreate(RunRetryPlan):
+    expected_attempt: StrictInt = Field(ge=1)
+    checkpoint_revision: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
 class ScheduleCreate(StrictModel):

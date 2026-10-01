@@ -39,6 +39,8 @@ from mn_api.api_models import (
     ResourceModel,
     RunCreate,
     RunUpdate,
+    RunRetryPlan,
+    RunRetryCreate,
     ScheduleCreate,
     WorkflowDag,
     WorkflowSteps,
@@ -730,6 +732,9 @@ def _all_runs() -> list[dict[str, Any]]:
                     core_ids.add(run_id)
                     runs[run_id] = {**runs.get(run_id, {}), **run}
     for run_id, run in runs.items():
+        run["record_source"] = "runtime" if run_id in core_ids else "history"
+        if run_id not in core_ids:
+            run["retry"] = {"available": False, "reason": "Recovery is unverified. Check Core availability and plan a retry."}
         if run_id not in core_ids and str(run.get("status") or "").lower() not in _TERMINAL | {"unknown"}:
             run["status"] = "unknown"
     return list(runs.values())
@@ -822,11 +827,17 @@ def list_runs(
 @router.get("/runs/{run_id}", operation_id="get_run", tags=["runs"], response_model=ResourceModel)
 def get_run(run_id: str, _principal=Depends(require_auth)):
     try:
-        return public_value(_service().get_run(run_id))
-    except Exception:
+        result = _service().get_run(run_id)
+        return public_value({**result, "record_source": "runtime"})
+    except Exception as exc:
         recovered = stored_run(run_id)
         if recovered is None:
             raise
+        missing = isinstance(exc, grpc.RpcError) and exc.code() == grpc.StatusCode.NOT_FOUND
+        recovered["control_status"] = "missing" if missing else "unavailable"
+        recovered["retry"] = {"available": False, "reason": (
+            "Stored history remains, but its Core control record is missing. Start a new run."
+            if missing else "Core is unavailable. Reconnect and plan a retry to check recovery.")}
         return public_value(recovered)
 
 
@@ -846,6 +857,31 @@ def update_run(run_id: str, request: RunUpdate, _principal=Depends(require_auth)
     else:
         result = _service().cancel_run(run_id)
     return public_value(result)
+
+
+@router.post("/runs/{run_id}/retry-plans", operation_id="plan_run_retry", tags=["runs"], response_model=ResourceModel)
+def plan_run_retry(run_id: str, request: RunRetryPlan, _principal=Depends(require_auth)):
+    try:
+        return public_value(_service().plan_run_retry(run_id, configuration_overrides=request.configuration_overrides))
+    except grpc.RpcError as exc:
+        if exc.code() == grpc.StatusCode.NOT_FOUND and stored_run(run_id) is not None:
+            return {"run_id": run_id, "record_source": "history", "eligible": False,
+                    "reason": "Stored history remains, but its Core control record is missing. Start a new run.",
+                    "preserved_steps": [], "retry_steps": []}
+        return handle_grpc_error(exc)
+
+
+@router.post("/runs/{run_id}/retries", status_code=status.HTTP_202_ACCEPTED,
+             operation_id="retry_run", tags=["runs"], response_model=ResourceModel)
+def retry_run(run_id: str, request: RunRetryCreate,
+              idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=255),
+              _principal=Depends(require_auth)):
+    try:
+        return public_value(_service().retry_run(
+            run_id, expected_attempt=request.expected_attempt, checkpoint_revision=request.checkpoint_revision,
+            configuration_overrides=request.configuration_overrides, idempotency_key=idempotency_key))
+    except grpc.RpcError as exc:
+        return handle_grpc_error(exc)
 
 
 @router.delete("/runs/{run_id}", status_code=status.HTTP_204_NO_CONTENT, operation_id="delete_run", tags=["runs"])

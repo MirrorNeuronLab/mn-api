@@ -421,3 +421,44 @@ Authenticated `GET /api/v1/jobs/{job_id}/analysis` returns the SDK job analysis:
 `running_time`, and `tokens`. Coverage accompanies nullable duration/token values.
 Unknown jobs use the normal not-found problem response; analysis deadlines return
 504. Disconnects cancel further collection. No model calls or runtime starts occur.
+
+## Shared assistance evaluation
+
+Authenticated `POST /api/v1/assistance/evaluations` accepts `blueprint_id`, optional
+`job_id` and `execution_id`, local `setup` readiness/mode/revision, bounded
+`resolved_keys`, and optional `requested_goal`. It rejects caller-supplied
+operational context, configuration fields, mismatched blueprints, and changed
+executions. The response is `mn.assistance.v1` with an opaque revision, bounded
+safe context, and one typed opportunity or null. It delegates policy to the SDK;
+it never executes actions or grants permission. Context-only co-workers can use
+this endpoint without enabling knowledge-backed Job responses.
+
+Job `ask_job` and streaming-start inputs advertise optional `assistance_task`
+metadata with bounded `goal`, `state`, `execution_id`, and `next_question` fields.
+The API validates this shape and the current execution before attaching it to
+runtime context. It does not accept permissions, effects, or arbitrary actions;
+accepted-task bounded-agent plans are restricted to read-only steps. The existing
+response-service enablement requirement still applies to Job answers.
+
+Deploy the updated SDK common/job-response components before this API, then
+release desktop clients that depend on the assistance endpoint. Missing endpoints
+are explicit incompatibilities, not a reason to recreate the runtime policy.
+
+## Failed-run retry resources
+
+`POST /api/v1/runs/{run_id}/retry-plans` accepts
+`{"configuration_overrides": {"catalog_review.walltime_seconds": 3600}}` and returns
+eligibility, preserved/retried steps, declared adjustable fields, the expected
+attempt and checkpoint revision. Planning does not dispatch work.
+
+`POST /api/v1/runs/{run_id}/retries` requires an `Idempotency-Key` header and a body
+containing `expected_attempt`, `checkpoint_revision` and explicit
+`configuration_overrides`. It returns HTTP 202 with the accepted attempt identity.
+Persist and reuse the exact selection, key and settings after a lost response.
+Core revalidates the checkpoint, ownership, lifecycle conflicts and replay safety.
+Retry uses the existing run and job IDs; it does not seed a fresh workflow.
+
+Inspection/listing labels `record_source: runtime|history`. Stored history without
+its Core control record remains inspectable and explains why retry is unavailable.
+Runtime-unavailable retry planning returns HTTP 503 rather than pretending the run
+is missing. Resume continues paused work; changed inputs require a new run.

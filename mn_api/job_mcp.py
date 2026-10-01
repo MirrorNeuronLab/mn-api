@@ -13,7 +13,7 @@ import uuid
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping
 
 import anyio
 from mcp.server import MCPServer
@@ -21,6 +21,8 @@ from mcp.server.mcpserver import Context
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ElicitRequest, ElicitRequestFormParams, InputRequiredResult
 from starlette.requests import Request
+from pydantic import BaseModel, ConfigDict, Field
+from mn_sdk_common.assistance import normalize_assistance_task
 
 from mn_api import state
 from mn_api.blueprints import find_blueprint
@@ -61,6 +63,24 @@ _ACTIVITY_POLL_SECONDS = 0.5
 _ACTIVITY_MAX_WAIT_SECONDS = 25.0
 _current_job_id: contextvars.ContextVar[str] = contextvars.ContextVar("job_mcp_job_id", default="")
 LOGGER = logging.getLogger(__name__)
+
+
+class AssistanceTask(BaseModel):
+    """Desktop-owned intent; operational facts and authorization stay runtime-owned."""
+    model_config = ConfigDict(extra="forbid", strict=True)
+    goal: Literal["setup", "respond", "diagnose", "review", "schedule", "use_own_data"]
+    state: Literal["guiding", "collecting", "review", "saving", "completed", "failed"]
+    execution_id: str = Field(max_length=512)
+    next_question: str = Field(max_length=500)
+
+
+def _attach_assistance(context, task):
+    value = normalize_assistance_task(task.model_dump() if isinstance(task, AssistanceTask) else task)
+    if value is not None:
+        if value["execution_id"] != _as_record(context.get("latest_run")).get("run_id", ""):
+            raise ValueError("The assistance task belongs to a different execution")
+        context["assistance_task"] = value
+    return context
 
 
 class JobMCPNotFoundError(RuntimeError):
@@ -322,40 +342,11 @@ def _fallback_job_answer(
 ) -> dict[str, Any]:
     del question
     identity = context.get("identity") if isinstance(context.get("identity"), Mapping) else {}
-    profile = context.get("profile") if isinstance(context.get("profile"), Mapping) else {}
     latest = context.get("latest_run") if isinstance(context.get("latest_run"), Mapping) else None
     state_name = _first_text(context.get("state")) or "unknown"
-    name = _first_text(profile.get("name"), identity.get("blueprint_id"), "This job")
-    lines = [f"{name} is currently {state_name.replace('_', ' ')}."]
-    mission = _safe_text(profile.get("mission"), limit=1_200)
-    if mission:
-        lines.append(f"Its declared purpose is: {mission}")
-    if latest:
-        lines.append(
-            f"The latest run ({_first_text(latest.get('run_id'), 'latest')}) is "
-            f"{_first_text(latest.get('status'), 'unknown')}."
-        )
-    else:
-        lines.append("It has not started a run yet, so there is no run progress or result to report.")
-    lines.append(
-        "This is a grounded status summary; the semantic answer service was unavailable, "
-        "so no additional conclusion was inferred."
-    )
-    citations = []
-    for item in list(context.get("evidence") or [])[:20]:
-        if not isinstance(item, Mapping):
-            continue
-        citations.append(
-            {
-                "kind": _safe_text(item.get("kind"), limit=100) or "job_context",
-                "record_id": _safe_text(item.get("record_id"), limit=200) or "evidence",
-                "summary": _safe_text(item.get("summary"), limit=800),
-                "status": _safe_text(item.get("status"), limit=100),
-            }
-        )
     response = {
         "schema_version": "mn.mcp.job_answer.v1",
-        "answer": "\n\n".join(lines)[:12_000],
+        "answer": "Couldn't answer right now. Try again.",
         "conversation_id": conversation_id or str(uuid.uuid4()),
         "request_id": request_id or None,
         "job_id": _first_text(identity.get("job_id")),
@@ -371,8 +362,8 @@ def _fallback_job_answer(
                 else None
             ),
         },
-        "citations": citations,
-        "warnings": ["A deterministic answer was returned because the response service was unavailable."],
+        "citations": [],
+        "warnings": ["The response service was unavailable; no answer was generated."],
         "service": {"state": "degraded"},
         "model": {"used": False, "fallback": True},
         "conversation_persisted": False,
@@ -400,7 +391,9 @@ class JobContextProvider:
         initial_wait_seconds: float = _SNAPSHOT_INITIAL_WAIT_SECONDS,
         max_entries: int = _SNAPSHOT_MAX_ENTRIES,
         clock=time.monotonic,
+        require_response: bool = True,
     ) -> None:
+        self._require_response = require_response
         self._fresh_seconds = max(0.0, float(fresh_seconds))
         self._last_known_good_seconds = max(self._fresh_seconds, float(last_known_good_seconds))
         self._initial_wait_seconds = max(0.0, float(initial_wait_seconds))
@@ -439,7 +432,7 @@ class JobContextProvider:
         descriptor["response_agent_enabled"] = bool(
             descriptor["response_enabled"] and _response_agent_declared(blueprint)
         )
-        if not descriptor["response_enabled"]:
+        if self._require_response and not descriptor["response_enabled"]:
             raise JobMCPNotFoundError("The requested job MCP is unavailable.")
         return job, blueprint, descriptor
 
@@ -544,6 +537,7 @@ class JobContextProvider:
                     "tagline",
                 )
             )),
+            "type": _safe_text(_blueprint_field(blueprint, "type"), limit=40),
             "capabilities": safe_context_value(_blueprint_field(blueprint, "capabilities") or []),
             "expected_output": _safe_text(_first_text(
                 _blueprint_field(blueprint, "output", "expected_output", "expectedOutput")
@@ -979,6 +973,7 @@ class JobContextProvider:
         *,
         conversation_id: str | None = None,
         request_id: str | None = None,
+        assistance_task: AssistanceTask | Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         question = str(question or "").strip()
         if not question:
@@ -997,6 +992,7 @@ class JobContextProvider:
         if not descriptor.get("response_enabled"):
             raise JobMCPNotFoundError("The requested job response service is unavailable.")
         context, snapshot = self._context_for_request(job_id)
+        _attach_assistance(context, assistance_task)
         agent_mode = bool(descriptor.get("response_agent_enabled"))
         if agent_mode and snapshot is not None and snapshot.active_service_run_id:
             context["_active_service_run_id"] = snapshot.active_service_run_id
@@ -1034,13 +1030,13 @@ class JobContextProvider:
                 fallback["schema_version"] = "mn.mcp.job_answer.v3"
                 fallback["turn"] = {
                     "turn_id": str(uuid.uuid4()),
-                    "state": "completed",
+                    "state": "failed",
                     "updated_at": _now_iso(),
                 }
                 fallback["effects"] = []
             return fallback
 
-    def response_stream_command(self, job_id, question, *, conversation_id, request_id, control):
+    def response_stream_command(self, job_id, question, *, conversation_id, request_id, control, assistance_task=None):
         if not isinstance(question, str) or not question.strip() or len(question) > 8000:
             raise ValueError("Invalid response question")
         if not request_id or len(request_id) > 128:
@@ -1050,7 +1046,7 @@ class JobContextProvider:
         base = self._base_snapshot(job_id)
         if not base.descriptor.get("response_enabled") or base.descriptor.get("response_agent_enabled"):
             raise JobMCPNotFoundError("Streaming requires a read-only response service.")
-        context = self._context_for_request(job_id)[0] if control["action"] == "start" else {}
+        context = _attach_assistance(self._context_for_request(job_id)[0], assistance_task) if control["action"] == "start" else {}
         return self._service().query_job_response(
             job_id, question, context={**context, "_mn_response_stream": control},
             conversation_id=conversation_id or "", request_id=request_id,
@@ -1335,6 +1331,7 @@ def create_job_mcp(provider: JobContextProvider | None = None) -> tuple[list[MCP
         conversation_id: str | None = None,
         request_id: str | None = None,
         stream: bool = False,
+        assistance_task: AssistanceTask | None = None,
         ctx: Context = None,
     ) -> dict[str, Any] | InputRequiredResult:
         if ctx is not None:
@@ -1346,9 +1343,9 @@ def create_job_mcp(provider: JobContextProvider | None = None) -> tuple[list[MCP
             if ctx is None:
                 raise ValueError("Streaming requires an MCP request context")
             from mn_api.job_reply_stream import stream_job_reply
-            return await stream_job_reply(context_provider, job_id, question, conversation_id, request_id, ctx)
+            return await stream_job_reply(context_provider, job_id, question, conversation_id, request_id, ctx, assistance_task=assistance_task)
         return await anyio.to_thread.run_sync(lambda: context_provider.ask_job(
-            job_id, question, conversation_id=conversation_id, request_id=request_id,
+            job_id, question, conversation_id=conversation_id, request_id=request_id, assistance_task=assistance_task,
         ))
 
     @agent_server.tool(
@@ -1363,6 +1360,7 @@ def create_job_mcp(provider: JobContextProvider | None = None) -> tuple[list[MCP
         question: str,
         conversation_id: str | None = None,
         request_id: str | None = None,
+        assistance_task: AssistanceTask | None = None,
         ctx: Context = None,
     ) -> dict[str, Any] | InputRequiredResult:
         if ctx is not None:
@@ -1374,6 +1372,7 @@ def create_job_mcp(provider: JobContextProvider | None = None) -> tuple[list[MCP
             question,
             conversation_id=conversation_id,
             request_id=request_id,
+            assistance_task=assistance_task,
         )
 
     @agent_server.tool(

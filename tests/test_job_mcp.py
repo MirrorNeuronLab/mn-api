@@ -595,7 +595,7 @@ def test_ask_job_preserves_idempotency_conflicts_instead_of_falling_back(monkeyp
         raise AssertionError("Expected request_id conflict to be preserved")
 
 
-def test_agent_failure_returns_generic_v3_fallback(monkeypatch):
+def test_agent_failure_returns_visible_failed_reply(monkeypatch):
     runtime = MCPRuntime()
     _configure(monkeypatch, runtime)
 
@@ -606,7 +606,9 @@ def test_agent_failure_returns_generic_v3_fallback(monkeypatch):
     response = JobContextProvider().ask_job("job-agent", "What is the current status?")
 
     assert response["schema_version"] == "mn.mcp.job_answer.v3"
-    assert response["turn"]["state"] == "completed"
+    assert response["turn"]["state"] == "failed"
+    assert response["answer"] == "Couldn't answer right now. Try again."
+    assert response["citations"] == []
     assert response["effects"] == []
 
 
@@ -949,3 +951,31 @@ def test_stream_endpoint_retains_authentication_and_host_protection(monkeypatch)
         })
         assert response.status_code == 421
     assert runtime.queries == []
+
+
+def test_accepted_assistance_survives_job_answers_without_authorizing_actions(monkeypatch):
+    import pytest
+    runtime = MCPRuntime()
+    _configure(monkeypatch, runtime)
+    provider = JobContextProvider()
+    task = {"goal": "diagnose", "state": "review", "execution_id": "run-agent",
+            "next_question": "The corrected input was saved. Review the separate retry confirmation."}
+    provider.ask_job("job-agent", "What next?", assistance_task=task)
+    assert runtime.queries[-1]["context"]["assistance_task"] == task
+    with pytest.raises(ValueError, match="different execution"):
+        provider.ask_job("job-agent", "What next?", assistance_task={**task, "execution_id": "older-run"})
+    with pytest.raises(ValueError, match="Invalid assistance task"):
+        provider.ask_job("job-agent", "What next?", assistance_task={**task, "authorized": True})
+    with pytest.raises(job_mcp.JobMCPNotFoundError):
+        provider.ask_job("job-response-disabled", "What next?", assistance_task=task)
+    assert len(runtime.queries) == 1
+
+
+def test_streamed_answers_keep_the_accepted_task_on_start_only(monkeypatch):
+    runtime = MCPRuntime()
+    _configure(monkeypatch, runtime)
+    task = {"goal": "schedule", "state": "collecting", "execution_id": "", "next_question": "Which days?"}
+    provider = JobContextProvider()
+    provider.response_stream_command("job-response", "Weekdays", conversation_id=None, request_id="r",
+                                     control={"action": "start", "cursor": 0}, assistance_task=task)
+    assert runtime.queries[-1]["context"]["assistance_task"] == task

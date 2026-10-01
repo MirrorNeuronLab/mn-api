@@ -18,7 +18,10 @@ def stored_run(run_id: str) -> dict[str, Any] | None:
         return None
     if record.get("status") not in {"completed", "failed", "cancelled"}:
         record = {**record, "status": "unknown"}
-    return record
+    return {**record, "record_source": "history", "retry": {
+        "available": False,
+        "reason": "Stored history only. Check Core availability and plan a retry; if its control record is missing, start a new run.",
+    }}
 
 
 def stored_progress(run_id: str) -> dict[str, Any] | None:
