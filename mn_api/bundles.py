@@ -19,9 +19,8 @@ from mn_sdk.bundle_io import (
     find_bundle_root,
     first_string,
     load_uploaded_bundle as sdk_load_uploaded_bundle,
-    rag_db_sidecar_suffix,
     resolved_rag_db_path,
-    restore_exported_rag_db as sdk_restore_exported_rag_db,
+    restore_exported_rag_corpus as sdk_restore_exported_rag_corpus,
     safe_extract_path as sdk_safe_extract_path,
     safe_rag_export_source as sdk_safe_rag_export_source,
     safe_rag_token,
@@ -97,14 +96,14 @@ def safe_extract_path(root: Path, member_name: str) -> Path:
         raise _bundle_http_exception(exc) from exc
 
 
-def restore_exported_rag_db(
+def restore_exported_rag_corpus(
     bundle_root: Path,
     *,
     manifest: dict[str, Any] | None = None,
     env: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     try:
-        return sdk_restore_exported_rag_db(bundle_root, manifest=manifest, env=env)
+        return sdk_restore_exported_rag_corpus(bundle_root, manifest=manifest, env=env)
     except BundleError as exc:
         raise _bundle_http_exception(exc) from exc
 
@@ -125,9 +124,8 @@ __all__ = [
     "first_string",
     "load_uploaded_bundle",
     "uploaded_bundle_root",
-    "rag_db_sidecar_suffix",
     "resolved_rag_db_path",
-    "restore_exported_rag_db",
+    "restore_exported_rag_corpus",
     "safe_extract_path",
     "safe_rag_export_source",
     "safe_rag_token",

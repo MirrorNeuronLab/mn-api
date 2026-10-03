@@ -13,7 +13,7 @@ import pytest
 from mn_api.bundles import (
     find_bundle_root,
     load_uploaded_bundle,
-    restore_exported_rag_db,
+    restore_exported_rag_corpus,
     safe_extract_path,
     save_uploaded_bundle,
 )
@@ -80,39 +80,17 @@ class TestBundleServices(unittest.TestCase):
 
             self.assertEqual(find_bundle_root(extracted_root), nested)
 
-    def test_restore_exported_rag_db_copies_runtime_cache_to_mn_root(self):
+    def test_restore_exported_rag_corpus_translates_sdk_errors(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            bundle_root = root / "bundle-root"
-            db_dir = bundle_root / "__mn_runtime" / "rag" / "mirror_neuron_rag"
-            db_dir.mkdir(parents=True)
-            (db_dir / "worker_one.db").write_bytes(b"milvus-lite-cache")
-            (db_dir / "worker_one.db-wal").write_bytes(b"wal")
-            export_manifest = {
-                "schema_version": "mn.rag_export.v1",
-                "backend": "milvus_lite",
-                "blueprint_id": "worker_one",
-                "namespace": "mirror_neuron_rag",
-                "db_path": "mirror_neuron_rag/worker_one.db",
-                "files": [
-                    {"path": "__mn_runtime/rag/mirror_neuron_rag/worker_one.db", "size": 18},
-                    {"path": "__mn_runtime/rag/mirror_neuron_rag/worker_one.db-wal", "size": 3},
-                ],
-            }
-            (bundle_root / "__mn_runtime" / "rag" / "manifest.json").write_text(json.dumps(export_manifest))
-            rag_root = root / "rag-root"
+            archive = root / "__mn_runtime/rag"
+            archive.mkdir(parents=True)
+            (archive / "manifest.json").write_text(json.dumps({"schema_version": "mn.rag_export.v1"}))
+            with self.assertRaises(HTTPException) as raised:
+                restore_exported_rag_corpus(root)
+            self.assertEqual(raised.exception.status_code, 400)
+            self.assertIn("only Markdown corpus v2", raised.exception.detail)
 
-            result = restore_exported_rag_db(
-                bundle_root,
-                manifest={"metadata": {"blueprint_id": "worker_one"}},
-                env={"MN_RAG_DB_ROOT": str(rag_root)},
-            )
-
-            expected_db = rag_root.resolve() / "mirror_neuron_rag" / "worker_one.db"
-            self.assertTrue(result["imported"])
-            self.assertEqual(result["path"], str(expected_db))
-            self.assertEqual(expected_db.read_bytes(), b"milvus-lite-cache")
-            self.assertEqual(Path(f"{expected_db}-wal").read_bytes(), b"wal")
 
 
 def test_save_uploaded_bundle_accepts_current_bundle(tmp_path):
