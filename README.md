@@ -474,3 +474,23 @@ Inspection/listing labels `record_source: runtime|history`. Stored history witho
 its Core control record remains inspectable and explains why retry is unavailable.
 Runtime-unavailable retry planning returns HTTP 503 rather than pretending the run
 is missing. Resume continues paused work; changed inputs require a new run.
+
+## Job ZIP backup and restore
+
+Authenticated `POST /api/v1/jobs/{job_id}/backups` returns a private
+`application/zip` full offline capsule through the shared SDK. Pause active runs
+first. Temporary download files are removed after delivery.
+
+Authenticated `POST /api/v1/job-restorations?start=true` accepts the raw ZIP body
+with `Content-Type: application/zip` and returns a `201` new job identity, start
+status and optional run ID. Omit `start=true` to restore ready work. ZIP validation,
+platform and destination hardware admission precede dependency preparation and job
+creation; failures return HTTP 422 problem responses. This route permits at most
+128 GiB and 100,000 capsule entries, while existing route limits remain unchanged.
+Temporary uploads are removed on completion or failure. Restore does not invoke
+blueprint additions, validation by catalog ID, or hiring. If start fails after
+creation, the response retains the new job ID and an actionable `start_error`.
+
+Requires matching Core `ExportJobBackup` / `RestoreJobBackup` streamed RPCs and
+SDK `mn.backup.v3` support. The destination runtime, Python and Docker installation
+must already be available on a compatible OS/architecture/Python ABI.
