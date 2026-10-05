@@ -37,6 +37,16 @@ first-use path remains idempotent for dynamically requested skill models and
 for a model removed after launch; it must not be the normal path for declared
 requirements. Explicit model-install routes remain eager.
 
+`GET /api/v1/models` defaults to the full merged catalog plus discovered
+installations; `installed_only=true` preserves the installed-only filter.
+Model records expose `default: true` for the configured default and its fallback
+chain. `PUT /api/v1/models/default/installation` prepares the first compatible
+configured model on a local or cluster node without changing default policy.
+Model installation runs as an API-owned background operation through SDK
+preparation and gateway synchronization. The existing `202`, operation
+Location, authentication, request fields, and idempotency contract apply to
+both logical defaults and explicit model IDs.
+
 Catalog blueprint loading applies the shared `mn.payloads.v1` contract before
 agent rendering or validation. Payload Python dependencies participate in
 HostLocal environment preparation, large assets are staged by reference, and

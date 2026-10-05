@@ -48,7 +48,7 @@ from mn_api.schemas import (
 )
 
 
-def list_models(installed_only: bool = True, _auth=Depends(require_auth)):
+def list_models(installed_only: bool = False, _auth=Depends(require_auth)):
     """List runtime models using the same SDK service as the CLI."""
     try:
         return list_runtime_models(installed_only=installed_only)

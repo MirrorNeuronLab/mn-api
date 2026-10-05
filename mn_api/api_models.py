@@ -211,6 +211,8 @@ class CleanupCreate(StrictModel):
 
 
 class ModelInstallation(StrictModel):
+    """Preparation options for a model ID or the configured logical default."""
+
     backend: str = "auto"
     context_size: int | None = None
     force: bool = False

@@ -51,7 +51,16 @@ validation and returns HTTP 422 for missing required inputs, without preparing
 runtime resources or submitting a job.
 The shared SDK still prepares dynamically requested RAG/OCR skill models on
 first use, and also rechecks a declared model if it is removed after launch.
-Explicit model-install endpoints remain eager and unchanged.
+Explicit model-install endpoints remain eager.
+
+`GET /api/v1/models` includes the full catalog by default. Each model's
+`default` boolean marks membership in the configured default/fallback chain;
+`?installed_only=true` limits the collection to installed models. Prepare the
+configured default with `PUT /api/v1/models/default/installation` and an empty
+JSON body (`{}`). Installation selects a compatible local or cluster node,
+uses catalog fallbacks, and preserves the configured default policy. The
+endpoint returns `202` and an operation URL for polling or SSE; it supports
+`Idempotency-Key` and the existing backend/context/force request options.
 
 ## Quick Start
 

@@ -31,7 +31,8 @@ from mn_api.bundles import uploaded_bundle_root
 from mn_api.contracts import API_PREFIX, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 from mn_api.dependencies import require_auth
 from mn_api.http_semantics import require_if_match
-from mn_api.operations import start_operation
+from mn_api.model_installation import install_model
+from mn_api.operations import start_local_operation, start_operation
 from mn_api.pagination import page
 from mn_api.public import idempotent_response, public_value, records, resource_response
 from mn_api.routes import models as model_routes
@@ -74,7 +75,7 @@ def _page(
 
 @router.get("/models", operation_id="list_models", tags=["models"], response_model=PageResponse)
 def list_models(
-    installed_only: bool = True,
+    installed_only: bool = False,
     page_size: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     page_token: str | None = None,
     principal: str = Depends(require_auth),
@@ -114,7 +115,11 @@ def replace_model_installation(
         route=f"{API_PREFIX}/models/{model_id}/installation",
         key=idempotency_key,
         body=request.model_dump(),
-        call=lambda: start_operation("install_model", {"model_id": model_id, **request.model_dump()}),
+        call=lambda: start_local_operation(
+            "install_model",
+            {"model_id": model_id, **request.model_dump()},
+            lambda progress: install_model(model_id, request.model_dump(), progress),
+        ),
         status_code=status.HTTP_202_ACCEPTED,
         location=lambda result: f"{API_PREFIX}/operations/{result.get('operation_id') or result.get('id')}",
     )

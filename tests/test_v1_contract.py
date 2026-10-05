@@ -887,6 +887,7 @@ def _patch_canonical_projections(monkeypatch):
 
     monkeypatch.setattr(infrastructure.model_routes, "list_runtime_models", lambda **_kwargs: {"models": [{"id": "model-1"}]})
     monkeypatch.setattr(infrastructure.model_routes, "show_runtime_model", lambda model_id: {"id": model_id})
+    monkeypatch.setattr(infrastructure, "install_model", lambda model_id, options, progress: {"model": model_id, "status": "ready"})
     monkeypatch.setattr(infrastructure.model_routes, "benchmark_model", lambda model_id, request, _principal: {"id": model_id, **request})
     monkeypatch.setattr(infrastructure, "registered_model_records", lambda: [{"id": "remote-1", "source": "rest_remote"}])
     monkeypatch.setattr(infrastructure, "provider_registration", lambda model_id, **kwargs: {"id": model_id, **kwargs})
