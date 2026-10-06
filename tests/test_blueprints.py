@@ -396,10 +396,10 @@ class TestBlueprintServices(unittest.TestCase):
         mock_install.assert_called_once()
         mock_record.assert_called_once()
 
-    def test_blueprint_requires_context_engine_from_enabled_memory_layer(self):
+    def test_blueprint_requires_context_engine_from_enabled_text_memory(self):
         manifest = {
             "metadata": {
-                "memory_layer": {
+                "text_memory": {
                     "enabled": True,
                     "enabled_env": "MN_CONTEXT_MEMORY_ENABLED",
                     "sdk_import_package": "mn_context_engine_sdk",
@@ -412,9 +412,12 @@ class TestBlueprintServices(unittest.TestCase):
             self.assertFalse(
                 blueprint_requires_context_engine(
                     manifest,
-                    {"memory_layer": {"enabled": False, "enabled_env": "MN_CONTEXT_MEMORY_ENABLED"}},
+                    {"text_memory": {"enabled": False, "enabled_env": "MN_CONTEXT_MEMORY_ENABLED"}},
                 )
             )
+            self.assertFalse(blueprint_requires_context_engine(
+                {"metadata": {"memory_layer": {"enabled": True}}}, None
+            ))
 
     @patch("mn_api.blueprints.ensure_context_engine_runtime_direct")
     def test_install_blueprint_runtime_models_ensures_context_engine_when_required(self, mock_ensure):
@@ -427,7 +430,7 @@ class TestBlueprintServices(unittest.TestCase):
             (config_dir / "default.json").write_text(
                 json.dumps(
                     {
-                        "memory_layer": {
+                        "text_memory": {
                             "enabled": True,
                             "enabled_env": "MN_CONTEXT_MEMORY_ENABLED",
                             "sdk_import_package": "mn_context_engine_sdk",
