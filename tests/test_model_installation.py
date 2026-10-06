@@ -25,7 +25,8 @@ def test_model_collection_defaults_to_catalog_and_marks_default_chain(client, mo
     response = client.get("/api/v1/models")
     assert response.status_code == 200, response.text
     items = response.json()["items"]
-    assert len(items) == 4
+    assert len(items) == 5
+    assert next(item for item in items if item["id"] == "cosmos3-nano-reasoner:1.7")["source"] == "docker"
     assert {item["id"] for item in items if item["default"]} == {"nemotron-3.5-lightning:latest", "gemma4:e2b"}
     assert client.get("/api/v1/models?installed_only=true").json()["items"] == []
 
@@ -155,3 +156,31 @@ def test_model_installation_failure_is_sanitized_problem_in_operation(client, mo
     operation = get_operation(operation_id)
     assert operation["status"] == "failed"
     assert "private installation details" not in json.dumps(operation["error"])
+
+
+@pytest.mark.parametrize("remote", [False, True])
+def test_docker_installation_uses_shared_sdk_and_nim_gateway(monkeypatch, remote):
+    from mn_sdk import resolve_model_entry, docker_model_runner_endpoint
+
+    entry = resolve_model_entry("cosmos3")
+    monkeypatch.setattr(model_installation, "resolve_runtime_cluster_model_for_api",
+                        lambda **_kw: {"node": "spark"} if remote else None)
+    calls = []
+    def local(model, **_options):
+        calls.append(model)
+        return {"entry": entry, "source": "docker"}
+    def native(**kwargs):
+        calls.append(kwargs["entry"]["id"])
+        assert kwargs["entry"]["source"] == "docker"
+        return {"install": {"source": "docker"}, "endpoint": docker_model_runner_endpoint(
+            entry, node="spark", source="sdk_native_runtime_service")}
+    monkeypatch.setattr(model_installation, "install_runtime_model", local)
+    monkeypatch.setattr(model_installation, "install_runtime_cluster_model_for_api", native)
+    monkeypatch.setattr(model_installation, "sync_runtime_model_gateways_for_api", lambda summary: summary["endpoints"])
+    result = model_installation.install_model("cosmos3", {}, lambda **_kwargs: None)
+    assert calls == [entry["id"]]  # No Nemotron preparation or default substitution.
+    endpoint = result["endpoints"][entry["id"]]
+    assert endpoint["provider"] == "openai-compatible"
+    assert endpoint["api_base"] == "http://host.docker.internal:30082/v1"
+    assert endpoint["api_model"] == "nvidia/cosmos3-nano-reasoner"
+    assert get_registered_model(entry["id"])["kind"] == "docker"

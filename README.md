@@ -62,6 +62,14 @@ uses catalog fallbacks, and preserves the configured default policy. The
 endpoint returns `202` and an operation URL for polling or SSE; it supports
 `Idempotency-Key` and the existing backend/context/force request options.
 
+Catalog records identify managed delivery with `source: "dmr"` or
+`source: "docker"`. NVIDIA Docker models use the same SDK preparation and
+gateway synchronization. For Cosmos3 Nano Reasoner, send `{}` to
+`PUT /api/v1/models/cosmos3-nano-reasoner:1.7/installation`. The selected
+Linux NVIDIA owner's native service must have `NGC_API_KEY` or
+`NGC_CLI_API_KEY` in its environment; the HTTP body does not accept secrets.
+See [Docker model setup](../mn-python-sdk/docs/docker-models.md).
+
 ## Quick Start
 
 ### Observe a long submission

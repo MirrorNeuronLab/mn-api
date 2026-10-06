@@ -47,6 +47,13 @@ preparation and gateway synchronization. The existing `202`, operation
 Location, authentication, request fields, and idempotency contract apply to
 both logical defaults and explicit model IDs.
 
+Managed catalog records expose `source: "dmr"` or `source: "docker"`.
+Explicit Docker IDs use the same installation operation, with structured
+Docker settings and credential environment references resolved by the SDK on
+the selected native owner. NIM readiness precedes successful registration and
+gateway synchronization. The API does not accept registry credentials in
+installation bodies or implement a separate Docker lifecycle.
+
 Catalog blueprint loading applies the shared `mn.payloads.v1` contract before
 agent rendering or validation. Payload Python dependencies participate in
 HostLocal environment preparation, large assets are staged by reference, and
