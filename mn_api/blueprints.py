@@ -1542,6 +1542,7 @@ def prepare_hostlocal_python_environments_for_submission(
     selected_runtime_node: str = "",
 ) -> list[dict[str, str]]:
     from mn_api import state
+    from mn_sdk.native_host_submission import NATIVE_ENVIRONMENT_KEY, native_host_python_required
 
     blueprint_id = hostlocal_blueprint_id(bundle_root, manifest)
     resolved_timeout = timeout or config_float(
@@ -1549,6 +1550,7 @@ def prepare_hostlocal_python_environments_for_submission(
         default=30.0,
     )
     prepared: list[dict[str, str]] = []
+    native_host = native_host_python_required(manifest)
     for node in hostlocal_python_environment_nodes(manifest):
         config = node["config"]
         python_environment = config["python_environment"]
@@ -1582,6 +1584,8 @@ def prepare_hostlocal_python_environments_for_submission(
         }
         if local_source_versions:
             request["local_source_versions"] = local_source_versions
+        if native_host:
+            request["native_host"] = True
         response = call_prepare_runtime_model(
             runtime_client or hostlocal_runtime_client(selected_node),
             request,
@@ -1591,6 +1595,11 @@ def prepare_hostlocal_python_environments_for_submission(
         if not runtime_path:
             raise RuntimeError(f"{node_id}: HostLocal Python environment preparation did not return a runtime path")
         python_environment["path"] = runtime_path
+        if native_host:
+            config[NATIVE_ENVIRONMENT_KEY] = {
+                "python": str(Path(str(response.get("host_path") or runtime_path)) / "bin" / "python"),
+                "target": str(response.get("native_target") or ""),
+            }
         prepared.append(
             {
                 "node_id": node_id,
@@ -1605,34 +1614,9 @@ def hostlocal_local_source_versions(
     manifest: dict[str, Any],
     packages: list[str],
 ) -> dict[str, str]:
-    """Return declared versions for local dependency paths in a HostLocal node."""
+    from mn_sdk.dependency_versions import localized_source_versions
 
-    metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
-    local = (
-        metadata.get("mn_local_skill_dependencies")
-        if isinstance(metadata.get("mn_local_skill_dependencies"), dict)
-        else {}
-    )
-    sources = local.get("sources") if isinstance(local.get("sources"), list) else []
-    versions_by_path: dict[str, str] = {}
-    for entry in sources:
-        if not isinstance(entry, dict):
-            continue
-        source = str(entry.get("source") or "").strip()
-        version = str(entry.get("version") or "").strip()
-        if not source or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+!-]*", version):
-            continue
-        versions_by_path.setdefault(str(Path(source).expanduser().resolve()), version)
-
-    local_versions: dict[str, str] = {}
-    for package in packages:
-        candidate = Path(package).expanduser()
-        if not candidate.is_absolute():
-            continue
-        version = versions_by_path.get(str(candidate.resolve()))
-        if version:
-            local_versions[package] = version
-    return local_versions
+    return localized_source_versions(manifest, packages)
 
 
 def hostlocal_requirements_content(
