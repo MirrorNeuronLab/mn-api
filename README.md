@@ -502,3 +502,13 @@ creation, the response retains the new job ID and an actionable `start_error`.
 Requires matching Core `ExportJobBackup` / `RestoreJobBackup` streamed RPCs and
 SDK `mn.backup.v3` support. The destination runtime, Python and Docker installation
 must already be available on a compatible OS/architecture/Python ABI.
+
+
+## Collaboration group catalog contract
+
+Catalog projections preserve the SDK-validated `mn.collaboration.group.v1`
+contract: `topology: group`, protocol, fixed goalId, mutually accepted blueprint
+IDs, member capacity (2–16), goalKey/commonGoalKey, groupKey, peersKey, and
+sameRuntime. Group peer configuration uses stable `{jobId, blueprintId}` entries.
+Invalid declarations and private metadata are omitted. Legacy pair declarations
+remain capacity two. This contract does not launch work or grant approvals.
