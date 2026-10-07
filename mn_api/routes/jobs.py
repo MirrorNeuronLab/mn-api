@@ -31,6 +31,7 @@ from mn_sdk import (
     workflow_step_ids as _workflow_step_ids,
 )
 from mn_sdk.blueprint_support.observability import read_run_resources
+from mn_sdk_web_ui import probe_web_ui
 from mn_sdk.staged_artifacts import (
     ArtifactIntegrityError,
     ArtifactNotReadyError,
@@ -194,13 +195,22 @@ def get_job_ui(job_id: str, _auth=Depends(require_auth)):
     if job_dir is None:
         raise HTTPException(status_code=400, detail="invalid job id")
     live_handle = _job_ui_handle_from_services(job_id)
-    if live_handle is not None:
-        return live_handle
     shared_dir = shared_job_ui_dir_from_id(job_id, must_exist=False)
+    if live_handle is not None:
+        # Lifecycle/address come from the registry. Preserve the blueprint's
+        # claimed presentation policy only when it describes that same page.
+        for candidate in (shared_dir, job_dir):
+            claimed = _job_ui_handle_from_directory(candidate, job_id)
+            if claimed is not None and str(claimed["web_ui"].get("url") or "").rstrip("/") == live_handle["web_ui"]["url"].rstrip("/"):
+                policy = claimed["web_ui"].get("metadata")
+                if isinstance(policy, dict) and "load_event" in policy:
+                    live_handle["web_ui"]["metadata"]["load_event"] = policy["load_event"]
+                break
+        return _checked_job_ui_handle(live_handle)
     for candidate in (shared_dir, job_dir):
         handle = _job_ui_handle_from_directory(candidate, job_id)
         if handle is not None:
-            return handle
+            return _checked_job_ui_handle(handle)
 
     # A federation member owns its local job-data directory.  If the shared
     # storage backend is node-local (or is still replicating), ask the owning
@@ -209,8 +219,27 @@ def get_job_ui(job_id: str, _auth=Depends(require_auth)):
     # by the browser or the job payload.
     remote_handle = _owner_node_job_ui_handle(job_id)
     if remote_handle is not None:
-        return remote_handle
+        return _checked_job_ui_handle(remote_handle)
     raise HTTPException(status_code=404, detail="job UI not found")
+
+
+def _checked_job_ui_handle(handle: dict[str, Any]) -> dict[str, Any]:
+    """Verify reachability from the proxy's host, not just the worker's host."""
+    web_ui = dict(handle["web_ui"])
+    if web_ui.get("adapter") not in (None, "external-url"):
+        return handle
+    status = str(web_ui.get("status") or "").strip().lower()
+    raw_metadata = web_ui.get("metadata")
+    metadata = dict(raw_metadata) if isinstance(raw_metadata, dict) else {}
+    if status in {"running", "ready", "passing"}:
+        readiness = probe_web_ui(str(web_ui.get("url") or ""))
+        web_ui["status"] = "running" if readiness["ready"] else "starting"
+    else:
+        readiness = {"schema_version": "mn.web_ui.readiness.v1", "ready": False,
+                     "reason": "service_not_running"}
+    metadata["readiness"] = readiness
+    web_ui["metadata"] = metadata
+    return {**handle, "web_ui": web_ui}
 
 
 def _job_ui_handle_from_services(job_id: str) -> dict[str, Any] | None:
@@ -268,6 +297,9 @@ def _job_ui_handle_from_services(job_id: str) -> dict[str, Any] | None:
     metadata = {"job_id": job_id, "service_name": service.get("name"), "node_id": node,
                 "proxy": {"schema_version": "mn.web_ui.proxy.v1", "http_ports": sorted(http_ports),
                           "websocket_ports": sorted(websocket_ports)}}
+    service_meta = service.get("meta")
+    if isinstance(service_meta, dict) and "load_event" in service_meta:
+        metadata["load_event"] = service_meta["load_event"]
     return {"job_id": job_id,
             "ui": {"schema_version": "mn.web_ui.external.v1", "renderer": "external-url",
                    "job_id": job_id, "title": title, "metadata": metadata},

@@ -11,6 +11,11 @@ from mn_api import job_store, state
 from mn_api.routes import jobs
 
 
+@pytest.fixture(autouse=True)
+def ready_ui_probe(monkeypatch):
+    monkeypatch.setattr(jobs, "probe_web_ui", lambda _url: {"schema_version": "mn.web_ui.readiness.v1", "ready": True, "reason": "ready"})
+
+
 def test_shared_job_ui_dir_uses_runtime_shared_storage(monkeypatch, tmp_path):
     shared_root = tmp_path / "shared"
     monkeypatch.setattr(
@@ -290,7 +295,7 @@ def test_get_job_ui_reads_the_durable_job_data_directory(monkeypatch, tmp_path):
     job_dir.mkdir()
     (job_dir / "ui.json").write_text(json.dumps({"job_id": "job-1", "title": "Example"}), encoding="utf-8")
     (job_dir / "web_ui.json").write_text(
-        json.dumps({"job_id": "job-1", "url": "http://127.0.0.1:61000"}), encoding="utf-8"
+        json.dumps({"job_id": "job-1", "url": "http://127.0.0.1:61000", "status": "running"}), encoding="utf-8"
     )
     monkeypatch.setattr(jobs, "job_data_dir_from_id", lambda _job_id, must_exist=False: job_dir)
     monkeypatch.setattr(
@@ -302,7 +307,8 @@ def test_get_job_ui_reads_the_durable_job_data_directory(monkeypatch, tmp_path):
     assert jobs.get_job_ui("job-1") == {
         "job_id": "job-1",
         "ui": {"job_id": "job-1", "title": "Example"},
-        "web_ui": {"job_id": "job-1", "url": "http://127.0.0.1:61000"},
+        "web_ui": {"job_id": "job-1", "url": "http://127.0.0.1:61000", "status": "running",
+                   "metadata": {"readiness": {"schema_version": "mn.web_ui.readiness.v1", "ready": True, "reason": "ready"}}},
     }
 
 
@@ -317,7 +323,7 @@ def test_get_job_ui_uses_selected_runtime_node_for_passing_service(monkeypatch, 
             return json.dumps({"items": [
                 {"job_id": "run-1", "name": "warehouse-ui", "node": "mirror_neuron@10.0.4.32",
                  "address": "10.0.4.26", "port": 8088, "status": "passing", "tags": ["web_ui"],
-                 "meta": {"title": "Warehouse AMR Monitor"}},
+                 "meta": {"title": "Warehouse AMR Monitor", "load_event": "did-finish-load"}},
                 {"job_id": "run-1", "name": "video", "node": "mirror_neuron@10.0.4.32",
                  "port": 8080, "status": "passing", "tags": ["video"]},
                 {"job_id": "run-1", "name": "rosbridge", "node": "mirror_neuron@10.0.4.32",
@@ -331,11 +337,56 @@ def test_get_job_ui_uses_selected_runtime_node_for_passing_service(monkeypatch, 
     monkeypatch.setattr(jobs, "job_data_dir_from_id", lambda _job_id, must_exist=False: tmp_path / "job-1")
     handle = jobs.get_job_ui("job-1")
     assert handle["web_ui"]["url"] == "http://10.0.4.32:8088"
+    assert handle["web_ui"]["metadata"]["load_event"] == "did-finish-load"
     assert handle["web_ui"]["metadata"]["proxy"] == {
         "schema_version": "mn.web_ui.proxy.v1",
         "http_ports": [8080, 8088],
         "websocket_ports": [9090],
     }
+
+    monkeypatch.setattr(jobs, "probe_web_ui", lambda _url: {"ready": False, "reason": "unreachable"})
+    assert jobs.get_job_ui("job-1")["web_ui"]["status"] == "starting"
+    monkeypatch.setattr(jobs, "probe_web_ui", lambda _url: {"ready": True, "reason": "ready"})
+    assert jobs.get_job_ui("job-1")["web_ui"]["status"] == "running"
+
+
+@pytest.mark.parametrize("claim_url,expected", [
+    ("http://10.0.4.32:8088/", "did-finish-load"),
+    ("http://10.0.4.32:8089/", "dom-ready"),
+])
+def test_live_ui_preserves_load_event_only_for_the_claimed_page(monkeypatch, tmp_path, claim_url, expected):
+    directory = tmp_path / "job-1"
+    directory.mkdir()
+    (directory / "ui.json").write_text(json.dumps({"job_id": "job-1"}))
+    (directory / "web_ui.json").write_text(json.dumps({
+        "job_id": "job-1", "url": claim_url, "metadata": {"load_event": "did-finish-load"}
+    }))
+    live = {"web_ui": {"url": "http://10.0.4.32:8088", "status": "running", "metadata": {"load_event": "dom-ready"}}}
+    monkeypatch.setattr(jobs, "job_data_dir_from_id", lambda *_args, **_kwargs: directory)
+    monkeypatch.setattr(jobs, "shared_job_ui_dir_from_id", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(jobs, "_job_ui_handle_from_services", lambda _job_id: live)
+    assert jobs.get_job_ui("job-1")["web_ui"]["metadata"]["load_event"] == expected
+
+
+@pytest.mark.parametrize("status", ["", "starting", "paused", "stopped", "failed", "cancelled"])
+def test_job_ui_does_not_promote_lifecycle_state_from_reachability(monkeypatch, status):
+    monkeypatch.setattr(jobs, "probe_web_ui", lambda _url: pytest.fail("inactive service must not be probed"))
+    handle = {"web_ui": {"url": "http://worker:8080/", "status": status}}
+    result = jobs._checked_job_ui_handle(handle)
+    assert result["web_ui"]["status"] == status
+    assert result["web_ui"]["metadata"]["readiness"]["ready"] is False
+
+
+def test_job_ui_rechecks_stale_ready_receipts_without_changing_persisted_handle(monkeypatch):
+    handle = {"web_ui": {"url": "http://worker:8080/", "status": "running",
+                         "metadata": {"readiness": {"ready": True}}}}
+    urls = []
+    monkeypatch.setattr(jobs, "probe_web_ui", lambda url: urls.append(url) or {"ready": False, "reason": "unreachable"})
+    result = jobs._checked_job_ui_handle(handle)
+    assert result["web_ui"]["status"] == "starting"
+    assert result["web_ui"]["metadata"]["readiness"]["ready"] is False
+    assert handle["web_ui"]["status"] == "running"
+    assert urls == ["http://worker:8080/"]
 
 
 def test_get_job_ui_prefers_the_cross_node_shared_handle(monkeypatch, tmp_path):
@@ -349,7 +400,7 @@ def test_get_job_ui_prefers_the_cross_node_shared_handle(monkeypatch, tmp_path):
             encoding="utf-8",
         )
         (directory / "web_ui.json").write_text(
-            json.dumps({"job_id": "job-1", "url": f"http://10.0.4.26:{port}"}),
+            json.dumps({"job_id": "job-1", "url": f"http://10.0.4.26:{port}", "status": "running"}),
             encoding="utf-8",
         )
     monkeypatch.setattr(
@@ -385,7 +436,8 @@ def test_get_job_ui_falls_back_to_its_federated_owner(monkeypatch, tmp_path):
     remote_handle = {
         "job_id": "job-1",
         "ui": {"job_id": "job-1", "title": "Example"},
-        "web_ui": {"job_id": "job-1", "url": "http://10.0.4.26:45767"},
+        "web_ui": {"job_id": "job-1", "url": "http://10.0.4.26:45767", "status": "running",
+                   "metadata": {"readiness": {"schema_version": "mn.web_ui.readiness.v1", "ready": True, "reason": "ready"}}},
     }
 
     class FakeClient:

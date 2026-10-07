@@ -88,6 +88,7 @@ def test_job_ui_proxy_uses_the_registered_spark_host_and_injects_local_proxy_con
     (dist / "index.html").write_text("<html></html>", encoding="utf-8")
     handle = {
         "url": "http://10.0.4.26:8088/",
+        "status": "running",
         "metadata": {
             "proxy": {
                 "http_ports": [8080, 8088],
@@ -137,6 +138,7 @@ def test_job_ui_proxy_normalizes_video_topic_and_streams_mjpeg(monkeypatch, tmp_
     (dist / "index.html").write_text("<html></html>", encoding="utf-8")
     handle = {
         "url": "http://10.0.4.26:8088/",
+        "status": "running",
         "metadata": {"proxy": {"http_ports": [8080, 8088]}},
     }
     captured: dict[str, str] = {}
@@ -159,6 +161,9 @@ def test_job_ui_proxy_normalizes_video_topic_and_streams_mjpeg(monkeypatch, tmp_
             return self.status
 
         def read(self, _size):
+            pytest.fail("video must not wait for a full 64 KB buffer")
+
+        def read1(self, _size):
             return self.chunks.pop(0)
 
         def close(self):
@@ -188,6 +193,7 @@ def test_job_ui_proxy_rejects_ports_not_declared_by_the_job(monkeypatch, tmp_pat
     (dist / "index.html").write_text("<html></html>", encoding="utf-8")
     handle = {
         "url": "http://10.0.4.26:8088/",
+        "status": "running",
         "metadata": {"proxy": {"http_ports": [8088], "websocket_ports": [9090]}},
     }
     monkeypatch.setattr("mn_api.web_ui_server._load_job_web_ui", lambda *_args, **_kwargs: handle)
@@ -207,6 +213,7 @@ def test_job_ui_proxy_rejects_ports_not_declared_by_the_job(monkeypatch, tmp_pat
 def test_job_ui_target_allows_only_declared_http_and_websocket_ports():
     handle = {
         "url": "https://10.0.4.26:8088/dashboard",
+        "status": "running",
         "metadata": {"proxy": {"http_ports": [8080, 8088], "websocket_ports": [9090]}},
     }
 
@@ -233,7 +240,7 @@ def test_job_ui_target_allows_only_declared_http_and_websocket_ports():
         _job_ui_target_url(handle, port=8090, path="mcp", query="")
 
 
-@pytest.mark.parametrize("status", ["paused", "stopped", "cancelled", "failed"])
+@pytest.mark.parametrize("status", ["", "starting", "pending", "paused", "stopped", "cancelled", "failed"])
 def test_job_ui_target_rejects_an_inactive_service(status):
     handle = {
         "url": "http://10.0.4.26:8088/",
@@ -243,3 +250,10 @@ def test_job_ui_target_rejects_an_inactive_service(status):
 
     with pytest.raises(JobUiProxyError, match="not running"):
         _job_ui_target_url(handle, port=8088, path="", query="")
+
+
+def test_job_ui_proxy_rejects_a_failed_readiness_receipt():
+    handle = {"status": "running", "url": "http://worker:8080/",
+              "metadata": {"readiness": {"ready": False}}}
+    with pytest.raises(JobUiProxyError, match="not running"):
+        _job_ui_target_url(handle, port=8080, path="", query="")

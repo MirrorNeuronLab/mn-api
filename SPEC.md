@@ -150,6 +150,16 @@ No artificial completion percentage is inferred from elapsed time.
   its explicitly allowlisted companion ports only while the handle is running;
   paused, stopped, cancelled, and failed handles are not proxied. The API
   itself does not expose a general remote-proxy route.
+  Job UI discovery rechecks the exact page and its same-origin code assets
+  through the shared Web UI SDK probe from the proxy host. Registration or a
+  previously passing service check cannot establish readiness. The returned
+  `web_ui.metadata.readiness` receipt is current; an unreachable running handle
+  is projected as `starting` without rewriting durable lifecycle state. Inactive
+  handles are never promoted. The proxy rejects unready handles and forwards
+  live multipart bytes as they arrive rather than waiting for a full buffer.
+  Discovery carries `metadata.load_event` (`dom-ready` by default, optionally
+  `did-finish-load`) from the current service or its matching SDK claim. This
+  desktop visibility policy never bypasses the page/asset readiness check.
   Only executable `type: service` jobs are single-run: ordinary second starts
   return HTTP 409 Problem Details with code `service_run_exists`, while explicit
   `replace_existing_run` requires a fresh caller-supplied `run_id` and returns

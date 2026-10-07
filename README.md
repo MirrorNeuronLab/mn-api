@@ -217,6 +217,16 @@ the dashboard host and explicitly declared companion ports recorded for that
 job while the handle is running. Paused, stopped, cancelled, and failed
 services are rejected instead of forwarding to an unavailable upstream. It is
 not a public API route or a general-purpose network proxy.
+Every UI read verifies the exact page and same-origin scripts/stylesheets from
+the proxy host using `mn-python-sdk-web-ui`. A registered service or an old ready
+receipt alone is insufficient. Unreachable running handles return `starting`
+with `metadata.readiness.ready: false`; the next read can confirm recovery.
+The proxy refuses unready handles. Live video bytes are forwarded promptly,
+without waiting for a full 64 KiB buffer or for the stream to end.
+The desktop defaults to `dom-ready`. A blueprint can select `did-finish-load`
+through the Web UI SDK claim's `load_event` parameter (or Core service
+`meta.load_event`). Registry projections preserve claimed load policy only for
+the same current page; they never adopt a stale claim's address or lifecycle.
 Job UI reads prefer the Web UI skill's cross-node handle under shared storage
 and fall back to the host-local job-data handle. This lets a DockerWorker on a
 federated owner publish its OS-selected listener while the browser continues to

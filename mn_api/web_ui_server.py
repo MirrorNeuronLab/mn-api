@@ -318,7 +318,11 @@ def _job_ui_target_url(
     websocket: bool = False,
 ) -> str:
     status = str(web_ui.get("status") or "").strip().lower()
-    if status in {"paused", "stopped", "cancelled", "canceled", "failed"}:
+    metadata = web_ui.get("metadata")
+    readiness = metadata.get("readiness") if isinstance(metadata, dict) else None
+    if status not in {"running", "ready", "passing"} or (
+        isinstance(readiness, dict) and readiness.get("ready") is not True
+    ):
         raise JobUiProxyError(409, "The job Web UI service is not running.")
     raw_url = web_ui.get("url")
     parsed = urllib.parse.urlsplit(str(raw_url or ""))
@@ -493,7 +497,9 @@ def _stream_response(upstream_response) -> Iterable[bytes]:
 
 def _stream_binary_response(upstream_response) -> Iterable[bytes]:
     try:
-        while chunk := upstream_response.read(64 * 1024):
+        # read(n) waits for a full buffer on a live HTTPResponse. read1(n)
+        # forwards available bytes promptly, including the first video frame.
+        while chunk := upstream_response.read1(64 * 1024):
             yield chunk
     finally:
         upstream_response.close()
