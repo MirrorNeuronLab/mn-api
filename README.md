@@ -16,6 +16,10 @@ streams large assets to the shared blob store and packages declared
 Manifest expansion, config application, dependency localization, environment
 injection, and topology lowering use the SDK's shared manifest-preparation
 path, the same path used by `mn blueprint run`.
+Local-only blueprints with a host OS requirement prepare native Python workers
+and a separate Core supervision proxy. The API requires the native SDK service's
+`mn.native.host-python.v1` response before submission. Its SDK `local-source`
+extra preserves SCM versions and extras on staged dependencies.
 After a run starts, the API uses the SDK run-store writer to persist the same
 public monitor manifest as the CLI, keeping generated control nodes and
 internal runtime staff out of the workflow step view.

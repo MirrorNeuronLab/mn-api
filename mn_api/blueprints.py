@@ -1596,10 +1596,15 @@ def prepare_hostlocal_python_environments_for_submission(
             raise RuntimeError(f"{node_id}: HostLocal Python environment preparation did not return a runtime path")
         python_environment["path"] = runtime_path
         if native_host:
+            if response.get("native_host_protocol") != "mn.native.host-python.v1" or not response.get("bridge_runtime_path"):
+                raise RuntimeError("Native host Python support is unavailable. Update the native SDK and restart its service.")
             config[NATIVE_ENVIRONMENT_KEY] = {
                 "python": str(Path(str(response.get("host_path") or runtime_path)) / "bin" / "python"),
                 "target": str(response.get("native_target") or ""),
+                "environment": dict(python_environment),
             }
+            config["python_environment"] = {"packages": ["mirrorneuron-python-sdk>1.3,<2"],
+                                            "path": str(response["bridge_runtime_path"])}
         prepared.append(
             {
                 "node_id": node_id,

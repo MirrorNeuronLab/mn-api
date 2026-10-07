@@ -183,6 +183,11 @@ No artificial completion percentage is inferred from elapsed time.
   into SDK preparation before forwarding Job creation. Distributed workflows
   prepare HostLocal Python environments on that owner without changing their
   placement declaration.
+- Local-only blueprints with a host OS requirement prepare HostLocal Python on
+  the native host and prepare a separate Core SDK proxy. Native preparation
+  must return `mn.native.host-python.v1` and the proxy environment before
+  submission. Extras and local SCM version identities use shared SDK helpers;
+  API installation includes the SDK's `local-source` extra.
 - Background output relays poll the execution run ID, which remains separate
   from the durable job ID used for definition paths and launch responses.
   Starting a catalog-backed stable Job through `/jobs/{job_id}/runs` creates the
