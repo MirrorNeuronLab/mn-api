@@ -188,6 +188,7 @@ No artificial completion percentage is inferred from elapsed time.
   must return `mn.native.host-python.v1` and the proxy environment before
   submission. Extras and local SCM version identities use shared SDK helpers;
   API installation includes the SDK's `local-source` extra.
+  The SDK dependency floor is `1.3.58.dev46`, below `2.0`.
 - Background output relays poll the execution run ID, which remains separate
   from the durable job ID used for definition paths and launch responses.
   Starting a catalog-backed stable Job through `/jobs/{job_id}/runs` creates the

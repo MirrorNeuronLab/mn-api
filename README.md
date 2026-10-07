@@ -20,6 +20,7 @@ Local-only blueprints with a host OS requirement prepare native Python workers
 and a separate Core supervision proxy. The API requires the native SDK service's
 `mn.native.host-python.v1` response before submission. Its SDK `local-source`
 extra preserves SCM versions and extras on staged dependencies.
+The API requires SDK `>=1.3.58.dev46,<2` for this native execution contract.
 After a run starts, the API uses the SDK run-store writer to persist the same
 public monitor manifest as the CLI, keeping generated control nodes and
 internal runtime staff out of the workflow step view.
