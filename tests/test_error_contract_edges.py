@@ -111,3 +111,22 @@ def test_invalid_argument_does_not_build_validation_report_from_plain_detail():
     assert response.status_code == 422
     assert body["code"] == "MN_INVALID_ARGUMENT"
     assert "errors" not in body
+
+
+def test_measured_core_admission_problem_survives_rest_boundary():
+    response = handle_grpc_error(RpcError(grpc.StatusCode.INTERNAL,
+        'placement_failed: private@10.0.4.32 token=secret\nmn_admission_v1:' + json.dumps({"blockers": [{
+            "code": "MN_GPU_MEMORY_UNAVAILABLE", "node_index": 1, "node_label": "spark",
+            "resource": "gpu_memory_free_mb", "available": 8.17, "required": 48, "unit": "GiB",
+            "message": "secret", "hint": "secret", "path": "/Users/private",
+        }]})), run_start=True)
+    body = json.loads(response.body)
+    assert response.status_code == 503
+    assert body["code"] == "MN_GPU_MEMORY_UNAVAILABLE"
+    assert body["problem_code"] == 2001
+    assert body["category"] == "capacity" and body["retryable"] is True
+    assert body["detail"] == "spark has 8.17 GiB of free GPU memory; this work requires 48 GiB."
+    assert "unload unused models" in body["hint"]
+    assert body["details"]["blockers"][0]["available"] == 8.17
+    assert "secret" not in response.body.decode()
+    assert "private" not in response.body.decode()

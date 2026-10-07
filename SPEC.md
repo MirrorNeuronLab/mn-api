@@ -368,19 +368,36 @@ A mixed placement failure reports all observed blockers rather than claiming
 that every node lacks memory. Unknown/mixed causes require inspection.
 
 Placement errors include bounded `details.blockers` with code, safe message,
-one-based node index, and (when measured) required/available amounts and unit.
-Node indices refer to the sorted placement snapshot, not persistent node IDs.
-Host memory uses total capacity; GPU memory uses free capacity. Memory values
-are displayed in GiB (1024 MiB), matching placement's existing conversion.
-Missing measurements are not invented. Raw node names, paths and diagnostics
-are excluded from public blockers. The human summary shows up to eight blockers;
-structured details contain up to 100. Legacy `RuntimeError` catches continue to
-work for rejected placement, while SDK normalization retains the structured
-identity, including through launch exception wrappers.
+one-based node index, and (when measured) required/available amounts, `unit`,
+`resource`, and `operator` (`>=` or `>`). A validated `node_label` may identify
+an explicitly reported friendly PC name; raw runtime node IDs and addresses are
+not labels. Node indices refer to the sorted placement snapshot, not persistent
+node IDs. Preparation host-memory requirements use total capacity. Core run
+admission reports memory available for runs after limits and reservations.
+GPU device memory uses free capacity, preserving a reported zero. Values are
+shown in GiB (1024 MiB), matching existing placement conversion. Missing
+measurements are not invented. Public summaries contain no paths, secrets,
+raw messages, or arbitrary diagnostics; they show up to eight blockers, while
+structured details contain up to 100. Truncated reports retain the general
+placement code rather than claiming a cluster-wide resource shortage.
 
-Core's legacy overload and no-schedulable-node markers are normalized centrally
-in the SDK at run-start boundaries. Other operations retain their existing
-transport error interpretation. No Core wire protocol change is required.
+Core appends a bounded `mn_admission_v1` JSON marker to `placement_failed:` gRPC
+details. The SDK validates the versioned blocker fields, owns the numeric error
+catalog and messages, and emits the same `AppError` through CLI and REST. For
+example: `spark has 8.17 GiB of free GPU memory; this work requires 48 GiB.`
+Code `MN_GPU_MEMORY_UNAVAILABLE` / `2001` suggests stopping other GPU workloads
+or unloading unused models before retrying. Busy CPU/GPU reservations use
+`MN_RESOURCE_EXHAUSTED` / `2003`, while insufficient CPU/GPU hardware retains
+`1002` / `1003`. Requirements and scheduling decisions remain unchanged.
+Malformed, unknown, or legacy generic device errors do not imply a memory cause.
+Legacy `RuntimeError` catches still work for preparation placement failures;
+normalization retains structured identity through launch exception wrappers.
+
+Core's legacy overload and no-schedulable-node markers remain normalized at
+run-start boundaries. Other operations retain their existing transport error
+interpretation. No protobuf shape or numeric code changes are required. Deploy
+the updated Core and SDK together to enable measured run-admission errors;
+older Core versions retain their existing, less specific error behavior.
 
 ### Numeric problem codes for automation
 

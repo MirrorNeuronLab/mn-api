@@ -430,6 +430,11 @@ CLI JSON and API Problem Details include numeric `problem_code` (for example,
 1001 for memory requirements or 3001 for scheduling), `category`, `retryable`, and bounded
 structured placement `details.blockers`. See [SPEC.md](SPEC.md#shared-admission-error-contract)
 for codes and retry semantics.
+Measured admission blockers also identify a validated friendly PC name and the
+available/required resource amounts. GPU memory shortages use `2001` and suggest
+stopping other GPU workloads or unloading unused models before retrying. Updated
+Core and SDK services are required for measured run-start errors; admission
+requirements remain enforced.
 
 ## Job performance
 

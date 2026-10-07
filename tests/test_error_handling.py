@@ -75,7 +75,7 @@ def test_placement_failure_returns_shared_hardware_problem():
     assert body["problem_code"] == 1001
     assert body["category"] == "hardware"
     assert body["retryable"] is False
-    assert "requires 48 GiB; available 24 GiB" in body["detail"]
+    assert "has 24 GiB of host memory; this work requires 48 GiB" in body["detail"]
     assert body["details"]["blockers"][0]["available"] == 24
     assert "secret" not in response.text
     assert "/Users" not in response.text
