@@ -5,11 +5,12 @@ from fastapi import APIRouter, Depends, Header, Query, status
 from mn_api import state
 from mn_api.api_models import (
     BlueprintAdd,
+    BlueprintPageResponse,
     BlueprintRemove,
+    BlueprintResource,
     BlueprintRunCreate,
     BlueprintValidation,
     CleanupCreate,
-    PageResponse,
     ResourceModel,
 )
 from mn_api.blueprint_additions import add_catalog_blueprint, blueprint_public_projection
@@ -38,7 +39,10 @@ def get_launch_progress(progress_id: str, _principal=Depends(require_auth)):
     return public_progress_snapshot(progress_id)
 
 
-@router.get("/blueprints", operation_id="list_blueprints", tags=["blueprints"], response_model=PageResponse)
+@router.get(
+    "/blueprints", operation_id="list_blueprints", tags=["blueprints"],
+    response_model=BlueprintPageResponse, response_model_exclude_unset=True,
+)
 def list_blueprints(
     category: str | None = None,
     page_size: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
@@ -60,7 +64,10 @@ def list_blueprints(
     )
 
 
-@router.get("/blueprints/{blueprint_id}", operation_id="get_blueprint", tags=["blueprints"], response_model=ResourceModel)
+@router.get(
+    "/blueprints/{blueprint_id}", operation_id="get_blueprint", tags=["blueprints"],
+    response_model=BlueprintResource, response_model_exclude_unset=True,
+)
 def get_blueprint(blueprint_id: str, _principal=Depends(require_auth)):
     _repo_root, blueprint = find_blueprint(_config(), blueprint_id)
     return blueprint_public_projection(blueprint)

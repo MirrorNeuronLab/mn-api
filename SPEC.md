@@ -1,5 +1,14 @@
 # MirrorNeuron API Specification
 
+## Blueprint review metadata
+
+Blueprint list and detail resources preserve the SDK catalog's `skills` list
+as `{name, version_constraint}` entries and the explicit `air-gapped` boolean.
+Skill source locations and other dependency metadata are excluded by the shared
+projection. An empty list denotes no declared skill dependencies. These read-only
+resources report requirements, not installed versions or per-run invocation
+history, and do not prepare runtime resources.
+
 ## Purpose
 
 `mn-api` is the HTTP gateway for the local MirrorNeuron runtime. It translates

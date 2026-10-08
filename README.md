@@ -181,6 +181,12 @@ safe to commit.
 
 ## Endpoint Summary
 
+`GET /api/v1/blueprints` and `GET /api/v1/blueprints/{id}` include the SDK's
+declared `skills` list with `{name, version_constraint}` entries and the explicit
+`air-gapped` flag. An empty skills list means no skill dependencies were declared;
+these are requirements, not installed versions or per-run invocation history.
+Upgrade the shared SDK with this API to expose this review metadata.
+
 All paths below are under `/api/v1`.
 
 - Capability: unauthenticated `GET /health` returns

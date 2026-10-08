@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr
 
 
 class StrictModel(BaseModel):
@@ -17,6 +17,21 @@ class ResourceModel(BaseModel):
 
 class PageResponse(StrictModel):
     items: list[ResourceModel]
+    next_page_token: str | None = None
+
+
+class BlueprintSkill(StrictModel):
+    name: StrictStr = Field(min_length=1)
+    version_constraint: StrictStr = Field(min_length=1)
+
+
+class BlueprintResource(ResourceModel):
+    skills: list[BlueprintSkill] | None = None
+    air_gapped: StrictBool | None = Field(default=None, alias="air-gapped")
+
+
+class BlueprintPageResponse(StrictModel):
+    items: list[BlueprintResource]
     next_page_token: str | None = None
 
 
