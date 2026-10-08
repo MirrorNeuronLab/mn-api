@@ -250,6 +250,7 @@ def create_job(
             progress_reporter(progress_id, "submit"),
             "Submit job definition.",
             "Waiting for the runtime to acknowledge the prepared definition.",
+            stage="job_submission",
         ):
             return _service().create_job(
                 manifest_json,

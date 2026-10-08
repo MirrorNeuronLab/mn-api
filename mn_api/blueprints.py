@@ -1301,7 +1301,8 @@ def load_blueprint_bundle(
     from mn_api import state
 
     with launch_activity(
-        progress_callback, "Read blueprint package.", "Reading and validating the blueprint and its referenced files."
+        progress_callback, "Read blueprint package.", "Reading and validating the blueprint and its referenced files.",
+        stage="bundle_validation",
     ):
         bundle_root = validate_blueprint_bundle(repo_root, blueprint)
     manifest_path = bundle_root / "manifest.json"
@@ -1360,6 +1361,7 @@ def load_blueprint_bundle(
         progress_callback,
         "Resolve workflow and dependencies.",
         "Compiling the workflow, resolving configuration, and preparing declared agent and skill packages.",
+        stage="workflow_dependencies",
     ):
         shared_preparation = prepare_manifest_submission(
             bundle_root,
@@ -1397,6 +1399,7 @@ def load_blueprint_bundle(
         "Prepare packaged models.",
         "Checking and importing declared model assets into Docker Model Runner.",
         "Large local model files can take several minutes to import.",
+        stage="packaged_models",
     ):
         package_payload_models_for_api(bundle_root, manifest)
     with launch_activity(
@@ -1404,6 +1407,7 @@ def load_blueprint_bundle(
         "Prepare sandbox images.",
         "Checking or building declared OpenShell images.",
         "A first image build can take several minutes.",
+        stage="sandbox_images",
     ):
         prepare_openshell_custom_images(bundle_root, manifest)
 
@@ -1458,6 +1462,7 @@ def load_blueprint_bundle(
             "Preparing HostLocal Python environments.",
             "Building or reusing isolated Python environments required by local workflow services.",
             "A first launch may take several minutes while Python packages are installed.",
+            stage="host_environments",
         ):
             prepare_hostlocal_python_environments_for_submission(
                 bundle_root,
@@ -1466,7 +1471,8 @@ def load_blueprint_bundle(
             )
 
     with launch_activity(
-        progress_callback, "Stage workflow files.", "Copying and verifying payload assets and local inputs."
+        progress_callback, "Stage workflow files.", "Copying and verifying payload assets and local inputs.",
+        stage="payload_staging",
     ):
         payloads = stage_payload_assets(
             manifest,
@@ -1477,6 +1483,7 @@ def load_blueprint_bundle(
         progress_callback,
         "Stage runtime support.",
         "Packaging the resolved descriptor, dependencies, and runtime helpers.",
+        stage="runtime_support",
     ):
         stage_blueprint_payloads_for_submission(manifest, payloads, bundle_dir=bundle_root)
     docker_workers = any(
@@ -1498,6 +1505,7 @@ def load_blueprint_bundle(
             else "Preparing declared storage, services, and worker environments."
         ),
         "The first launch can take several minutes while runtime dependencies are installed. Keep Docker running.",
+        stage="runtime_resources",
     ):
         prepared = prepare_job_submission(
             manifest,

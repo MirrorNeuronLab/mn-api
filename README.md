@@ -532,3 +532,15 @@ IDs, member capacity (2–16), goalKey/commonGoalKey, groupKey, peersKey, and
 sameRuntime. Group peer configuration uses stable `{jobId, blueprintId}` entries.
 Invalid declarations and private metadata are omitted. Legacy pair declarations
 remain capacity two. This contract does not launch work or grant approvals.
+
+
+## Preparation timing
+
+Blueprint preparation and job submission write local INFO events
+`worker.preparation.start` and `worker.preparation.finish`, including a static
+stage, outcome and elapsed milliseconds. Timings cover bundle validation,
+workflow/dependency resolution, packaged models, sandbox images, host Python
+environments, payload/runtime staging, native resources and job submission.
+They are recorded even without a launch-progress ID. Labels, details,
+configuration, commands and exception contents are excluded. Progress and
+logging sink failures do not change the submission result or deadlines.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -9,6 +10,7 @@ from threading import Event, Thread
 
 ProgressCallback = Callable[[str, str, str], None]
 HEARTBEAT_SECONDS = 10.0
+logger = logging.getLogger("mn-api")
 
 
 def progress_reporter(progress_id: str | None, phase: str = "prepare_bundle") -> ProgressCallback | None:
@@ -76,13 +78,21 @@ def public_progress_snapshot(progress_id: str) -> dict:
 
 @contextmanager
 def launch_activity(
-    report: ProgressCallback | None, message: str, detail: str, expectation: str = ""
+    report: ProgressCallback | None, message: str, detail: str, expectation: str = "",
+    *, stage: str = "preparation"
 ) -> Iterator[None]:
     """Keep the existing progress record current without inspecting runtime logs."""
-    if report is None:
-        yield
-        return
     started = time.monotonic()
+    outcome = "failed"
+
+    def timing(event: str, status: str) -> None:
+        try:
+            logger.info("worker.preparation.%s stage=%s outcome=%s duration_ms=%d",
+                        event, stage, status, max(0, int((time.monotonic() - started) * 1000)))
+        except Exception:
+            pass
+
+    timing("start", "running")
     stopped = Event()
 
     def emit(current_detail: str) -> None:
@@ -97,11 +107,16 @@ def launch_activity(
             elapsed = max(0, int(time.monotonic() - started))
             emit(f"{detail} Still waiting; {elapsed}s elapsed in this stage.")
 
-    emit(detail)
-    thread = Thread(target=heartbeat, name="mn-api-launch-progress", daemon=True)
-    thread.start()
+    thread = None
+    if report is not None:
+        emit(detail)
+        thread = Thread(target=heartbeat, name="mn-api-launch-progress", daemon=True)
+        thread.start()
     try:
         yield
+        outcome = "completed"
     finally:
         stopped.set()
-        thread.join()
+        if thread is not None:
+            thread.join()
+        timing("finish", outcome)

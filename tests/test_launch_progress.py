@@ -42,6 +42,32 @@ def test_progress_sink_failure_does_not_change_operation(monkeypatch):
         pass
 
 
+@pytest.mark.parametrize("fail", [False, True])
+def test_local_stage_timings_do_not_require_progress_or_expose_details(monkeypatch, fail):
+    records = []
+    monkeypatch.setattr(launch_progress.logger, "info", lambda message, *args: records.append(message % args))
+    error = RuntimeError("private configuration")
+    try:
+        with launch_progress.launch_activity(None, "private label", "private detail", stage="runtime_resources"):
+            if fail:
+                raise error
+    except RuntimeError as caught:
+        assert caught is error
+    assert len(records) == 2
+    assert "stage=runtime_resources" in records[-1]
+    assert f"outcome={'failed' if fail else 'completed'}" in records[-1]
+    assert "duration_ms=" in records[-1]
+    assert "private" not in "\n".join(records)
+
+
+def test_timing_sink_cannot_change_preparation(monkeypatch):
+    def broken(*args):
+        raise OSError("logging unavailable")
+    monkeypatch.setattr(launch_progress.logger, "info", broken)
+    with launch_progress.launch_activity(None, "prepare", "prepare"):
+        pass
+
+
 def test_job_progress_can_be_read_while_submission_is_blocked(monkeypatch, tmp_path):
     client, runtime = _client(monkeypatch)
     monkeypatch.setenv("MN_LAUNCH_PROGRESS_DIR", str(tmp_path))
