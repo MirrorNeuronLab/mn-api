@@ -149,7 +149,7 @@ def _runtime_output_id(run_id: str, *, run: dict[str, Any] | None = None) -> str
         value = run.get(key)
         if value:
             return str(value)
-    for ref_key in ("result_ref", "workflow_state_ref"):
+    for ref_key in ("run_data_ref", "result_ref", "workflow_state_ref"):
         reference = run.get(ref_key)
         if isinstance(reference, dict):
             value = reference.get("run_id") or reference.get("runtime_run_id")
@@ -1100,7 +1100,7 @@ def stream_run_events(
                     )
                 )
             try:
-                payload = runtime_run_routes.get_run_events(run_id, 5000, None, principal)
+                payload = runtime_run_routes.get_run_events(runtime_id, 5000, None, principal)
             except HTTPException as exc:
                 if exc.status_code != 404:
                     raise

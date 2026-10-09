@@ -1556,6 +1556,29 @@ def test_run_monitor_overlays_canonical_terminal_status(monkeypatch):
     assert reads == ["run-1"]
 
 
+def test_active_run_events_use_canonical_data_reference_before_final_result(monkeypatch):
+    client, runtime = _client(monkeypatch)
+    runtime.get_run = lambda run_id: json.dumps({
+        "job_id": "job-1", "run_id": run_id, "status": "running",
+        "run_data_ref": {"run_id": "output-current", "submission_id": "definition-1"},
+        "result_ref": {"run_id": "bootstrap-old"},
+    })
+    event_ids = []
+    monkeypatch.setattr(jobs, "shared_run_dir", lambda _run_id: None)
+    monkeypatch.setattr(jobs, "shared_result_events", lambda *_args: [])
+    monkeypatch.setattr(jobs.runtime_run_routes, "get_run_events", lambda run_id, *_args: (
+        event_ids.append(run_id) or {"data": [{
+            "type": "source.acquisition.completed", "timestamp": "2026-01-01T00:00:00Z",
+        }]}
+    ))
+
+    response = client.get("/api/v1/runs/run-2/events")
+
+    assert response.status_code == 200
+    assert event_ids == ["output-current"]
+    assert response.json()["items"][0]["type"] == "source.acquisition.completed"
+
+
 def test_run_progress_uses_execution_id_when_output_id_differs(monkeypatch):
     client, runtime = _client(monkeypatch)
     runtime.get_run = lambda run_id: json.dumps({
@@ -1576,7 +1599,7 @@ def test_run_progress_uses_execution_id_when_output_id_differs(monkeypatch):
 
     def events_for_run(run_id, *_args):
         event_ids.append(run_id)
-        return {"items": []}
+        return {"items": [{"type": "source.acquisition.completed", "timestamp": "2026-01-01T00:00:00Z"}]}
 
     monkeypatch.setattr(jobs.runtime_job_routes, "_workflow_progress_snapshot_for_run", progress_for_run)
     monkeypatch.setattr(jobs.runtime_run_routes, "get_run_events", events_for_run)
@@ -1590,8 +1613,10 @@ def test_run_progress_uses_execution_id_when_output_id_differs(monkeypatch):
     stream = client.get("/api/v1/runs/run-2/events/stream?interval=0.25")
     assert stream.status_code == 200
     assert '"run_id":"run-2"' in stream.text
+    assert "event: source.acquisition.completed" in stream.text
+    assert '"resource":"/api/v1/runs/run-2"' in stream.text
     assert progress_ids == ["run-2", "run-2"]
-    assert event_ids == ["run-2"]
+    assert event_ids == ["output-1"]
 
 
 def test_shared_run_events_use_mapped_run_id_before_core_result_reference(monkeypatch):

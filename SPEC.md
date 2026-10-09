@@ -181,6 +181,9 @@ No artificial completion percentage is inferred from elapsed time.
   Individual run deletion never deletes job data.
 - Stable `job_id`, execution `run_id`/`execution_id`, and internal diagnostic
   `runtime_run_id` are separate identities. Clients use only `run_id` in URLs.
+  Output and saved-event reads use the canonical `run_data_ref` while work is
+  active, ahead of a final result reference. Run SSE uses that same output
+  identity for saved events and keeps the execution ID for progress/control.
 - Blueprint launch creates a stable job plus its first run unless an existing
   `job_id` is supplied, and returns both identities. Existing jobs receive the
   freshly prepared manifest and payloads through atomic bundle replacement
