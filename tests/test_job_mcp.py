@@ -212,7 +212,7 @@ def _configure(monkeypatch, runtime: MCPRuntime, *, token: str = "") -> None:
         SimpleNamespace(api_token=token, request_size_limit_bytes=1024 * 1024, cors_allow_origins=[]),
     )
     monkeypatch.setattr(job_mcp, "find_blueprint", _blueprint)
-    monkeypatch.setattr(job_mcp.runtime_job_routes, "_workflow_progress_snapshot_for_job", lambda _run_id: {"steps": []})
+    monkeypatch.setattr(job_mcp.runtime_job_routes, "_workflow_progress_snapshot_for_run", lambda _run_id: {"steps": []})
     monkeypatch.setattr(
         job_mcp.runtime_run_routes,
         "get_run_final_artifact",
@@ -632,7 +632,7 @@ def test_context_states_latest_result_partial_warning_and_bounds(monkeypatch):
     _configure(monkeypatch, runtime)
     monkeypatch.setattr(
         job_mcp.runtime_job_routes,
-        "_workflow_progress_snapshot_for_job",
+        "_workflow_progress_snapshot_for_run",
         lambda _run_id: {
             "status": "completed",
             "steps": [
@@ -656,7 +656,7 @@ def test_context_states_latest_result_partial_warning_and_bounds(monkeypatch):
 
     monkeypatch.setattr(
         job_mcp.runtime_job_routes,
-        "_workflow_progress_snapshot_for_job",
+        "_workflow_progress_snapshot_for_run",
         lambda _run_id: (_ for _ in ()).throw(RuntimeError("offline")),
     )
     partial = JobContextProvider().get_context("job-1")
@@ -979,3 +979,74 @@ def test_streamed_answers_keep_the_accepted_task_on_start_only(monkeypatch):
     provider.response_stream_command("job-response", "Weekdays", conversation_id=None, request_id="r",
                                      control={"action": "start", "cursor": 0}, assistance_task=task)
     assert runtime.queries[-1]["context"]["assistance_task"] == task
+
+
+def test_context_selects_job_latest_run_from_oldest_first_collection(monkeypatch):
+    runtime = MCPRuntime()
+    runtime.jobs["job-1"]["latest_run_id"] = "current-run"
+    runtime.runs["job-1"] = [
+        {"job_id": "job-1", "run_id": "old-run", "status": "failed"},
+        {"job_id": "job-1", "run_id": "current-run", "status": "running"},
+    ]
+    _configure(monkeypatch, runtime)
+
+    def unexpected_get_run(_run_id):
+        raise AssertionError("The current Run is already in the bounded collection")
+
+    runtime.get_run = unexpected_get_run
+    context = JobContextProvider().get_context("job-1")
+
+    assert context["latest_run"]["run_id"] == "current-run"
+    assert context["state"] == "running"
+    assert [run["run_id"] for run in context["recent_runs"]] == ["current-run", "old-run"]
+    assert runtime.list_run_calls == 1
+
+
+def test_context_reads_canonical_output_without_legacy_mapping(monkeypatch, tmp_path):
+    from mn_sdk.blueprint_support import append_human_event
+
+    runtime = MCPRuntime()
+    reference = {"storage": "syncthing", "submission_id": "definition-current", "run_id": "output-current"}
+    runtime.jobs["job-1"]["latest_run_id"] = "public-current"
+    runtime.runs["job-1"] = [{
+        "job_id": "job-1", "run_id": "public-current", "status": "running", "run_data_ref": reference,
+    }]
+    shared = tmp_path / "shared"
+    directory = shared / "submissions" / "definition-current" / "outputs" / "runs" / "output-current"
+    (directory / "workflow_state").mkdir(parents=True)
+    (directory / "workflow_state" / "runtime_context.json").write_text(json.dumps({"run_id": "output-current"}))
+    (directory / "final_artifact.json").write_text(json.dumps({"summary": "Published review"}))
+    monkeypatch.setenv("MN_SHARED_STORAGE_ROOT", str(shared))
+    monkeypatch.setenv("MN_HOST_SHARED_STORAGE_ROOT", str(shared))
+    monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "local-runs"))
+    read_final = job_mcp.runtime_run_routes.get_run_final_artifact
+    _configure(monkeypatch, runtime)
+    monkeypatch.setattr(job_mcp.runtime_run_routes, "get_run_final_artifact", read_final)
+    workflow_ids = []
+    monkeypatch.setattr(job_mcp.runtime_job_routes, "_workflow_progress_snapshot_for_run",
+                        lambda run_id: workflow_ids.append(run_id) or {"status": "running", "steps": []})
+
+    provider = JobContextProvider()
+    context = provider.get_context("job-1")
+
+    assert context["latest_run"]["run_id"] == "public-current"
+    assert context["latest_run"].get("result") == {"summary": "Published review"}
+    assert workflow_ids == ["public-current"]
+
+    append_human_event("output-current", "human_notice", {
+        "notice_id": "review-ready", "message": "The review is ready.",
+        "chat_delivery": "otterdesk_worker_chat",
+    }, runs_root=directory.parent)
+    activity = provider.get_next_activity("job-1")
+    assert activity["event_id"] == "review-ready"
+    assert activity["message"] == "The review is ready."
+    assert provider.get_next_activity("job-1", after_event_id="review-ready") is None
+
+    # A wrong binding must not pick up a stale local result with the same name.
+    stale = tmp_path / "local-runs" / "output-current"
+    stale.mkdir(parents=True)
+    (stale / "final_artifact.json").write_text(json.dumps({"summary": "Stale review"}))
+    (directory / "workflow_state" / "runtime_context.json").write_text(json.dumps({"run_id": "another-run"}))
+    invalid = JobContextProvider().get_context("job-1")
+    assert "result" not in invalid["latest_run"]
+    assert JobContextProvider().get_next_activity("job-1") is None

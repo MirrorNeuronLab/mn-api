@@ -105,6 +105,7 @@ class _ContextSnapshot:
     context: dict[str, Any]
     active_service_run_id: str
     loaded_at: float
+    run_data_ref: dict[str, Any] | None = None
 
 
 @dataclass
@@ -273,8 +274,15 @@ def _recent_run_records(service: RuntimeService, job: Mapping[str, Any], job_id:
     )
     run_items = [dict(item) for item in raw_items if isinstance(item, Mapping)][:MAX_RECENT_RUNS]
     latest_run_id = _first_text(job.get("latest_run_id"), job.get("latestRunId"))
-    if latest_run_id and not any(_first_text(item.get("run_id"), item.get("id")) == latest_run_id for item in run_items):
-        run_items.insert(0, _as_record(service.get_run(latest_run_id)))
+    if latest_run_id:
+        # Core's collection is oldest first. The Job owns current-run identity;
+        # reusing a listed record avoids an additional GetRun request.
+        latest = next((item for item in run_items
+                       if _first_text(item.get("run_id"), item.get("id")) == latest_run_id), None)
+        if latest is None:
+            latest = _as_record(service.get_run(latest_run_id))
+        run_items = [latest, *[item for item in run_items
+                              if _first_text(item.get("run_id"), item.get("id")) != latest_run_id]]
     return [item for item in run_items if item][:MAX_RECENT_RUNS]
 
 
@@ -287,7 +295,7 @@ def _runtime_output_id(run: Mapping[str, Any], public_run_id: str) -> str:
         value = _first_text(run.get(key))
         if value:
             return value
-    for key in ("result_ref", "workflow_state_ref"):
+    for key in ("run_data_ref", "result_ref", "workflow_state_ref"):
         reference = run.get(key)
         if not isinstance(reference, Mapping):
             continue
@@ -297,9 +305,16 @@ def _runtime_output_id(run: Mapping[str, Any], public_run_id: str) -> str:
     return public_run_id
 
 
+def _run_file_options(run: Mapping[str, Any]) -> dict[str, Any]:
+    reference = run.get("run_data_ref")
+    if isinstance(reference, Mapping) and reference.get("storage") == "syncthing":
+        return {"run_data_ref": dict(reference)}
+    return {}
+
+
 def _final_artifact_for_run(run: Mapping[str, Any], runtime_run_id: str) -> Any:
     try:
-        return runtime_run_routes.get_run_final_artifact(runtime_run_id, "authenticated")
+        return runtime_run_routes.get_run_final_artifact(runtime_run_id, "authenticated", **_run_file_options(run))
     except Exception as error:
         if not _is_not_found_error(error):
             raise
@@ -666,7 +681,7 @@ class JobContextProvider:
                 latest["run_id"] = run_id
             workflow_started = self._clock()
             try:
-                workflow = public_value(runtime_job_routes._workflow_progress_snapshot_for_job(runtime_run_id))
+                workflow = public_value(runtime_job_routes._workflow_progress_snapshot_for_run(run_id))
                 latest["workflow"] = safe_context_value(
                     {
                         key: workflow.get(key)
@@ -739,7 +754,8 @@ class JobContextProvider:
                 job.get("latest_run_id"),
             )
             active_service_run_id = _runtime_output_id(run, public_run_id)
-        return _ContextSnapshot(context, active_service_run_id, self._clock())
+        return _ContextSnapshot(context, active_service_run_id, self._clock(),
+                                _run_file_options(run).get("run_data_ref") if run else None)
 
     def _unavailable_context(
         self,
@@ -866,6 +882,7 @@ class JobContextProvider:
                 snapshot.active_service_run_id,
                 None,
                 "authenticated",
+                **({"run_data_ref": snapshot.run_data_ref} if snapshot.run_data_ref else {}),
             )
         except Exception:
             return None

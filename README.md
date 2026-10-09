@@ -297,6 +297,11 @@ logs, host paths, and unrestricted artifact bodies. Answers use
 grounded status summary when the model or Job RAG is unavailable. There is no
 REST, SSE, or UI chat surface.
 
+Job context selects the Job's explicit latest-run ID regardless of collection
+ordering, reusing its record from the bounded collection when available.
+Workflow evidence uses that execution ID; final files and saved activity use
+the exact canonical submission/output binding validated by the SDK.
+
 The Job endpoint negotiates MCP protocol `2026-07-28`. When the active Run has
 a pending `human_input_requested` event, context and response tools return an
 `io.modelcontextprotocol/input-required` result containing a bounded form

@@ -186,6 +186,9 @@ No artificial completion percentage is inferred from elapsed time.
   the exact SDK submission/run binding without requiring a legacy local mapping.
   Run SSE uses that same output
   identity for saved events and keeps the execution ID for progress/control.
+  Job MCP context selects the Job's explicit latest-run identity rather than
+  the first collection entry. Its workflow evidence uses the execution ID and
+  its file reads verify the canonical submission/output binding.
 - Blueprint launch creates a stable job plus its first run unless an existing
   `job_id` is supplied, and returns both identities. Existing jobs receive the
   freshly prepared manifest and payloads through atomic bundle replacement
