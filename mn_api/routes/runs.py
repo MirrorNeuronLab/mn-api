@@ -30,7 +30,7 @@ from mn_api.run_outputs import output_content_type, output_path_by_index, output
 from mn_api.run_store import read_json_file as _read_json_object
 from mn_api.run_store import run_dir_from_id
 from mn_api.run_store import runs_root as _runs_root
-from mn_sdk.shared_run_store import shared_run_dir
+from mn_sdk.shared_run_store import referenced_run_dir, shared_run_dir
 from mn_api.schemas import RunCompareRequest
 
 
@@ -107,8 +107,8 @@ def get_run_result(run_id: str, _auth=Depends(require_auth)):
     return _read_required_json_file(run_dir / "result.json", "result")
 
 
-def get_run_final_artifact(run_id: str, _auth=Depends(require_auth)):
-    run_dir = _ensure_run_exists(run_id)
+def get_run_final_artifact(run_id: str, _auth=Depends(require_auth), *, run_data_ref: dict[str, Any] | None = None):
+    run_dir = _ensure_run_exists(run_id, run_data_ref=run_data_ref)
     return _read_required_json_file(run_dir / "final_artifact.json", "final artifact")
 
 
@@ -116,9 +116,11 @@ def export_run(
     run_id: str,
     format: str = Query("json"),
     _auth=Depends(require_auth),
+    *,
+    run_data_ref: dict[str, Any] | None = None,
 ):
     try:
-        record = load_run(run_id, runs_root=_ensure_run_exists(run_id).parent, include_observability=True)
+        record = load_run(run_id, runs_root=_ensure_run_exists(run_id, run_data_ref=run_data_ref).parent, include_observability=True)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     normalized_format = format.lower().strip()
@@ -129,8 +131,8 @@ def export_run(
     raise HTTPException(status_code=400, detail="unsupported export format")
 
 
-def list_run_artifacts(run_id: str, _auth=Depends(require_auth)):
-    run_dir = _ensure_run_exists(run_id)
+def list_run_artifacts(run_id: str, _auth=Depends(require_auth), *, run_data_ref: dict[str, Any] | None = None):
+    run_dir = _ensure_run_exists(run_id, run_data_ref=run_data_ref)
     artifacts = [_artifact_ref(run_id, path, run_dir) for path in list_artifact_files(run_dir)]
     artifacts.extend(output_refs(run_id, run_dir))
     return {"run_id": run_id, "run_dir": str(run_dir), "artifacts": artifacts}
@@ -146,14 +148,14 @@ def reveal_run_artifact(run_id: str, artifact_path: str, _auth=Depends(require_a
     return {"ok": True, "path": str(path), "folder": str(path.parent)}
 
 
-def get_run_artifact(run_id: str, artifact_path: str, _auth=Depends(require_auth)):
-    run_dir = _ensure_run_exists(run_id)
+def get_run_artifact(run_id: str, artifact_path: str, _auth=Depends(require_auth), *, run_data_ref: dict[str, Any] | None = None):
+    run_dir = _ensure_run_exists(run_id, run_data_ref=run_data_ref)
     path = _artifact_file_path(run_dir, artifact_path)
     return FileResponse(path, media_type=artifact_content_type(path))
 
 
-def list_run_outputs(run_id: str, _auth=Depends(require_auth)):
-    run_dir = _ensure_run_exists(run_id)
+def list_run_outputs(run_id: str, _auth=Depends(require_auth), *, run_data_ref: dict[str, Any] | None = None):
+    run_dir = _ensure_run_exists(run_id, run_data_ref=run_data_ref)
     return {"run_id": run_id, "run_dir": str(run_dir), "outputs": output_refs(run_id, run_dir)}
 
 
@@ -169,8 +171,8 @@ def reveal_run_output(run_id: str, output_index: int, _auth=Depends(require_auth
     return {"ok": True, "path": str(path), "folder": str(path.parent)}
 
 
-def get_run_output(run_id: str, output_index: int, _auth=Depends(require_auth)):
-    run_dir = _ensure_run_exists(run_id)
+def get_run_output(run_id: str, output_index: int, _auth=Depends(require_auth), *, run_data_ref: dict[str, Any] | None = None):
+    run_dir = _ensure_run_exists(run_id, run_data_ref=run_data_ref)
     path = output_path_by_index(run_dir, output_index)
     if path is None or not path.is_file():
         raise HTTPException(status_code=404, detail="output not found")
@@ -182,8 +184,10 @@ def get_run_events(
     limit: int = Query(200, ge=0, le=5000),
     channel: str | None = Query(default=None),
     _auth=Depends(require_auth),
+    *,
+    run_data_ref: dict[str, Any] | None = None,
 ):
-    run_dir = _ensure_run_exists(run_id)
+    run_dir = _ensure_run_exists(run_id, run_data_ref=run_data_ref)
     tools = _observability_tools()
     if channel == "human":
         events = tools["read_human_events"](run_id, runs_root=run_dir.parent, limit=limit)
@@ -200,8 +204,10 @@ def get_run_logs(
     limit: int = Query(200, ge=0, le=5000),
     since: str | None = Query(default=None),
     _auth=Depends(require_auth),
+    *,
+    run_data_ref: dict[str, Any] | None = None,
 ):
-    run_dir = _ensure_run_exists(run_id)
+    run_dir = _ensure_run_exists(run_id, run_data_ref=run_data_ref)
     tools = _observability_tools()
     return {
         "run_id": run_id,
@@ -234,8 +240,8 @@ def get_run_timeline(
     }
 
 
-def get_run_observability_summary(run_id: str, _auth=Depends(require_auth)):
-    run_dir = _ensure_run_exists(run_id)
+def get_run_observability_summary(run_id: str, _auth=Depends(require_auth), *, run_data_ref: dict[str, Any] | None = None):
+    run_dir = _ensure_run_exists(run_id, run_data_ref=run_data_ref)
     tools = _observability_tools()
     summary = tools["read_run_observability_summary"](run_id, runs_root=run_dir.parent)
     if not summary:
@@ -289,8 +295,10 @@ def get_run_resources(
     window: str = Query("24h"),
     bucket: str = Query("1h"),
     _auth=Depends(require_auth),
+    *,
+    run_data_ref: dict[str, Any] | None = None,
 ):
-    run_dir = _ensure_run_exists(run_id)
+    run_dir = _ensure_run_exists(run_id, run_data_ref=run_data_ref)
     tools = _observability_tools()
     return tools["read_run_resources"](
         run_id,
@@ -321,8 +329,10 @@ def get_run_human_events(
     run_id: str,
     status: str | None = Query(default=None),
     _auth=Depends(require_auth),
+    *,
+    run_data_ref: dict[str, Any] | None = None,
 ):
-    run_dir = _human_event_run_dir(run_id)
+    run_dir = _human_event_run_dir(run_id, run_data_ref=run_data_ref)
     tools = _observability_tools()
     events = (
         tools["list_pending_human_requests"](run_id, runs_root=run_dir.parent)
@@ -337,8 +347,10 @@ def post_run_human_response(
     request_id: str,
     payload: dict[str, Any],
     _auth=Depends(require_auth),
+    *,
+    run_data_ref: dict[str, Any] | None = None,
 ):
-    run_dir = _human_event_run_dir(run_id)
+    run_dir = _human_event_run_dir(run_id, run_data_ref=run_data_ref)
     tools = _observability_tools()
     pending = tools["list_pending_human_requests"](run_id, runs_root=run_dir.parent)
     if not any((event.get("payload") or {}).get("request_id") == request_id for event in pending):
@@ -351,20 +363,29 @@ def post_run_human_ack(
     notice_id: str,
     payload: dict[str, Any] | None = None,
     _auth=Depends(require_auth),
+    *,
+    run_data_ref: dict[str, Any] | None = None,
 ):
-    run_dir = _human_event_run_dir(run_id)
+    run_dir = _human_event_run_dir(run_id, run_data_ref=run_data_ref)
     tools = _observability_tools()
     return tools["acknowledge_human_notice"](run_id, notice_id, payload or {}, runs_root=run_dir.parent)
 
 
-def _human_event_run_dir(run_id: str) -> Path:
+def _human_event_run_dir(run_id: str, *, run_data_ref: dict[str, Any] | None = None) -> Path:
     """Use a verified mapped submission when it owns the run's human ledger."""
-    run_dir = _ensure_run_exists(run_id)
+    run_dir = _ensure_run_exists(run_id, run_data_ref=run_data_ref)
+    if run_data_ref is not None:
+        return run_dir
     shared = shared_run_dir(run_id)
     return shared or run_dir
 
 
-def _ensure_run_exists(run_id: str) -> Path:
+def _ensure_run_exists(run_id: str, *, run_data_ref: dict[str, Any] | None = None) -> Path:
+    if run_data_ref is not None:
+        directory = referenced_run_dir(run_data_ref)
+        if directory is None or directory.name != run_id:
+            raise HTTPException(status_code=404, detail="run not found")
+        return directory
     run_dir = _run_dir(run_id)
     if not run_dir.exists():
         raise HTTPException(status_code=404, detail="run not found")

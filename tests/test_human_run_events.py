@@ -1,4 +1,6 @@
 """Human responses follow the authoritative mapped run ledger."""
+import json
+
 import pytest
 from fastapi import HTTPException
 from mn_sdk.blueprint_support import append_human_event, list_pending_human_requests
@@ -17,7 +19,7 @@ def test_completed_shared_run_human_choice_is_read_and_recorded_in_shared_ledger
         {"request_id": "review-1", "prompt": "Which direction?", "options": ["Investigate further"]},
         runs_root=shared.parent,
     )
-    monkeypatch.setattr(runs, "_ensure_run_exists", lambda _run_id: local)
+    monkeypatch.setattr(runs, "_ensure_run_exists", lambda _run_id, **_kwargs: local)
     monkeypatch.setattr(runs, "shared_run_dir", lambda _run_id: shared)
 
     events = runs.get_run_human_events("run-1", status="pending")
@@ -42,7 +44,7 @@ def test_local_run_human_choice_stays_local_when_no_mapped_shared_run(tmp_path, 
         {"request_id": "review-1", "prompt": "What next?"},
         runs_root=local.parent,
     )
-    monkeypatch.setattr(runs, "_ensure_run_exists", lambda _run_id: local)
+    monkeypatch.setattr(runs, "_ensure_run_exists", lambda _run_id, **_kwargs: local)
     monkeypatch.setattr(runs, "shared_run_dir", lambda _run_id: None)
 
     recorded = runs.post_run_human_response(
@@ -50,3 +52,21 @@ def test_local_run_human_choice_stays_local_when_no_mapped_shared_run(tmp_path, 
     )
     assert recorded["payload"]["response"]["action"] == "Defer"
     assert (local / "human.jsonl").is_file()
+
+
+def test_active_human_response_uses_verified_canonical_submission(tmp_path, monkeypatch):
+    shared = tmp_path / "shared"
+    directory = shared / "submissions" / "definition-current" / "outputs" / "runs" / "output-current"
+    (directory / "workflow_state").mkdir(parents=True)
+    (directory / "workflow_state" / "runtime_context.json").write_text(json.dumps({"run_id": "output-current"}))
+    reference = {"storage": "syncthing", "submission_id": "definition-current", "run_id": "output-current"}
+    monkeypatch.setenv("MN_SHARED_STORAGE_ROOT", str(shared))
+    monkeypatch.setenv("MN_HOST_SHARED_STORAGE_ROOT", str(shared))
+    monkeypatch.setattr(runs, "shared_run_dir", lambda _id: pytest.fail("canonical read must not scan legacy mappings"))
+    append_human_event("output-current", "human_input_requested", {"request_id": "review-1", "prompt": "What next?"}, runs_root=directory.parent)
+
+    pending = runs.get_run_human_events("output-current", status="pending", run_data_ref=reference)
+    assert pending["data"][0]["payload"]["request_id"] == "review-1"
+    response = runs.post_run_human_response("output-current", "review-1", {"response": {"action": "Defer"}}, run_data_ref=reference)
+    assert response["payload"]["response"]["action"] == "Defer"
+    assert list_pending_human_requests("output-current", runs_root=directory.parent) == []

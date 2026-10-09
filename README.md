@@ -28,7 +28,9 @@ Run workflow-progress reads that saved execution manifest before the stable Job
 definition and replays the recent runtime history needed to reconstruct its
 step state. Active progress exposes a failure only when the run has failed.
 Run file and event reads resolve the canonical `run_data_ref` before a final
-result exists. Live streams read those same saved events while retaining the
+result exists. The SDK verifies the exact submission/run directory and its saved
+identity before files are read; no legacy local mapping is required. Live
+streams read those same saved events while retaining the
 public execution ID for progress and control.
 For durable Job runs, it starts the shared host output relay even when the
 definition and configuration are unchanged. The relay waits for the terminal

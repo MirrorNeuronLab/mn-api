@@ -165,6 +165,22 @@ def _runtime_output_id(run_id: str, *, run: dict[str, Any] | None = None) -> str
     return run_id
 
 
+def _runtime_output_location(run_id: str) -> tuple[str, dict[str, Any]]:
+    """Carry Core's exact data binding into file readers without another RPC."""
+    try:
+        run = _service().get_run(run_id)
+    except Exception:
+        if stored_run(run_id) is None:
+            raise
+        return run_id, {}
+    runtime_id = _runtime_output_id(run_id, run=run)
+    reference = run.get("run_data_ref")
+    if (isinstance(reference, dict) and reference.get("storage") == "syncthing"
+            and reference.get("run_id") == runtime_id):
+        return runtime_id, {"run_data_ref": reference}
+    return runtime_id, {}
+
+
 def _resolve_run_result_reference(run_id: str) -> Any | None:
     run = _service().get_run(run_id)
     reference = run.get("result_ref")
@@ -1002,8 +1018,8 @@ def list_run_logs(
     page_token: str | None = None,
     principal: str = Depends(require_auth),
 ):
-    runtime_id = _runtime_output_id(run_id)
-    value = runtime_run_routes.get_run_logs(runtime_id, level, 5000, since, principal)
+    runtime_id, output_location = _runtime_output_location(run_id)
+    value = runtime_run_routes.get_run_logs(runtime_id, level, 5000, since, principal, **output_location)
     return _page_run_records(
         value,
         keys=("items", "logs", "data"),
@@ -1023,10 +1039,10 @@ def list_run_events(
     page_token: str | None = None,
     principal: str = Depends(require_auth),
 ):
-    runtime_id = _runtime_output_id(run_id)
+    runtime_id, output_location = _runtime_output_location(run_id)
     missing = None
     try:
-        value = runtime_run_routes.get_run_events(runtime_id, 5000, channel, principal)
+        value = runtime_run_routes.get_run_events(runtime_id, 5000, channel, principal, **output_location)
     except HTTPException as exc:
         if exc.status_code != 404:
             raise
@@ -1072,7 +1088,7 @@ def stream_run_events(
     interval: float = Query(1.0, ge=0.25, le=30.0),
     principal: str = Depends(require_auth),
 ):
-    runtime_id = _runtime_output_id(run_id)
+    runtime_id, output_location = _runtime_output_location(run_id)
     try:
         resume_after = max(int(last_event_id or "0"), 0)
     except ValueError as exc:
@@ -1100,7 +1116,7 @@ def stream_run_events(
                     )
                 )
             try:
-                payload = runtime_run_routes.get_run_events(runtime_id, 5000, None, principal)
+                payload = runtime_run_routes.get_run_events(runtime_id, 5000, None, principal, **output_location)
             except HTTPException as exc:
                 if exc.status_code != 404:
                     raise
@@ -1151,9 +1167,9 @@ def stream_run_events(
 
 @router.get("/runs/{run_id}/resources", operation_id="get_run_resources", tags=["runs"], response_model=ResourceModel)
 def get_run_resources(run_id: str, window: str = "24h", bucket: str = "1h", principal=Depends(require_auth)):
-    runtime_id = _runtime_output_id(run_id)
+    runtime_id, output_location = _runtime_output_location(run_id)
     return _run_public(
-        runtime_run_routes.get_run_resources(runtime_id, window, bucket, principal),
+        runtime_run_routes.get_run_resources(runtime_id, window, bucket, principal, **output_location),
         run_id=run_id,
         runtime_run_id=runtime_id,
     )
@@ -1172,8 +1188,8 @@ def list_run_human_requests(
     page_token: str | None = None,
     principal: str = Depends(require_auth),
 ):
-    runtime_id = _runtime_output_id(run_id)
-    value = runtime_run_routes.get_run_human_events(runtime_id, request_status, principal)
+    runtime_id, output_location = _runtime_output_location(run_id)
+    value = runtime_run_routes.get_run_human_events(runtime_id, request_status, principal, **output_location)
     return _page_run_records(
         value,
         keys=("items", "requests", "data"),
@@ -1193,9 +1209,9 @@ def list_run_human_requests(
     response_model=ResourceModel,
 )
 def create_run_human_response(run_id: str, request_id: str, request: HumanResponse, principal=Depends(require_auth)):
-    runtime_id = _runtime_output_id(run_id)
+    runtime_id, output_location = _runtime_output_location(run_id)
     return _run_public(
-        runtime_run_routes.post_run_human_response(runtime_id, request_id, {"response": request.response}, principal),
+        runtime_run_routes.post_run_human_response(runtime_id, request_id, {"response": request.response}, principal, **output_location),
         run_id=run_id,
         runtime_run_id=runtime_id,
     )
@@ -1214,9 +1230,9 @@ def create_run_human_acknowledgement(
     request: HumanAcknowledgement,
     principal=Depends(require_auth),
 ):
-    runtime_id = _runtime_output_id(run_id)
+    runtime_id, output_location = _runtime_output_location(run_id)
     return _run_public(
-        runtime_run_routes.post_run_human_ack(runtime_id, request_id, request.model_dump(exclude_none=True), principal),
+        runtime_run_routes.post_run_human_ack(runtime_id, request_id, request.model_dump(exclude_none=True), principal, **output_location),
         run_id=run_id,
         runtime_run_id=runtime_id,
     )
@@ -1229,9 +1245,9 @@ def create_run_human_acknowledgement(
     response_model=ResourceModel,
 )
 def get_run_final_artifact(run_id: str, principal=Depends(require_auth)):
-    runtime_id = _runtime_output_id(run_id)
+    runtime_id, output_location = _runtime_output_location(run_id)
     try:
-        value = runtime_run_routes.get_run_final_artifact(runtime_id, principal)
+        value = runtime_run_routes.get_run_final_artifact(runtime_id, principal, **output_location)
     except HTTPException as exc:
         if exc.status_code != status.HTTP_404_NOT_FOUND:
             raise
@@ -1265,8 +1281,8 @@ def list_run_artifacts(
     page_token: str | None = None,
     principal: str = Depends(require_auth),
 ):
-    runtime_id = _runtime_output_id(run_id)
-    value = _run_public(runtime_run_routes.list_run_artifacts(runtime_id, principal), run_id=run_id, runtime_run_id=runtime_id)
+    runtime_id, output_location = _runtime_output_location(run_id)
+    value = _run_public(runtime_run_routes.list_run_artifacts(runtime_id, principal, **output_location), run_id=run_id, runtime_run_id=runtime_id)
     return _page_run_records(
         value,
         keys=("items", "artifacts"),
@@ -1280,7 +1296,8 @@ def list_run_artifacts(
 
 @router.get("/runs/{run_id}/artifacts/{artifact_path:path}", operation_id="download_run_artifact", tags=["runs"])
 def download_run_artifact(run_id: str, artifact_path: str, principal=Depends(require_auth)):
-    return runtime_run_routes.get_run_artifact(_runtime_output_id(run_id), artifact_path, principal)
+    runtime_id, output_location = _runtime_output_location(run_id)
+    return runtime_run_routes.get_run_artifact(runtime_id, artifact_path, principal, **output_location)
 
 
 @router.get("/runs/{run_id}/outputs", operation_id="list_run_outputs", tags=["runs"], response_model=PageResponse)
@@ -1290,8 +1307,8 @@ def list_run_outputs(
     page_token: str | None = None,
     principal: str = Depends(require_auth),
 ):
-    runtime_id = _runtime_output_id(run_id)
-    value = _run_public(runtime_run_routes.list_run_outputs(runtime_id, principal), run_id=run_id, runtime_run_id=runtime_id)
+    runtime_id, output_location = _runtime_output_location(run_id)
+    value = _run_public(runtime_run_routes.list_run_outputs(runtime_id, principal, **output_location), run_id=run_id, runtime_run_id=runtime_id)
     return _page_run_records(
         value,
         keys=("items", "outputs"),
@@ -1305,7 +1322,8 @@ def list_run_outputs(
 
 @router.get("/runs/{run_id}/outputs/{output_index}", operation_id="download_run_output", tags=["runs"])
 def download_run_output(run_id: str, output_index: int, principal=Depends(require_auth)):
-    return runtime_run_routes.get_run_output(_runtime_output_id(run_id), output_index, principal)
+    runtime_id, output_location = _runtime_output_location(run_id)
+    return runtime_run_routes.get_run_output(runtime_id, output_index, principal, **output_location)
 
 
 @router.get(
@@ -1315,9 +1333,9 @@ def download_run_output(run_id: str, output_index: int, principal=Depends(requir
     response_model=ResourceModel,
 )
 def get_run_observability(run_id: str, principal=Depends(require_auth)):
-    runtime_id = _runtime_output_id(run_id)
+    runtime_id, output_location = _runtime_output_location(run_id)
     return _run_public(
-        runtime_run_routes.get_run_observability_summary(runtime_id, principal),
+        runtime_run_routes.get_run_observability_summary(runtime_id, principal, **output_location),
         run_id=run_id,
         runtime_run_id=runtime_id,
     )
@@ -1330,13 +1348,14 @@ def get_run_snapshot(run_id: str, principal=Depends(require_auth)):
 
 @router.get("/runs/{run_id}/agent-graph", operation_id="get_run_agent_graph", tags=["runs"], response_model=ResourceModel)
 def get_run_agent_graph(run_id: str, principal=Depends(require_auth)):
-    runtime_id = _runtime_output_id(run_id)
+    runtime_id, output_location = _runtime_output_location(run_id)
     detail = runtime_job_routes._compact_job_detail(runtime_id)
-    event_payload = runtime_run_routes.get_run_events(runtime_id, 5000, None, principal)
+    event_payload = runtime_run_routes.get_run_events(runtime_id, 5000, None, principal, **output_location)
     graph = build_agent_graph(run_id, detail if isinstance(detail, dict) else {}, records(event_payload, "data", "events"))
     return _run_public(graph, run_id=run_id, runtime_run_id=runtime_id)
 
 
 @router.get("/runs/{run_id}/export", operation_id="export_run", tags=["runs"])
 def export_run(run_id: str, format: str = "json", principal=Depends(require_auth)):
-    return runtime_run_routes.export_run(_runtime_output_id(run_id), format, principal)
+    runtime_id, output_location = _runtime_output_location(run_id)
+    return runtime_run_routes.export_run(runtime_id, format, principal, **output_location)

@@ -1283,7 +1283,6 @@ def test_job_run_operation_replays_a_nonretryable_failure(monkeypatch, tmp_path)
     assert runtime.calls == [("get_job",)]
 
 
-
 def test_blueprint_addition_exposes_real_progress_result_and_local_sse(monkeypatch):
     client, _runtime = _client(monkeypatch)
     started = Event()
@@ -1577,6 +1576,44 @@ def test_active_run_events_use_canonical_data_reference_before_final_result(monk
     assert response.status_code == 200
     assert event_ids == ["output-current"]
     assert response.json()["items"][0]["type"] == "source.acquisition.completed"
+
+
+def test_active_run_files_resolve_exact_submission_without_legacy_mapping(monkeypatch, tmp_path):
+    client, runtime = _client(monkeypatch)
+    reference = {"storage": "syncthing", "submission_id": "definition-current", "run_id": "output-current"}
+    shared = tmp_path / "shared"
+    directory = shared / "submissions" / "definition-current" / "outputs" / "runs" / "output-current"
+    (directory / "workflow_state").mkdir(parents=True)
+    (directory / "workflow_state" / "runtime_context.json").write_text(json.dumps({"run_id": "output-current"}))
+    (directory / "events.jsonl").write_text(json.dumps({"type": "source.acquisition.completed", "ts": "2026-01-01T00:00:00Z"}) + "\n")
+    (directory / "snapshot.json").write_text(json.dumps({"source_count": 359}))
+    monkeypatch.setenv("MN_SHARED_STORAGE_ROOT", str(shared))
+    monkeypatch.setenv("MN_HOST_SHARED_STORAGE_ROOT", str(shared))
+    monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "local-runs"))
+    runtime.get_run = lambda run_id: json.dumps({
+        "job_id": "job-1", "run_id": run_id, "status": "completed", "run_data_ref": reference,
+    })
+    monkeypatch.setattr(jobs.runtime_job_routes, "_workflow_progress_snapshot_for_run", lambda _id: {"status": "completed", "steps": []})
+
+    events = client.get("/api/v1/runs/run-2/events")
+    assert events.status_code == 200, events.text
+    assert events.json()["items"][0]["type"] == "source.acquisition.completed"
+    artifacts = client.get("/api/v1/runs/run-2/artifacts")
+    assert artifacts.status_code == 200, artifacts.text
+    snapshot = client.get("/api/v1/runs/run-2/artifacts/snapshot.json")
+    assert snapshot.status_code == 200, snapshot.text
+    assert snapshot.json() == {"source_count": 359}
+    stream = client.get("/api/v1/runs/run-2/events/stream?interval=0.25")
+    assert stream.status_code == 200
+    assert "event: source.acquisition.completed" in stream.text
+    assert '"resource":"/api/v1/runs/run-2"' in stream.text
+
+    stale = tmp_path / "local-runs" / "output-current"
+    stale.mkdir(parents=True)
+    (stale / "events.jsonl").write_text(json.dumps({"type": "stale.event"}) + "\n")
+    (directory / "workflow_state" / "runtime_context.json").write_text(json.dumps({"run_id": "another-run"}))
+    assert client.get("/api/v1/runs/run-2/events").status_code == 404
+    assert client.get("/api/v1/runs/run-2/artifacts/snapshot.json").status_code == 404
 
 
 def test_run_progress_uses_execution_id_when_output_id_differs(monkeypatch):
