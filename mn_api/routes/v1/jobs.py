@@ -371,11 +371,11 @@ def get_job_latest_run_steps(job_id: str, _principal=Depends(require_auth)):
 
 
 @router.get("/jobs/{job_id}/ui", operation_id="get_job_ui", tags=["jobs"], response_model=ResourceModel)
-def get_job_ui(job_id: str, principal=Depends(require_auth)):
+def get_job_ui(job_id: str, principal=Depends(require_auth), check_readiness: bool = True):
     # Confirm the durable definition exists before reading its host-visible
     # shared UI handle. A UI belongs to the Job, not any individual Run.
     _service().get_job(job_id)
-    return public_value(runtime_job_routes.get_job_ui(job_id, principal))
+    return public_value(runtime_job_routes.get_job_ui(job_id, principal, check_readiness))
 
 
 def _prepare_catalog_job_update(

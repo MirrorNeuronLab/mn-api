@@ -257,3 +257,51 @@ def test_job_ui_proxy_rejects_a_failed_readiness_receipt():
               "metadata": {"readiness": {"ready": False}}}
     with pytest.raises(JobUiProxyError, match="not running"):
         _job_ui_target_url(handle, port=8080, path="", query="")
+
+
+@pytest.mark.parametrize("token,expected_check", [("test-token", False), ("wrong-token", True)])
+def test_only_authenticated_probe_can_load_an_unchecked_descriptor(monkeypatch, tmp_path, token, expected_check):
+    from mn_api.web_ui_server import proxy_job_ui_request
+
+    handle = {"status": "running", "url": "http://private-worker:8080/",
+              "metadata": {"readiness": {"ready": False}}}
+    checks = []
+
+    def load(_job_id, **kwargs):
+        checks.append(kwargs["check_readiness"])
+        return handle
+
+    class Upstream:
+        status = 200
+        headers = Message()
+
+        def getcode(self):
+            return 200
+
+        def read(self):
+            return b"page"
+
+        def close(self):
+            pass
+
+    def open_remote(request, **_kwargs):
+        assert request.get_header("Authorization") is None
+        assert request.get_header("X-mn-job-ui-probe") is None
+        return Upstream()
+
+    monkeypatch.setattr("mn_api.web_ui_server._load_job_web_ui", load)
+    monkeypatch.setattr("mn_api.web_ui_server.urllib.request.urlopen", open_remote)
+    response = proxy_job_ui_request(job_id="job-1", port=8080, path="", query="", method="GET",
+                                    request_headers=[("X-MN-Job-UI-Probe", "1"), ("Authorization", f"Bearer {token}")],
+                                    upstream_api="http://api/api/v1", api_token="test-token")
+    assert checks == [expected_check]
+    assert response.status_code == (409 if expected_check else 200)
+
+
+def test_probe_cannot_promote_inactive_services_or_expand_ports():
+    handle = {"status": "paused", "url": "http://worker:8080/"}
+    with pytest.raises(JobUiProxyError, match="not running"):
+        _job_ui_target_url(handle, port=8080, path="", query="", check_readiness=False)
+    handle["status"] = "running"
+    with pytest.raises(JobUiProxyError, match="not declared"):
+        _job_ui_target_url(handle, port=9999, path="", query="", check_readiness=False)

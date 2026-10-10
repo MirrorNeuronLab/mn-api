@@ -290,10 +290,16 @@ def test_health_capability_and_removed_routes(monkeypatch):
 
 def test_job_ui_is_bound_to_the_durable_job(monkeypatch):
     client, _runtime = _client(monkeypatch)
+    checks = []
+
+    def job_ui(job_id, _principal, check_readiness):
+        checks.append(check_readiness)
+        return {"job_id": job_id, "ui": {"job_id": job_id}, "web_ui": {"job_id": job_id}}
+
     monkeypatch.setattr(
         jobs.runtime_job_routes,
         "get_job_ui",
-        lambda job_id, *_args: {"job_id": job_id, "ui": {"job_id": job_id}, "web_ui": {"job_id": job_id}},
+        job_ui,
     )
     response = client.get("/api/v1/jobs/job-1/ui")
 
@@ -303,6 +309,10 @@ def test_job_ui_is_bound_to_the_durable_job(monkeypatch):
         "ui": {"job_id": "job-1"},
         "web_ui": {"job_id": "job-1"},
     }
+    assert checks == [True]
+    assert client.get("/api/v1/jobs/job-1/ui?check_readiness=false").status_code == 200
+    assert checks == [True, False]
+    assert client.get("/api/v1/jobs/job-1/ui?check_readiness=invalid").status_code == 422
 
 
 def test_strict_bodies_and_problem_details(monkeypatch):

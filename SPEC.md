@@ -171,6 +171,13 @@ No artificial completion percentage is inferred from elapsed time.
   Job UI discovery rechecks the exact page and its same-origin code assets
   through the shared Web UI SDK probe from the proxy host. Registration or a
   previously passing service check cannot establish readiness. The returned
+  page and assets are checked through the existing iframe proxy at the configured
+  runtime Web UI URL. Only authenticated probe requests read the address/lifecycle
+  descriptor with `check_readiness=false`, avoiding recursive discovery while
+  retaining lifecycle and port restrictions. Descriptor reads do not establish
+  readiness; ordinary discovery defaults to a fresh check. Probe authentication
+  never reaches worker services. Ordinary iframe and WebSocket requests continue
+  to reject unready handles. The returned
   `web_ui.metadata.readiness` receipt is current; an unreachable running handle
   is projected as `starting` without rewriting durable lifecycle state. Inactive
   handles are never promoted. The proxy rejects unready handles and forwards

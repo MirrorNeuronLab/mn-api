@@ -243,6 +243,13 @@ Every UI read verifies the exact page and same-origin scripts/stylesheets from
 the proxy host using `mn-python-sdk-web-ui`. A registered service or an old ready
 receipt alone is insufficient. Unreachable running handles return `starting`
 with `metadata.readiness.ready: false`; the next read can confirm recovery.
+The API probes the existing `/job-ui-proxy/` page and assets at the configured
+runtime Web UI URL, so Docker-only worker DNS is resolved by the proxy rather
+than the native API. Authenticated probe requests load the lifecycle/address
+descriptor with `GET /jobs/{job_id}/ui?check_readiness=false` to avoid recursive
+checks. This descriptor is not a current readiness receipt. Probe credentials
+are stripped before forwarding, and lifecycle and declared-port checks still
+apply. Ordinary iframe and WebSocket requests retain the current readiness gate.
 The proxy refuses unready handles. Live video bytes are forwarded promptly,
 without waiting for a full 64 KiB buffer or for the stream to end.
 The desktop defaults to `dom-ready`. A blueprint can select `did-finish-load`

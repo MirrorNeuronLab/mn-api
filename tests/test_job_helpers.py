@@ -13,7 +13,7 @@ from mn_api.routes import jobs
 
 @pytest.fixture(autouse=True)
 def ready_ui_probe(monkeypatch):
-    monkeypatch.setattr(jobs, "probe_web_ui", lambda _url: {"schema_version": "mn.web_ui.readiness.v1", "ready": True, "reason": "ready"})
+    monkeypatch.setattr(jobs, "probe_job_web_ui", lambda _job_id, _url: {"schema_version": "mn.web_ui.readiness.v1", "ready": True, "reason": "ready"})
 
 
 def test_shared_job_ui_dir_uses_runtime_shared_storage(monkeypatch, tmp_path):
@@ -344,9 +344,9 @@ def test_get_job_ui_uses_selected_runtime_node_for_passing_service(monkeypatch, 
         "websocket_ports": [9090],
     }
 
-    monkeypatch.setattr(jobs, "probe_web_ui", lambda _url: {"ready": False, "reason": "unreachable"})
+    monkeypatch.setattr(jobs, "probe_job_web_ui", lambda _job_id, _url: {"ready": False, "reason": "unreachable"})
     assert jobs.get_job_ui("job-1")["web_ui"]["status"] == "starting"
-    monkeypatch.setattr(jobs, "probe_web_ui", lambda _url: {"ready": True, "reason": "ready"})
+    monkeypatch.setattr(jobs, "probe_job_web_ui", lambda _job_id, _url: {"ready": True, "reason": "ready"})
     assert jobs.get_job_ui("job-1")["web_ui"]["status"] == "running"
 
 
@@ -361,7 +361,7 @@ def test_live_ui_preserves_load_event_only_for_the_claimed_page(monkeypatch, tmp
     (directory / "web_ui.json").write_text(json.dumps({
         "job_id": "job-1", "url": claim_url, "metadata": {"load_event": "did-finish-load"}
     }))
-    live = {"web_ui": {"url": "http://10.0.4.32:8088", "status": "running", "metadata": {"load_event": "dom-ready"}}}
+    live = {"job_id": "job-1", "web_ui": {"url": "http://10.0.4.32:8088", "status": "running", "metadata": {"load_event": "dom-ready"}}}
     monkeypatch.setattr(jobs, "job_data_dir_from_id", lambda *_args, **_kwargs: directory)
     monkeypatch.setattr(jobs, "shared_job_ui_dir_from_id", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(jobs, "_job_ui_handle_from_services", lambda _job_id: live)
@@ -370,7 +370,7 @@ def test_live_ui_preserves_load_event_only_for_the_claimed_page(monkeypatch, tmp
 
 @pytest.mark.parametrize("status", ["", "starting", "paused", "stopped", "failed", "cancelled"])
 def test_job_ui_does_not_promote_lifecycle_state_from_reachability(monkeypatch, status):
-    monkeypatch.setattr(jobs, "probe_web_ui", lambda _url: pytest.fail("inactive service must not be probed"))
+    monkeypatch.setattr(jobs, "probe_job_web_ui", lambda *_args: pytest.fail("inactive service must not be probed"))
     handle = {"web_ui": {"url": "http://worker:8080/", "status": status}}
     result = jobs._checked_job_ui_handle(handle)
     assert result["web_ui"]["status"] == status
@@ -378,15 +378,15 @@ def test_job_ui_does_not_promote_lifecycle_state_from_reachability(monkeypatch, 
 
 
 def test_job_ui_rechecks_stale_ready_receipts_without_changing_persisted_handle(monkeypatch):
-    handle = {"web_ui": {"url": "http://worker:8080/", "status": "running",
+    handle = {"job_id": "job-1", "web_ui": {"url": "http://worker:8080/", "status": "running",
                          "metadata": {"readiness": {"ready": True}}}}
     urls = []
-    monkeypatch.setattr(jobs, "probe_web_ui", lambda url: urls.append(url) or {"ready": False, "reason": "unreachable"})
+    monkeypatch.setattr(jobs, "probe_job_web_ui", lambda job_id, url: urls.append((job_id, url)) or {"ready": False, "reason": "unreachable"})
     result = jobs._checked_job_ui_handle(handle)
     assert result["web_ui"]["status"] == "starting"
     assert result["web_ui"]["metadata"]["readiness"]["ready"] is False
     assert handle["web_ui"]["status"] == "running"
-    assert urls == ["http://worker:8080/"]
+    assert urls == [("job-1", "http://worker:8080/")]
 
 
 def test_get_job_ui_prefers_the_cross_node_shared_handle(monkeypatch, tmp_path):
@@ -483,7 +483,16 @@ def test_get_job_ui_falls_back_to_its_federated_owner(monkeypatch, tmp_path):
     )
 
     assert jobs.get_job_ui("job-1") == remote_handle
-    assert seen[0].full_url == "http://10.0.4.26:54001/api/v1/jobs/job-1/ui"
+    assert seen[0].full_url == "http://10.0.4.26:54001/api/v1/jobs/job-1/ui?check_readiness=false"
+
+
+def test_proxy_descriptor_read_does_not_reenter_readiness(monkeypatch, tmp_path):
+    handle = {"job_id": "job-1", "web_ui": {"status": "running", "url": "http://worker:8080/"}}
+    monkeypatch.setattr(jobs, "job_data_dir_from_id", lambda *_args, **_kwargs: tmp_path)
+    monkeypatch.setattr(jobs, "shared_job_ui_dir_from_id", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(jobs, "_job_ui_handle_from_services", lambda *_args: handle)
+    monkeypatch.setattr(jobs, "probe_job_web_ui", lambda *_args: pytest.fail("descriptor lookup must not probe"))
+    assert jobs.get_job_ui("job-1", check_readiness=False) is handle
 
 
 def test_get_job_ui_never_uses_an_untrusted_owner_address(monkeypatch, tmp_path):

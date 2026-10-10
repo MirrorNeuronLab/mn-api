@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import urllib.error
 import urllib.parse
@@ -14,6 +15,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
 from mn_api.config import WebUiConfig
+from mn_api.job_ui_readiness import PROBE_HEADER
 
 
 HOP_BY_HOP_HEADERS = {
@@ -202,14 +204,18 @@ def proxy_job_ui_request(
     """
 
     try:
-        web_ui = _load_job_web_ui(job_id, upstream_api=upstream_api, api_token=api_token)
-        target_url = _job_ui_target_url(web_ui, port=port, path=path, query=query)
+        headers = {key.lower(): value for key, value in request_headers}
+        probe = headers.get(PROBE_HEADER.lower()) == "1" and (
+            not api_token or hmac.compare_digest(headers.get("authorization", ""), f"Bearer {api_token}")
+        )
+        web_ui = _load_job_web_ui(job_id, upstream_api=upstream_api, api_token=api_token, check_readiness=not probe)
+        target_url = _job_ui_target_url(web_ui, port=port, path=path, query=query, check_readiness=not probe)
     except JobUiProxyError as exc:
         return _job_ui_proxy_problem(exc.status_code, exc.detail)
 
     upstream_request = urllib.request.Request(
         target_url,
-        headers=_remote_proxy_headers(request_headers),
+        headers=_remote_proxy_headers(headers.items()),
         method=method,
     )
     try:
@@ -282,8 +288,9 @@ async def proxy_job_ui_websocket_request(
         await _close_websocket(websocket, 1011)
 
 
-def _load_job_web_ui(job_id: str, *, upstream_api: str, api_token: str) -> dict[str, Any]:
-    target_url = _target_url(f"jobs/{job_id}/ui", "", upstream_api)
+def _load_job_web_ui(job_id: str, *, upstream_api: str, api_token: str, check_readiness: bool = True) -> dict[str, Any]:
+    query = "" if check_readiness else "check_readiness=false"
+    target_url = _target_url(f"jobs/{urllib.parse.quote(job_id, safe='-._')}/ui", query, upstream_api)
     request = urllib.request.Request(
         target_url,
         headers=_proxy_headers((), api_token=api_token),
@@ -316,12 +323,13 @@ def _job_ui_target_url(
     path: str,
     query: str,
     websocket: bool = False,
+    check_readiness: bool = True,
 ) -> str:
     status = str(web_ui.get("status") or "").strip().lower()
     metadata = web_ui.get("metadata")
     readiness = metadata.get("readiness") if isinstance(metadata, dict) else None
     if status not in {"running", "ready", "passing"} or (
-        isinstance(readiness, dict) and readiness.get("ready") is not True
+        check_readiness and isinstance(readiness, dict) and readiness.get("ready") is not True
     ):
         raise JobUiProxyError(409, "The job Web UI service is not running.")
     raw_url = web_ui.get("url")
@@ -390,7 +398,7 @@ def _normalize_proxy_query(query: str) -> str:
 
 
 def _remote_proxy_headers(headers: Iterable[tuple[str, str]]) -> dict[str, str]:
-    excluded = HOP_BY_HOP_HEADERS | {"host", "authorization", "cookie", "accept-encoding", "origin"}
+    excluded = HOP_BY_HOP_HEADERS | {"host", "authorization", "cookie", "accept-encoding", "origin", PROBE_HEADER.lower()}
     return {key: value for key, value in headers if key.lower() not in excluded}
 
 

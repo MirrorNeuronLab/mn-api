@@ -32,7 +32,6 @@ from mn_sdk import (
 )
 from mn_sdk.blueprint_support.observability import read_run_resources
 from mn_sdk.shared_run_store import referenced_run_dir
-from mn_sdk_web_ui import probe_web_ui
 from mn_sdk.staged_artifacts import (
     ArtifactIntegrityError,
     ArtifactNotReadyError,
@@ -51,6 +50,7 @@ from mn_api.blueprints import (
 from mn_api.dependencies import require_auth
 from mn_api.errors import handle_grpc_error
 from mn_api.job_store import job_data_dir_from_id, shared_job_ui_dir_from_id
+from mn_api.job_ui_readiness import probe_job_web_ui
 from mn_api.job_activity import compact_event as _compact_event
 from mn_api.job_activity import compact_value as _compact_value
 from mn_api.job_activity import enrich_workflow_progress_activity as _enrich_workflow_progress_activity
@@ -191,7 +191,7 @@ def get_job(job_id: str, include: str = Query("compact"), _auth=Depends(require_
         return handle_grpc_error(exc)
 
 
-def get_job_ui(job_id: str, _auth=Depends(require_auth)):
+def get_job_ui(job_id: str, _auth=Depends(require_auth), check_readiness: bool = True):
     job_dir = job_data_dir_from_id(job_id, must_exist=False)
     if job_dir is None:
         raise HTTPException(status_code=400, detail="invalid job id")
@@ -207,11 +207,11 @@ def get_job_ui(job_id: str, _auth=Depends(require_auth)):
                 if isinstance(policy, dict) and "load_event" in policy:
                     live_handle["web_ui"]["metadata"]["load_event"] = policy["load_event"]
                 break
-        return _checked_job_ui_handle(live_handle)
+        return _checked_job_ui_handle(live_handle) if check_readiness else live_handle
     for candidate in (shared_dir, job_dir):
         handle = _job_ui_handle_from_directory(candidate, job_id)
         if handle is not None:
-            return _checked_job_ui_handle(handle)
+            return _checked_job_ui_handle(handle) if check_readiness else handle
 
     # A federation member owns its local job-data directory.  If the shared
     # storage backend is node-local (or is still replicating), ask the owning
@@ -220,7 +220,7 @@ def get_job_ui(job_id: str, _auth=Depends(require_auth)):
     # by the browser or the job payload.
     remote_handle = _owner_node_job_ui_handle(job_id)
     if remote_handle is not None:
-        return _checked_job_ui_handle(remote_handle)
+        return _checked_job_ui_handle(remote_handle) if check_readiness else remote_handle
     raise HTTPException(status_code=404, detail="job UI not found")
 
 
@@ -233,7 +233,7 @@ def _checked_job_ui_handle(handle: dict[str, Any]) -> dict[str, Any]:
     raw_metadata = web_ui.get("metadata")
     metadata = dict(raw_metadata) if isinstance(raw_metadata, dict) else {}
     if status in {"running", "ready", "passing"}:
-        readiness = probe_web_ui(str(web_ui.get("url") or ""))
+        readiness = probe_job_web_ui(str(handle["job_id"]), str(web_ui.get("url") or ""))
         web_ui["status"] = "running" if readiness["ready"] else "starting"
     else:
         readiness = {"schema_version": "mn.web_ui.readiness.v1", "ready": False,
@@ -362,7 +362,7 @@ def _owner_node_job_ui_handle(job_id: str) -> dict[str, Any] | None:
         if token:
             headers["Authorization"] = f"Bearer {token}"
         request = urllib.request.Request(
-            f"http://{display_host}:{port}/api/v1/jobs/{urllib.parse.quote(job_id, safe='-._')}/ui",
+            f"http://{display_host}:{port}/api/v1/jobs/{urllib.parse.quote(job_id, safe='-._')}/ui?check_readiness=false",
             headers=headers,
             method="GET",
         )
