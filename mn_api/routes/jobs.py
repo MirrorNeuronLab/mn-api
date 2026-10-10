@@ -736,7 +736,7 @@ def _compact_job_detail(job_id: str) -> dict[str, Any]:
         summary["failure"] = failure
     if observability_summary:
         summary["observability_summary"] = _compact_value(observability_summary)
-    resource_usage = _read_run_resource_usage(run_id) if run_id else None
+    resource_usage = _read_run_resource_usage(run_id, run_dir)
     if resource_usage:
         summary["resource_usage"] = _compact_value(resource_usage)
     if stream_error:
@@ -764,11 +764,11 @@ def _full_job_detail(job_id: str) -> dict[str, Any]:
         return _compact_job_detail(job_id)
 
 
-def _read_run_resource_usage(run_id: str | None) -> dict[str, Any] | None:
-    if not run_id:
+def _read_run_resource_usage(run_id: str | None, run_dir: Path | None) -> dict[str, Any] | None:
+    if not run_id or run_dir is None or run_dir.name != run_id:
         return None
     try:
-        return read_run_resources(run_id, runs_root=_runs_root())
+        return read_run_resources(run_id, runs_root=run_dir.parent)
     except Exception:
         return None
 

@@ -5,6 +5,11 @@ blueprint, job, graph, event, metric, deployment, model, service, resource,
 and run-artifact endpoints and forwards runtime calls to the core through the
 Python SDK gRPC client.
 
+Run monitors read measured resource usage from the resolved run's artifact
+directory, including replicated submissions. They do not reselect a local run
+root after resolving a shared run, or present an unresolved resource directory
+as a measured zero. Numeric aggregation and ledger bounds remain SDK-owned.
+
 The shared business logic lives in `../mn-python-sdk/mn_sdk`. The CLI and API
 are adapters over that SDK: CLI commands render terminal output, while API
 routes validate HTTP payloads and return JSON/problem responses.
@@ -104,7 +109,8 @@ and job state before retrying an uncertain submission.
 
 ### Install and run
 
-Requires `mirrorneuron-python-sdk>1.3,<2.0`.
+Requires `mirrorneuron-python-sdk>=1.3.58.dev82,<2.0` for measured call ledgers
+and retained conversation sources across definition updates.
 
 Install locally and run tests:
 

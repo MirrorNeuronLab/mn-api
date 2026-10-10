@@ -24,6 +24,13 @@ This specification covers only this repository. Core runtime semantics and
 shared Python behavior are external contracts consumed through
 `mirrorneuron-python-sdk`.
 
+Compact run monitors bind resource aggregation to the same resolved run
+directory as their artifacts. Missing or mismatched directory identity leaves
+resource usage unavailable; no second local-root lookup substitutes empty or
+unrelated measurements. The SDK owns numeric usage aggregation and its bounds.
+The dependency minimum is SDK 1.3.58.dev82, including canonical measured call
+ledgers and stable Job conversation source bindings across definition updates.
+
 Run read endpoints may project a run from a verified SDK local mapping and its
 replicated submission when Core cannot return the run. A nonterminal shared
 record is reported as `unknown`; writable Core run operations still require Core.
