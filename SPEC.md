@@ -30,8 +30,8 @@ over local mappings; an unavailable explicit reference does not fall back to a
 different directory. Missing or mismatched directory identity leaves
 resource usage unavailable; no second local-root lookup substitutes empty or
 unrelated measurements. The SDK owns numeric usage aggregation and its bounds.
-The dependency minimum is SDK 1.3.58.dev82, including canonical measured call
-ledgers and stable Job conversation source bindings across definition updates.
+The dependency minimum is SDK 1.3.58.dev83, including canonical measured call
+ledgers, stable Job conversation sources and bound container output paths.
 
 Run read endpoints may project a run from a verified SDK local mapping and its
 replicated submission when Core cannot return the run. A nonterminal shared

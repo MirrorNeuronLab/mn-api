@@ -109,8 +109,8 @@ and job state before retrying an uncertain submission.
 
 ### Install and run
 
-Requires `mirrorneuron-python-sdk>=1.3.58.dev82,<2.0` for measured call ledgers
-and retained conversation sources across definition updates.
+Requires `mirrorneuron-python-sdk>=1.3.58.dev83,<2.0` for measured call ledgers,
+retained conversation sources and bound container output paths.
 
 Install locally and run tests:
 
