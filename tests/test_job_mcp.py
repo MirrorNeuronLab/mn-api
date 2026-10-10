@@ -6,6 +6,7 @@ import json
 import threading
 from types import SimpleNamespace
 
+import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
@@ -408,7 +409,7 @@ def test_job_activity_watch_relays_worker_mcp_activity_through_mrtr(monkeypatch)
     assert relay_calls[0]["job_id"] == "job-agent"
     assert relay_calls[0]["conversation_id"] == ""
     assert relay_calls[0]["request_id"] == ""
-    assert relay_calls[0]["context"]["_active_service_run_id"] == "runtime-run-agent"
+    assert relay_calls[0]["context"]["_active_service_run_id"] == "run-agent"
     assert relay_calls[0]["context"]["_mn_activity_watch"] == {
         "after_event_id": "",
         "wait_seconds": 0,
@@ -492,7 +493,7 @@ def test_response_enabled_job_lists_ask_job_and_never_starts_a_run(monkeypatch):
     assert len(runtime.queries) == 1
 
 
-def test_agent_enabled_job_adds_turn_polling_and_preserves_internal_service_run_id(monkeypatch):
+def test_agent_enabled_job_adds_turn_polling_and_preserves_execution_service_run_id(monkeypatch):
     runtime = MCPRuntime()
     _configure(monkeypatch, runtime)
     turn_id = "fcb09ddb-35a7-4a40-9ce0-14f25093a6db"
@@ -501,7 +502,7 @@ def test_agent_enabled_job_adds_turn_polling_and_preserves_internal_service_run_
 
     def agent_query(job_id, question, **kwargs):
         context = kwargs["context"]
-        assert context["_active_service_run_id"] == "runtime-run-agent"
+        assert context["_active_service_run_id"] == "run-agent"
         payload = json.loads(original_query(job_id, question, **kwargs))
         payload.update(
             {
@@ -750,7 +751,38 @@ def test_ask_job_reuses_one_job_and_run_snapshot(monkeypatch):
     assert response["schema_version"] == "mn.mcp.job_answer.v1"
     assert runtime.get_job_calls == 1
     assert runtime.list_run_calls == 1
-    assert runtime.queries[0]["context"]["_active_service_run_id"] == "runtime-run-agent"
+    assert runtime.queries[0]["context"]["_active_service_run_id"] == "run-agent"
+
+
+@pytest.mark.parametrize("output_binding", [
+    {"runtime_run_id": "output-run-agent"},
+    {"run_data_ref": {
+        "storage": "syncthing", "submission_id": "definition-agent", "run_id": "output-run-agent",
+    }},
+])
+def test_agent_service_lookup_uses_execution_id_while_artifacts_use_output_id(monkeypatch, output_binding):
+    runtime = MCPRuntime()
+    run = runtime.runs["job-agent"][0]
+    run.pop("runtime_run_id")
+    run.update(output_binding)
+    _configure(monkeypatch, runtime)
+    artifact_reads = []
+
+    def read_artifact(run_id, _principal, **options):
+        artifact_reads.append((run_id, options))
+        return {"summary": "Current service state"}
+
+    monkeypatch.setattr(job_mcp.runtime_run_routes, "get_run_final_artifact", read_artifact)
+    provider = JobContextProvider()
+
+    provider.ask_job("job-agent", "What is the current status?")
+
+    context = runtime.queries[0]["context"]
+    assert context["_active_service_run_id"] == "run-agent"
+    assert context["latest_run"]["run_id"] == "run-agent"
+    assert context["latest_run"]["result"] == {"summary": "Current service state"}
+    expected_options = {"run_data_ref": output_binding["run_data_ref"]} if "run_data_ref" in output_binding else {}
+    assert artifact_reads == [("output-run-agent", expected_options)]
 
 
 def test_job_context_fingerprint_ignores_response_heartbeat_timestamps():

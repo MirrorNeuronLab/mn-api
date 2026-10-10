@@ -104,6 +104,7 @@ class _BaseSnapshot:
 class _ContextSnapshot:
     context: dict[str, Any]
     active_service_run_id: str
+    output_run_id: str
     loaded_at: float
     run_data_ref: dict[str, Any] | None = None
 
@@ -747,15 +748,23 @@ class JobContextProvider:
             freshness={"state": "fresh", "source": "live", "age_ms": 0},
         )
         active_service_run_id = ""
+        output_run_id = ""
         if run:
-            public_run_id = _first_text(
+            active_service_run_id = _first_text(
                 run.get("run_id"),
                 run.get("id"),
                 job.get("latest_run_id"),
             )
-            active_service_run_id = _runtime_output_id(run, public_run_id)
-        return _ContextSnapshot(context, active_service_run_id, self._clock(),
-                                _run_file_options(run).get("run_data_ref") if run else None)
+            # Core registers services under the execution ID. The output ID
+            # identifies stored artifacts and must not scope service lookup.
+            output_run_id = _runtime_output_id(run, active_service_run_id)
+        return _ContextSnapshot(
+            context=context,
+            active_service_run_id=active_service_run_id,
+            output_run_id=output_run_id,
+            loaded_at=self._clock(),
+            run_data_ref=_run_file_options(run).get("run_data_ref") if run else None,
+        )
 
     def _unavailable_context(
         self,
@@ -879,7 +888,7 @@ class JobContextProvider:
             )
         try:
             result = runtime_run_routes.get_run_human_events(
-                snapshot.active_service_run_id,
+                snapshot.output_run_id,
                 None,
                 "authenticated",
                 **({"run_data_ref": snapshot.run_data_ref} if snapshot.run_data_ref else {}),
@@ -906,7 +915,7 @@ class JobContextProvider:
                 limit=80,
             )
             event_id = notice_id or hashlib.sha256(
-                f"{snapshot.active_service_run_id}\0{occurred_at}\0{message}".encode("utf-8")
+                f"{snapshot.output_run_id}\0{occurred_at}\0{message}".encode("utf-8")
             ).hexdigest()[:32]
             activities.append(
                 {
