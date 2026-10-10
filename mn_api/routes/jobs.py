@@ -31,6 +31,7 @@ from mn_sdk import (
     workflow_step_ids as _workflow_step_ids,
 )
 from mn_sdk.blueprint_support.observability import read_run_resources
+from mn_sdk.shared_run_store import referenced_run_dir
 from mn_sdk_web_ui import probe_web_ui
 from mn_sdk.staged_artifacts import (
     ArtifactIntegrityError,
@@ -669,19 +670,24 @@ def _run_artifacts(run_id: str | None, run_dir: Path | None) -> list[dict[str, A
     return artifacts
 
 
-def _compact_job_detail(job_id: str) -> dict[str, Any]:
+def _compact_job_detail(job_id: str, *, run_data_ref: dict[str, Any] | None = None) -> dict[str, Any]:
     events, stream_error = _stream_job_events(job_id)
     event_run_id = _extract_nested_string(events, "run_id", "runId")
-    run_dir = _run_dir_from_id(event_run_id)
     stored_job: dict[str, Any] = {}
-    if run_dir is None:
-        run_dir, stored_job = _find_run_dir_for_job(job_id)
+    if run_data_ref is not None:
+        run_dir = referenced_run_dir(run_data_ref)
+        if run_dir is not None:
+            stored_job = _read_json_file(run_dir / "job.json")
     else:
-        stored_job = _read_json_file(run_dir / "job.json")
+        run_dir = _run_dir_from_id(event_run_id)
+        if run_dir is None:
+            run_dir, stored_job = _find_run_dir_for_job(job_id)
+        else:
+            stored_job = _read_json_file(run_dir / "job.json")
     run_record = _read_json_file(run_dir / "run.json") if run_dir else {}
     nested_job = stored_job.get("job") if isinstance(stored_job.get("job"), dict) else {}
     observability_summary = _read_json_file(run_dir / "observability_summary.json") if run_dir else {}
-    run_id = _first_string(
+    run_id = run_dir.name if run_data_ref is not None and run_dir is not None else _first_string(
         nested_job.get("run_id"),
         nested_job.get("runId"),
         stored_job.get("run_id"),

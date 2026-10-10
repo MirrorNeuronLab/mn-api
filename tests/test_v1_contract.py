@@ -2000,6 +2000,21 @@ def test_monitor_reuses_identity_but_refreshes_run_on_next_request(monkeypatch):
     assert reads == ["run-1", "run-1"]
 
 
+def test_monitor_passes_the_canonical_storage_binding_without_another_core_read(monkeypatch):
+    client, runtime = _client(monkeypatch)
+    reference = {"storage": "syncthing", "submission_id": "definition", "run_id": "physical-run"}
+    reads, bindings = [], []
+    runtime.get_run = lambda run_id: reads.append(run_id) or json.dumps({
+        "run_id": run_id, "status": "completed", "run_data_ref": reference,
+    })
+    monkeypatch.setattr(jobs.runtime_job_routes, "_compact_job_detail",
+                        lambda run_id, **options: bindings.append((run_id, options)) or {"job": {}, "summary": {}})
+    response = client.get("/api/v1/runs/run-1/monitor")
+    assert response.status_code == 200
+    assert bindings == [("run-1", {"run_data_ref": reference})]
+    assert reads == ["run-1"]
+
+
 def test_monitor_recovers_after_one_failed_core_read(monkeypatch):
     client, runtime = _client(monkeypatch)
     reads = []

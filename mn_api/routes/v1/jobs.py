@@ -951,7 +951,9 @@ def get_run_monitor(run_id: str, _principal=Depends(require_auth)):
     # Reuse this request's canonical read; never retain mutable Run state
     # across requests. This also keeps status and output identity consistent.
     runtime_id = _runtime_output_id(run_id, run=canonical_run)
-    detail = dict(runtime_job_routes._compact_job_detail(run_id))
+    reference = canonical_run.get("run_data_ref")
+    source_options = {"run_data_ref": reference} if isinstance(reference, dict) else {}
+    detail = dict(runtime_job_routes._compact_job_detail(run_id, **source_options))
     canonical_status = str(canonical_run.get("status") or "").strip().lower()
     if canonical_status:
         detail["status"] = canonical_status

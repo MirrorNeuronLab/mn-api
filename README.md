@@ -6,7 +6,7 @@ and run-artifact endpoints and forwards runtime calls to the core through the
 Python SDK gRPC client.
 
 Run monitors read measured resource usage from the resolved run's artifact
-directory, including replicated submissions. They do not reselect a local run
+directory, using Core's exact storage binding when present. They do not reselect a local run
 root after resolving a shared run, or present an unresolved resource directory
 as a measured zero. Numeric aggregation and ledger bounds remain SDK-owned.
 
