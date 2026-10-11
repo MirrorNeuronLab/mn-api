@@ -9,7 +9,7 @@ import uuid
 
 from mn_sdk.errors import AppError
 
-from mn_api.blueprints import find_blueprint, install_blueprint_runtime_models, validate_blueprint_bundle
+from mn_api.blueprints import defer_blueprint_runtime_models, find_blueprint, validate_blueprint_bundle
 from mn_api.config import ApiConfig, config_value
 from mn_api.path_utils import resolve_mn_home
 from mn_api.public import public_value
@@ -153,10 +153,10 @@ def add_catalog_blueprint(
         percent=50,
         stage="prepare_runtime",
         label="Prepare runtime prerequisites",
-        detail="Preparing required models and runtime services.",
+        detail="Validating model requirements and preparing required runtime services. Models install on first use.",
     )
     try:
-        model_summary = install_blueprint_runtime_models(repo_root, blueprint, force=force)
+        model_summary = defer_blueprint_runtime_models(repo_root, blueprint, force=force)
     except Exception as exc:
         raise BlueprintAddError() from exc
     if not model_summary.get("ok", True):

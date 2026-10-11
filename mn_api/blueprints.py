@@ -542,7 +542,7 @@ def defer_blueprint_runtime_models(
     force: bool = False,
     service_progress: Callable[[str, dict[str, Any] | None], None] | None = None,
 ) -> Dict[str, Any]:
-    """Validate model declarations without side effects for validation-only callers."""
+    """Validate lazy model policies and prepare required context services."""
 
     bundle_root = validate_blueprint_bundle(repo_root, blueprint)
     try:

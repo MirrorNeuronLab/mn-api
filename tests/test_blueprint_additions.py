@@ -30,8 +30,8 @@ def test_add_catalog_blueprint_records_addition_and_public_state(monkeypatch, tm
     monkeypatch.setattr(blueprint_additions, "validate_blueprint_bundle", lambda *_args: bundle_root)
     monkeypatch.setattr(
         blueprint_additions,
-        "install_blueprint_runtime_models",
-        lambda *_args, **_kwargs: {"ok": True, "models": [{"id": "model-one", "status": "installed"}]},
+        "defer_blueprint_runtime_models",
+        lambda *_args, **_kwargs: {"ok": True, "models": [{"id": "model-one", "status": "deferred_runtime_install"}]},
     )
 
     result = blueprint_additions.add_catalog_blueprint(
@@ -43,6 +43,7 @@ def test_add_catalog_blueprint_records_addition_and_public_state(monkeypatch, tm
     record = json.loads((additions_dir / "worker-one.json").read_text(encoding="utf-8"))
     assert record["schema_version"] == "mn.blueprint.install.v1"
     assert record["blueprint_id"] == "worker-one"
+    assert record["models"][0]["status"] == "deferred_runtime_install"
     assert record["installed_at"]
     assert result["added"] is True
     assert result["blueprint"]["added"] is True
@@ -66,7 +67,7 @@ def test_add_catalog_blueprint_returns_safe_actionable_model_issues(monkeypatch,
     monkeypatch.setattr(blueprint_additions, "validate_blueprint_bundle", lambda *_args: bundle_root)
     monkeypatch.setattr(
         blueprint_additions,
-        "install_blueprint_runtime_models",
+        "defer_blueprint_runtime_models",
         lambda *_args, **_kwargs: {
             "ok": False,
             "models": [{"id": "model-one", "status": "failed"}],
@@ -99,7 +100,7 @@ def test_add_catalog_blueprint_wraps_unexpected_runtime_errors(monkeypatch, tmp_
     monkeypatch.setattr(blueprint_additions, "validate_blueprint_bundle", lambda *_args: bundle_root)
     monkeypatch.setattr(
         blueprint_additions,
-        "install_blueprint_runtime_models",
+        "defer_blueprint_runtime_models",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("token=secret at /private/runtime")),
     )
 

@@ -47,13 +47,13 @@ bundle. It also reconciles completed Core-scheduled runs from replicated
 completion receipts. The relay reports delivery separately from Core execution
 completion.
 
-Launch keeps the compatibility phase identifier `model_install`, but it is a
-blocking preflight: every declared DMR model is selected, installed or reused,
-and published through the selected node's LiteLLM gateway before a job is
-submitted. This keeps first downloads outside worker liveness windows. The SDK
-first-use path remains idempotent for dynamically requested skill models and
-for a model removed after launch; it must not be the normal path for declared
-requirements. Explicit model-install routes remain eager.
+Blueprint additions and launch validate declared runtime model policies and
+hardware compatibility without installing generation models. Launch retains
+`model_install` as the compatibility phase identifier for this check. The SDK
+selects, prepares, and routes models on first actual use, reusing installed
+artifacts and preserving both the automatic `default` policy and explicit
+model requirements. Required context services retain their existing
+preparation lifecycle. Explicit model-install routes remain eager.
 
 `GET /api/v1/models` defaults to the full merged catalog plus discovered
 installations; `installed_only=true` preserves the installed-only filter.

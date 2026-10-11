@@ -31,6 +31,7 @@ from mn_api import state
 from mn_api.blueprints import (
     active_job_ids_from_jobs_payload,
     create_blueprint_run_id,
+    defer_blueprint_runtime_models,
     filter_blueprints_by_category,
     find_blueprint,
     install_blueprint_runtime_models,
@@ -1571,13 +1572,13 @@ def run_launch_preflight(
         progress_id,
         "model_install",
         "running",
-        "Preparing declared runtime models.",
-        label="Prepare runtime models",
-        detail="Selecting each declared model, installing any missing artifact, and publishing its LiteLLM route before the job starts.",
-        expectation="The job is held until every declared runtime model is ready on its selected compatible node.",
+        "Checking declared runtime models.",
+        label="Check runtime models",
+        detail="Validating model declarations and compatibility without installing model artifacts.",
+        expectation="The runtime selects, installs if missing, and routes each model when the worker first uses it.",
     )
     try:
-        model_install = install_blueprint_runtime_models(
+        model_install = defer_blueprint_runtime_models(
             repo_root,
             blueprint,
             force=force,
@@ -1590,8 +1591,8 @@ def run_launch_preflight(
             "model_install",
             "failed",
             "Runtime model preparation failed.",
-            label="Prepare runtime models",
-            detail="A runtime model declaration is invalid, incompatible, or could not be prepared on the selected node.",
+            label="Check runtime models",
+            detail="A runtime model declaration is invalid, incompatible, or a required context service could not be prepared.",
             severity="error",
         )
         record_launch_progress(
@@ -1608,8 +1609,8 @@ def run_launch_preflight(
             "model_install",
             "failed",
             str(exc),
-            label="Prepare runtime models",
-            detail="A runtime model declaration is invalid, incompatible, or could not be prepared on the selected node.",
+            label="Check runtime models",
+            detail="A runtime model declaration is invalid, incompatible, or a required context service could not be prepared.",
             severity="error",
         )
         record_launch_progress(
@@ -1627,8 +1628,8 @@ def run_launch_preflight(
             "failed",
             "Runtime model preparation failed.",
             {"model_install": model_install},
-            label="Prepare runtime models",
-            detail="A runtime model declaration is invalid, incompatible, or could not be prepared on the selected node.",
+            label="Check runtime models",
+            detail="A runtime model declaration is invalid, incompatible, or a required context service could not be prepared.",
             severity="error",
         )
         record_launch_progress(
@@ -1651,8 +1652,8 @@ def run_launch_preflight(
         "completed",
         model_install_progress_message(model_install),
         {"model_install": model_install},
-        label="Prepare runtime models",
-        detail="Declared runtime models are ready and their LiteLLM routes are available before job submission.",
+        label="Check runtime models",
+        detail="Model requirements are validated. Selection, installation, and routing happen on first use.",
     )
     if not context_phase_seen:
         record_launch_progress(
