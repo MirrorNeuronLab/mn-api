@@ -55,6 +55,13 @@ artifacts and preserving both the automatic `default` policy and explicit
 model requirements. Required context services retain their existing
 preparation lifecycle. Explicit model-install routes remain eager.
 
+The SDK default policy is medium → small → nano: Nemotron 3.5 Lightning at
+48 GB accelerator memory, Bonsai2 27B PTQ1_0 at 24 GB, then Gemma 4 E2B.
+VRAM and integrated/shared GPU memory qualify; CPU RAM alone does not.
+Bonsai2's catalog `preparation` recipe makes the SDK automatically build/cache
+and start the pinned native Prism DMR backend on the selected model owner.
+The API adds no separate backend installation or endpoint-routing mechanism.
+
 `GET /api/v1/models` defaults to the full merged catalog plus discovered
 installations; `installed_only=true` preserves the installed-only filter.
 Model records expose `default: true` for the configured default and its fallback

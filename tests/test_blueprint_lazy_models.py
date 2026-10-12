@@ -116,7 +116,7 @@ def test_blueprint_validates_without_installing_and_keeps_model_policy(
     assert declaration["install_policy"] == "on_first_model_call"
     if model == "default":
         assert summary["env"]["MN_LLM_MODEL"] == "default"
-        assert declaration["selection_policy"] == ["nemotron-3.5-lightning:latest", "gemma4:e2b"]
+        assert declaration["selection_policy"] == ["nemotron-3.5-lightning:latest", "bonsai2:ptq1_0", "gemma4:e2b"]
     else:
         assert declaration["selection_policy"] == [model]
 

@@ -26,8 +26,9 @@ def test_model_collection_defaults_to_catalog_and_marks_default_chain(client, mo
     assert response.status_code == 200, response.text
     items = response.json()["items"]
     assert len(items) == 5
-    assert next(item for item in items if item["id"] == "cosmos3-nano-reasoner:1.7")["source"] == "docker"
-    assert {item["id"] for item in items if item["default"]} == {"nemotron-3.5-lightning:latest", "gemma4:e2b"}
+    assert next(item for item in items if item["id"] == "bonsai2:ptq1_0")["source"] == "dmr"
+    assert next(item for item in items if item["id"] == "bonsai2:ptq1_0")["preparation"]["kind"] == "dmr_native"
+    assert {item["id"] for item in items if item["default"]} == {"nemotron-3.5-lightning:latest", "bonsai2:ptq1_0", "gemma4:e2b"}
     assert client.get("/api/v1/models?installed_only=true").json()["items"] == []
 
 
