@@ -250,9 +250,14 @@ def _job_ui_handle_from_services(job_id: str) -> dict[str, Any] | None:
     try:
         job = _json_object(state.client.get_job(job_id))
         run_id = str(job.get("latest_run_id") or "").strip()
-        if not run_id:
+        owner_node = _first_string(job.get("owner_node"))
+        if not run_id or not owner_node:
             return None
-        listing = _json_object(state.client.list_services(job_id=run_id, passing_only=True, page_size=200))
+        # An unscoped registry query fans out to every federation peer. UI
+        # descriptor reads must not wait on peers unrelated to this Job.
+        listing = _json_object(state.client.list_services(
+            job_id=run_id, node=owner_node, passing_only=True, page_size=200,
+        ))
         items = listing.get("items") or listing.get("services") or []
         if not isinstance(items, list):
             return None

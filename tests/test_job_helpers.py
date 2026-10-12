@@ -316,10 +316,13 @@ def test_get_job_ui_uses_selected_runtime_node_for_passing_service(monkeypatch, 
     class FakeClient:
         def get_job(self, job_id):
             assert job_id == "job-1"
-            return json.dumps({"latest_run_id": "run-1"})
+            return json.dumps({"latest_run_id": "run-1", "owner_node": "mirror_neuron@10.0.4.32"})
 
         def list_services(self, **query):
-            assert query["job_id"] == "run-1"
+            assert query == {
+                "job_id": "run-1", "node": "mirror_neuron@10.0.4.32",
+                "passing_only": True, "page_size": 200,
+            }
             return json.dumps({"items": [
                 {"job_id": "run-1", "name": "warehouse-ui", "node": "mirror_neuron@10.0.4.32",
                  "address": "10.0.4.26", "port": 8088, "status": "passing", "tags": ["web_ui"],

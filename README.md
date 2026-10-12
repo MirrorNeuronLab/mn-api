@@ -241,6 +241,10 @@ the dashboard host and explicitly declared companion ports recorded for that
 job while the handle is running. Paused, stopped, cancelled, and failed
 services are rejected instead of forwarding to an unavailable upstream. It is
 not a public API route or a general-purpose network proxy.
+UI registry lookup is scoped to the Job's owner node and latest execution ID,
+so unavailable unrelated federation peers do not delay discovery or proxy
+readiness checks. A Job without an owner skips registry lookup and retains the
+existing durable-handle discovery path.
 Every UI read verifies the exact page and same-origin scripts/stylesheets from
 the proxy host using `mn-python-sdk-web-ui`. A registered service or an old ready
 receipt alone is insufficient. Unreachable running handles return `starting`

@@ -168,6 +168,9 @@ No artificial completion percentage is inferred from elapsed time.
   its explicitly allowlisted companion ports only while the handle is running;
   paused, stopped, cancelled, and failed handles are not proxied. The API
   itself does not expose a general remote-proxy route.
+  Job UI registry discovery queries only the Job's owner node under its latest
+  execution ID; unrelated federation peers are not queried. Without an owner,
+  discovery skips the registry and uses the existing durable-handle path.
   Job UI discovery rechecks the exact page and its same-origin code assets
   through the shared Web UI SDK probe from the proxy host. Registration or a
   previously passing service check cannot establish readiness. The returned
