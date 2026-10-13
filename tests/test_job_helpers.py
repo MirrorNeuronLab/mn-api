@@ -528,3 +528,17 @@ def test_get_job_ui_never_uses_an_untrusted_owner_address(monkeypatch, tmp_path)
     with pytest.raises(HTTPException) as error:
         jobs.get_job_ui("job-1")
     assert error.value.status_code == 404
+
+
+def test_runtime_activity_receipt_deduplicates_ledger_and_core_copy():
+    from mn_sdk_common.runtime_events import runtime_event, worker_event
+    ledger = runtime_event('agent_activity', {'message': 'Person presence confirmed'},
+                           owner_blueprint='cctv_operator', activity_kind='finding')
+    core = {'type': ledger['type'], 'timestamp': '2026-10-13T15:00:01Z',
+            'payload': worker_event(ledger)['payload']}
+    merged = jobs._merge_events([ledger], [core])
+    assert len(merged) == 1
+    compact = jobs._compact_event(merged[0])
+    assert compact['schema'] == 'mn.runtime.event.v1'
+    assert compact['owner_blueprint'] == 'cctv_operator'
+    assert compact['level'] == 'info'

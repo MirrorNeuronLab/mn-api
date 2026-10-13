@@ -1231,6 +1231,10 @@ def _known_assigned_node(value: Any) -> bool:
 
 
 def _event_key(event: dict[str, Any]) -> str:
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    event_id = event.get("event_id") or payload.get("event_id")
+    if isinstance(event_id, str) and event_id:
+        return "event_id:" + event_id
     try:
         return json.dumps(event, sort_keys=True, separators=(",", ":"))
     except (TypeError, ValueError):
