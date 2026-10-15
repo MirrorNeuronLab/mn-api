@@ -1,5 +1,7 @@
 # MirrorNeuron API
 
+The API requires Python 3.12 or newer. The managed runtime and contributor/CI toolchains use Python 3.12, matching the SDK and CLI.
+
 `mn-api` is the FastAPI REST gateway for MirrorNeuron. It exposes runtime,
 blueprint, job, graph, event, metric, deployment, model, service, resource,
 and run-artifact endpoints and forwards runtime calls to the core through the
@@ -121,7 +123,7 @@ retained conversation sources and bound container output paths.
 Install locally and run tests:
 
 ```bash
-python3.11 -m venv .venv
+python3.12 -m venv .venv
 . .venv/bin/activate
 .venv/bin/python -m pip install -e ".[test]"
 .venv/bin/python -m pytest -q

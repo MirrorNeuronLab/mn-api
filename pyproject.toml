@@ -3,7 +3,7 @@ name = "mirrorneuron-api"
 dynamic = ["version"]
 description = "MirrorNeuron REST API"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 license = "MIT"
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -40,7 +40,7 @@ fallback_version = "0.0.0"
 local_scheme = "no-local-version"
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py312"
 line-length = 120
 
 [tool.ruff.lint]

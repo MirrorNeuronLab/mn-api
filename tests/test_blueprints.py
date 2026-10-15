@@ -1720,7 +1720,7 @@ class TestBlueprintServices(unittest.TestCase):
             context = bundle / "payloads" / "docker_worker"
             context.mkdir(parents=True)
             (context / "Dockerfile").write_text(
-                "FROM python:3.11-slim\n"
+                "FROM python:3.12-slim\n"
                 "COPY requirements.txt /tmp/mn-skill-runtime/requirements.txt\n"
                 "COPY local-requirements.txt /tmp/mn-skill-runtime/local-requirements.txt\n"
                 "# mirrorneuron: skill-dependencies\n"

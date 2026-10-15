@@ -1,5 +1,7 @@
 # MirrorNeuron API Specification
 
+The API requires Python 3.12 or newer. The managed runtime and contributor/CI toolchains use Python 3.12, matching the SDK and CLI.
+
 ## Blueprint review metadata
 
 Blueprint list and detail resources preserve the SDK catalog's `skills` list

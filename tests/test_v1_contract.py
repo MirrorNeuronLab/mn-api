@@ -210,7 +210,7 @@ def test_job_manifest_decoder_selects_both_v1_forms_and_rejects_retired_versions
         "apiVersion": "mn.workflow/v1",
         "kind": "WorkflowSource",
         "identity": {"id": "source-api", "name": "Source API"},
-        "defaults": {"worker": {"with": {"image": "python:3.11"}}},
+        "defaults": {"worker": {"with": {"image": "python:3.12"}}},
         "workflow": {
             "steps": [
                 {"id": "prepare", "needs": [], "run": {"handler": "source_api.prepare"}},
