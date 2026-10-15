@@ -307,18 +307,11 @@ When an existing `job_id` is supplied, the API installs the freshly prepared
 bundle before starting the run; job data, schedules, and prior run history are
 preserved.
 
-Blueprints that enable `response_service` expose the stable context-and-activity
-Job MCP at `/api/v1/jobs/{job_id}/mcp`. Blueprints that instead declare the
-top-level `response_service: {"enabled": true}` expose the same context tools
-plus `ask_job(question, conversation_id?, request_id?)`. All variants expose
-`watch_job_activity(after_event_id?, wait_seconds?)`. The responder is
-definition-scoped and remains available before the first Run and between Runs;
-asking never creates a Run. Context uses `mn.mcp.job_context.v1`, is limited to
-256 KiB and 50 evidence records, and omits secrets, environment values, raw
-logs, host paths, and unrestricted artifact bodies. Answers use
-`mn.mcp.job_answer.v1`, are limited to 64 KiB, and fall back to a deterministic
-grounded status summary when the model or Job RAG is unavailable. There is no
-REST, SSE, or UI chat surface.
+All catalog blueprints expose standard Job MCP supervision independently of
+`response_service`. Optional responses add `ask_job`; bounded agents add
+`get_job_turn`. The standard tools, schemas, operation contract, and installed
+manual are described below. Context remains bounded to 256 KiB and 50 evidence
+records and excludes credentials, host paths, raw logs, and unrestricted files.
 
 Job context selects the Job's explicit latest-run ID regardless of collection
 ordering, reusing its record from the bounded collection when available.
@@ -332,7 +325,7 @@ a pending `human_input_requested` event, context and response tools return an
 elicitation. An accepting client response is revalidated against the still-
 pending request, recorded through the Run human-response API, and the original
 tool request resumes. When a bounded response agent declares
-`watch_operator_activity`, `watch_job_activity` asks the owner-node Job response
+an MCP activity binding, `watch_job_activity` asks the owner-node Job response
 agent to resolve that Run-scoped MCP service and relay its SDK activity envelope
 through a second MRTR. This is an
 active bounded watch, not unsolicited server push, and its transport receipt
@@ -591,3 +584,88 @@ Runtime events use the shared [`mn.runtime.event.v1` contract](../mn-python-sdk/
 including level, blueprint owner, UTC timestamp and actor attribution.
 The SDK selects meaningful activity for the CLI, API, desktop and web monitors;
 raw events remain available for diagnostics.
+
+
+## Standard Job MCP supervision
+
+Every blueprint declares the required `mn.mcp` extension independently of
+`mn.response`. The versioned profile is `mn.mcp.supervision.v1`; the public
+endpoint is `/api/v1/jobs/{job_id}/mcp`. The prepared Job stores the installed
+manual from `knowledge/user_manual.md`, its SHA-256, and its declared tool
+schemas. Discovery works before a run and while a domain service is offline.
+
+The SDK MCP component owns these common tools: `get_user_manual`,
+`get_capabilities`, `get_job_profile`, `get_job_context`, `get_run_status`,
+`get_run_results`, `start_run`, `pause_run`, `resume_run`, `stop_run`,
+`watch_job_activity`, and `get_operation_status`. `ask_job` and `get_job_turn`
+are optional conversation tools. Asking never starts or resumes work. Reads
+without a run ID select the latest run and return an explicit empty run when
+work has never started. Pause preserves resumability; stop cancels execution.
+Run controls accept only runtime-issued execution IDs belonging to the bound
+Job. Output IDs remain distinct from Job and execution IDs.
+
+Domain tools use unprefixed verb-resource `lower_snake_case` names, descriptions,
+native JSON argument types, input/output schemas, and effect annotations.
+Shared names are reserved. Readiness, service selection, activity, and async
+completion bindings belong in the declaration. The SDK stages the manual and
+registers, validates, and wraps declared tools; blueprints implement domain
+behavior. Domain polling uses the same `get_operation_status` public surface.
+
+Every ordinary result uses `mn.mcp.tool_result.v1` in `structuredContent`, with
+`tool`, `request_id`, `job_id`, `blueprint_id`, `run_id`, `status`,
+`operation_id`, typed `data`, and structured `error`. Operation states are
+`accepted`, `running`, `completed`, `failed`, `cancelled`, `superseded`, and
+`timed_out`; actual workflow state stays in `data`. Acceptance is not observed
+completion. Mutations require caller-generated request IDs; durable Job-scoped
+claims deduplicate identical retries and reject conflicting reuse. Operation
+polling stays bound to its original Job and run. MCP input-required responses
+continue to use the existing MRTR protocol.
+
+Launch credentials travel only in authenticated, main-process-supplied
+`_meta["mn.launch"]` request metadata, validated through the existing launch
+contract. They are excluded from advertised arguments, tool results, logs,
+conversation history, and durable operation records. REST and MCP transitions
+use the same SDK integration helper; Core owns actual execution state. The API
+owns authentication, endpoint identity, and owner routing.
+
+This is a coordinated replacement with no public compatibility aliases.
+`get_latest_run` is replaced by `get_run_status`; `free_play` is renamed
+`start_free_play`. Configuration, scheduling, approvals, retries, and destructive
+data management retain their existing APIs. GTM peer collaboration retains its
+separate read-only capability and gains no lifecycle authority.
+
+## External MCP connections
+
+External access is off for each Job until its owner enables it. The owner API
+(`MN_API_TOKEN`) must be configured before enabling external access. Authenticated
+`GET /api/v1/jobs/{job_id}/mcp-access` reads policy; `PUT` accepts
+`{ "enabled": true, "server_url": "https://runtime.example/api/v1/jobs/<job-id>/mcp" }`.
+Only HTTPS or local loopback HTTP URLs with this exact Job path are accepted.
+Enabling or reconnecting returns one connection code to the owner and revokes
+previous external grants. Disabling revokes external access and refresh tokens.
+Internal owner requests and authenticated, Job-scoped `/mcp-sessions` grants
+continue working independently of this opt-in. Existing GTM collaboration remains
+a separate read-only capability.
+
+Clients use Streamable HTTP at the displayed Job MCP URL. OAuth protected-resource
+discovery is at `/.well-known/oauth-protected-resource/api/v1/jobs/{job_id}/mcp`;
+path-aware authorization-server discovery is at
+`/.well-known/oauth-authorization-server/api/v1/mcp/oauth`. The authorization server
+uses public-client dynamic registration, authorization code with S256 PKCE,
+Job-bound audience and scopes, atomic one-use codes, rotating refresh tokens,
+and revocation. The browser consent form requires the separately copied
+connection code and describes lifecycle authority. Owner credentials are never
+shared with external clients. Connection codes and tokens are stored as hashes
+in a private SQLite journal; OAuth grant metadata is bounded by expiry.
+
+The SDK serves MCP Skills discovery and manifest resources on the same endpoint,
+including the prepared manual and installed tool schemas. External clients cannot
+supply native `mn.launch` metadata; only owner/internal desktop sessions may pass
+ephemeral launch credentials. Their values never enter tool arguments, results,
+operation journals, or conversation history.
+
+Remote clients such as ChatGPT need a reachable HTTPS runtime address or a secure
+MCP tunnel. Preserve the external host and forwarded HTTPS scheme at your proxy.
+The runtime and desktop do not publish a tunnel automatically. Copying a setup
+prompt provides instructions; the user still adds and authorizes the connection
+in their AI client's MCP settings.

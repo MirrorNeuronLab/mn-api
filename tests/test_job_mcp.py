@@ -22,6 +22,7 @@ from mn_api.job_mcp import (
 )
 from mn_api import job_mcp
 from mn_sdk import interactions as interaction_sdk
+from mn_sdk_common.mcp import COMMON_TOOLS, SUPERVISION_PROFILE
 
 
 class InteractionRuntime:
@@ -201,10 +202,19 @@ def _blueprint(_config, blueprint_id):
                 "tools": {"user": {"watch_operator_activity": {"effect": "read"}}},
             },
         }
+    if blueprint_id == "agent-blueprint":
+        blueprint["mcp"] = {"activity": {"tool": "watch_job_activity"}}
     return "catalog", blueprint
 
 
 def _configure(monkeypatch, runtime: MCPRuntime, *, token: str = "") -> None:
+    for job in runtime.jobs.values():
+        if job.get("blueprint_id") != "disabled-blueprint":
+            job["mcp"] = {"profile": SUPERVISION_PROFILE, "manual": "@/knowledge/user_manual.md", "tools": {},
+                          "manual_content": "# Test co-worker\nReview published evidence.", "manual_sha256": "test"}
+            if job.get("blueprint_id") == "agent-blueprint":
+                job["mcp"]["activity"] = {"tool": "watch_job_activity"}
+                job["mcp"]["service"] = {"name": "cctv-operator-mcp", "path": "/mcp", "required_tags": ["mcp", "cctv-operator"]}
     monkeypatch.setattr(state, "client", runtime)
     monkeypatch.setattr(interaction_sdk, "InteractionClient", lambda _client: runtime.interactions)
     monkeypatch.setattr(
@@ -222,9 +232,21 @@ def _configure(monkeypatch, runtime: MCPRuntime, *, token: str = "") -> None:
 
 
 def _mcp_request(client: TestClient, job_id: str, body: dict, *, token: str = ""):
+    if not token and not state.config.api_token:
+        grant = client.post(f"/api/v1/jobs/{job_id}/mcp-sessions")
+        if grant.status_code != 200:
+            return grant
+        token = grant.json()["access_token"]
     headers = {"Accept": "application/json, text/event-stream"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
+    if (body.get("params", {}).get("_meta") or {}).get("io.modelcontextprotocol/protocolVersion"):
+        from mcp.shared.inbound import NAME_BEARING_METHODS
+        headers["MCP-Protocol-Version"] = body["params"]["_meta"]["io.modelcontextprotocol/protocolVersion"]
+        headers["MCP-Method"] = body["method"]
+        name_key = NAME_BEARING_METHODS.get(body["method"])
+        if name_key:
+            headers["MCP-Name"] = body["params"][name_key]
     return client.post(f"/api/v1/jobs/{job_id}/mcp", headers=headers, json=body)
 
 
@@ -246,7 +268,7 @@ def _initialize(client: TestClient, job_id: str = "job-1", *, token: str = ""):
     )
 
 
-def test_protocol_lists_only_stable_read_tools_and_reads_never_run_context(monkeypatch):
+def test_protocol_lists_standard_supervision_and_reads_never_run_context(monkeypatch):
     runtime = MCPRuntime()
     _configure(monkeypatch, runtime)
 
@@ -257,13 +279,7 @@ def test_protocol_lists_only_stable_read_tools_and_reads_never_run_context(monke
             "job-1",
             {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
         ).json()
-        assert {tool["name"] for tool in listed["result"]["tools"]} == {
-            "ask_job",
-            "get_job_context",
-            "get_job_profile",
-            "get_latest_run",
-            "watch_job_activity",
-        }
+        assert {tool["name"] for tool in listed["result"]["tools"]} == COMMON_TOOLS | {"ask_job"}
         called = _mcp_request(
             client,
             "job-1",
@@ -275,7 +291,7 @@ def test_protocol_lists_only_stable_read_tools_and_reads_never_run_context(monke
             },
         ).json()
 
-    context = called["result"]["structuredContent"]
+    context = called["result"]["structuredContent"]["data"]
     assert context["schema_version"] == JOB_CONTEXT_SCHEMA
     assert context["identity"] == {"job_id": "job-1", "blueprint_id": "chat-blueprint", "goal_id": "goal-1"}
     assert context["state"] == "never_run"
@@ -322,7 +338,7 @@ def test_job_context_uses_mrtr_for_pending_runtime_input(monkeypatch):
     prompts, result = asyncio.run(scenario())
 
     assert prompts == ["Which area should I inspect next?"]
-    assert result.structured_content["identity"]["job_id"] == "job-agent"
+    assert result.structured_content["data"][ "identity"]["job_id"] == "job-agent"
     assert runtime.interactions.commands == [("review-loading-bay", {
         "expected_revision": 1, "command_id": "mcp-review-loading-bay", "answer": {"option_id": "loading-bay"},
     })]
@@ -403,8 +419,8 @@ def test_job_activity_watch_relays_worker_mcp_activity_through_mrtr(monkeypatch)
             "requires_review": True,
         }
     ]
-    assert result.structured_content["delivered"] is True
-    assert result.structured_content["cursor"] == "cctv-target-camera-1-42"
+    assert result.structured_content["data"][ "delivered"] is True
+    assert result.structured_content["data"][ "cursor"] == "cctv-target-camera-1-42"
     assert len(relay_calls) == 1
     assert relay_calls[0]["job_id"] == "job-agent"
     assert relay_calls[0]["conversation_id"] == ""
@@ -437,7 +453,7 @@ def test_auth_job_isolation_archived_and_disabled_behavior(monkeypatch):
                 "params": {"name": "get_job_profile", "arguments": {}},
             },
             token="top-secret",
-        ).json()["result"]["structuredContent"]
+        ).json()["result"]["structuredContent"]["data"]
         assert archived["identity"]["job_id"] == "job-2"
         assert archived["state"] == "archived"
 
@@ -462,13 +478,7 @@ def test_response_enabled_job_lists_ask_job_and_never_starts_a_run(monkeypatch):
             "job-response",
             {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
         ).json()
-        assert {tool["name"] for tool in listed["result"]["tools"]} == {
-            "ask_job",
-            "get_job_context",
-            "get_job_profile",
-            "get_latest_run",
-            "watch_job_activity",
-        }
+        assert {tool["name"] for tool in listed["result"]["tools"]} == COMMON_TOOLS | {"ask_job"}
         called = _mcp_request(
             client,
             "job-response",
@@ -484,7 +494,7 @@ def test_response_enabled_job_lists_ask_job_and_never_starts_a_run(monkeypatch):
                     },
                 },
             },
-        ).json()["result"]["structuredContent"]
+        ).json()["result"]["structuredContent"]["data"]
 
     assert called["schema_version"] == "mn.mcp.job_answer.v1"
     assert called["state"]["job"] == "never_run"
@@ -530,14 +540,7 @@ def test_agent_enabled_job_adds_turn_polling_and_preserves_execution_service_run
             "job-agent",
             {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
         ).json()
-        assert {tool["name"] for tool in listed["result"]["tools"]} == {
-            "ask_job",
-            "get_job_context",
-            "get_job_profile",
-            "get_job_turn",
-            "get_latest_run",
-            "watch_job_activity",
-        }
+        assert {tool["name"] for tool in listed["result"]["tools"]} == COMMON_TOOLS | {"ask_job", "get_job_turn"}
         accepted = _mcp_request(
             client,
             "job-agent",
@@ -550,7 +553,7 @@ def test_agent_enabled_job_adds_turn_polling_and_preserves_execution_service_run
                     "arguments": {"question": "Move to Zone A", "request_id": "request-agent"},
                 },
             },
-        ).json()["result"]["structuredContent"]
+        ).json()["result"]["structuredContent"]["data"]
         completed = _mcp_request(
             client,
             "job-agent",
@@ -560,7 +563,7 @@ def test_agent_enabled_job_adds_turn_polling_and_preserves_execution_service_run
                 "method": "tools/call",
                 "params": {"name": "get_job_turn", "arguments": {"turn_id": turn_id}},
             },
-        ).json()["result"]["structuredContent"]
+        ).json()["result"]["structuredContent"]["data"]
 
     assert accepted["schema_version"] == "mn.mcp.job_answer.v3"
     assert accepted["turn"]["state"] == "accepted"
@@ -572,7 +575,9 @@ def test_job_projection_is_authoritative_when_catalog_now_enables_responses(monk
     _configure(monkeypatch, runtime)
 
     with TestClient(create_app()) as client:
-        assert _initialize(client, "job-response-disabled").status_code == 404
+        assert _initialize(client, "job-response-disabled").status_code == 200
+        response = _mcp_request(client, "job-response-disabled", {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}).json()
+        assert {tool["name"] for tool in response["result"]["tools"]} == COMMON_TOOLS
 
 
 def test_ask_job_preserves_idempotency_conflicts_instead_of_falling_back(monkeypatch):
@@ -930,7 +935,7 @@ def test_opt_in_stream_uses_progress_and_preserves_final_answer(monkeypatch):
     updates = [json.loads(event["params"]["message"]) for event in events if event.get("method") == "notifications/progress"]
     assert [event["delta"] for event in updates] == ["Visible ", "answer."]
     result = next(event["result"] for event in events if event.get("id") == 3)
-    assert result["structuredContent"]["answer"] == "Visible answer."
+    assert result["structuredContent"]["data"]["answer"] == "Visible answer."
     assert controls == ["start", "read"]
     assert runtime.jobs["job-response"]["run_count"] == 0
 
@@ -1082,3 +1087,44 @@ def test_context_reads_canonical_output_without_legacy_mapping(monkeypatch, tmp_
     invalid = JobContextProvider().get_context("job-1")
     assert "result" not in invalid["latest_run"]
     assert JobContextProvider().get_next_activity("job-1") is None
+
+
+def test_public_lifecycle_uses_runtime_receipts_and_job_scoped_operations(monkeypatch, tmp_path):
+    runtime = MCPRuntime()
+    _configure(monkeypatch, runtime)
+    monkeypatch.setenv('MN_HOME', str(tmp_path))
+    runtime.jobs['job-1']['latest_run_id'] = 'execution'
+    runtime.runs['job-1'] = [{'job_id': 'job-1', 'run_id': 'execution', 'runtime_run_id': 'output', 'status': 'running'}]
+    transitions = []
+    def pause(run_id):
+        transitions.append(('pause', run_id))
+        runtime.runs['job-1'][0]['status'] = 'paused'
+        return json.dumps(runtime.runs['job-1'][0])
+    def resume(run_id):
+        transitions.append(('resume', run_id))
+        runtime.runs['job-1'][0]['status'] = 'running'
+        return json.dumps(runtime.runs['job-1'][0])
+    def cancel(run_id):
+        transitions.append(('stop', run_id))
+        runtime.runs['job-1'][0]['status'] = 'cancelled'
+        return json.dumps(runtime.runs['job-1'][0])
+    runtime.pause_run, runtime.resume_run, runtime.cancel_run = pause, resume, cancel
+    runtime.jobs['job-1']['response_service'] = {'state': 'disabled'}
+    with TestClient(create_app()) as client:
+        def call(job_id, name, **arguments):
+            response = _mcp_request(client, job_id, {'jsonrpc': '2.0', 'id': 91, 'method': 'tools/call',
+                'params': {'name': name, 'arguments': arguments}})
+            assert response.status_code == 200, response.text
+            return response.json()['result']['structuredContent']
+        assert _initialize(client).status_code == 200
+        receipt = call('job-1', 'pause_run', request_id='pause', run_id='execution')
+        assert receipt['data']['status'] == 'paused'
+        assert receipt['run_id'] == 'execution'
+        assert call('job-1', 'pause_run', request_id='pause', run_id='execution') == receipt
+        assert call('job-1', 'get_operation_status', operation_id=receipt['operation_id'])['status'] == 'completed'
+        assert call('job-2', 'get_operation_status', operation_id=receipt['operation_id'])['error']['code'] == 'not_found'
+        assert call('job-2', 'resume_run', request_id='foreign', run_id='execution')['error']['code'] == 'invalid_request'
+        assert call('job-1', 'resume_run', request_id='resume', run_id='execution')['data']['status'] == 'running'
+        assert call('job-1', 'stop_run', request_id='stop', run_id='execution')['data']['status'] == 'cancelled'
+        assert transitions == [('pause', 'execution'), ('resume', 'execution'), ('stop', 'execution')]
+        assert runtime.queries == []

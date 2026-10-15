@@ -2041,3 +2041,30 @@ def test_monitor_recovers_after_one_failed_core_read(monkeypatch):
     assert response.json()["job"]["status"] == "completed"
     assert response.json()["events"] == [{"type": "completed"}]
     assert reads == ["run-1"]
+
+
+def test_refresh_mcp_contract_reprepares_unchanged_configuration_and_blocks_active_runs(monkeypatch):
+    client, runtime = _client(monkeypatch)
+    job = {'job_id': 'job-1', 'blueprint_id': 'worker-1', 'status': 'active', 'revision': 7,
+           'resolved_configuration': {'input': 'saved'}, 'latest_run_id': 'run-1'}
+    monkeypatch.setattr(runtime, 'get_job', lambda *_args, **_kwargs: json.dumps(job))
+    prepared = []
+    def prepare(job_id, current, configuration, **kwargs):
+        prepared.append((job_id, configuration, kwargs))
+        return '{"mcp":{"profile":"mn.mcp.supervision.v1"}}', {'manual': b'installed revision'}
+    monkeypatch.setattr(jobs, '_prepare_catalog_job_update', prepare)
+    headers = {'If-Match': strong_etag(job)}
+    runtime.run_status = 'running'
+    blocked = client.patch('/api/v1/jobs/job-1', headers=headers, json={'refresh_contract': True})
+    assert blocked.status_code == 409
+    assert not prepared
+    assert not any(call[0] in {'update_job', 'cancel_run'} for call in runtime.calls)
+    runtime.run_status = 'completed'
+    refreshed = client.patch('/api/v1/jobs/job-1', headers=headers, json={'refresh_contract': True})
+    assert refreshed.status_code == 200, refreshed.text
+    assert refreshed.json()['job_id'] == 'job-1'
+    assert prepared == [('job-1', {'input': 'saved'}, {'validate_inputs': True})]
+    update = next(call for call in runtime.calls if call[0] == 'update_job')
+    assert update[2] == {'resolved_configuration': {'input': 'saved'}}
+    assert update[3]['expected_revision'] == 7
+    assert update[3]['payloads']['manual'] == b'installed revision'

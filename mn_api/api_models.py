@@ -117,6 +117,7 @@ class JobCreate(StrictModel):
 
 
 class JobUpdate(StrictModel):
+    refresh_contract: bool = False
     status: Literal["active", "archived"] | None = None
     display_name: str | None = None
     resolved_configuration: dict[str, Any] | None = None

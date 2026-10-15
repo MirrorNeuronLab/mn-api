@@ -25,6 +25,8 @@ from mn_sdk.errors import AppError
 from mn_api.routes import bundles
 from mn_api.routes.v1 import job_backups
 from mn_api.routes.v1 import assistance, blueprints, infrastructure, interactions, jobs, operations, system
+from mn_api.routes.v1 import mcp_access
+from mn_api.mcp_oauth import OAuthApp, router as oauth_router
 
 
 def create_app() -> FastAPI:
@@ -86,5 +88,8 @@ def create_app() -> FastAPI:
     app.include_router(interactions.router)
     app.include_router(assistance.router)
     app.include_router(infrastructure.router)
+    app.include_router(mcp_access.router)
+    app.include_router(oauth_router)
+    app.mount("/api/v1/mcp/oauth", OAuthApp(), name="mcp-oauth")
     app.mount("/api/v1/jobs/{job_id}", job_mcp_app, name="job-mcp")
     return app

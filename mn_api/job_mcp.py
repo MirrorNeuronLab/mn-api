@@ -26,7 +26,6 @@ from mn_sdk_common.assistance import normalize_assistance_task
 
 from mn_api import state
 from mn_api.blueprints import find_blueprint
-from mn_api.config import auth_enabled
 from mn_api.errors import problem_response
 from mn_api.public import decode, public_value
 from mn_api.routes import jobs as runtime_job_routes
@@ -48,9 +47,7 @@ from mn_sdk.job_context import (
     safe_text as sdk_safe_text,
 )
 from mn_sdk_mcp import (
-    job_activity_input_required,
     normalize_job_activity,
-    resolve_job_activity_receipt,
 )
 
 
@@ -146,12 +143,9 @@ def _response_descriptor(blueprint: Mapping[str, Any]) -> dict[str, Any]:
         if isinstance(blueprint.get("response_service"), Mapping)
         else {}
     )
-    agent = descriptor.get("agent") if isinstance(descriptor.get("agent"), Mapping) else {}
-    tools = agent.get("tools") if isinstance(agent.get("tools"), Mapping) else {}
-    user_tools = tools.get("user") if isinstance(tools.get("user"), Mapping) else {}
     return {
         "goal_id": _first_text(descriptor.get("goal_id")) or None,
-        "activity_mcp": "watch_operator_activity" in user_tools,
+        "activity_mcp": bool((blueprint.get("mcp") or {}).get("activity")),
     }
 
 
@@ -437,18 +431,26 @@ class JobContextProvider:
         blueprint_id = _first_text(job.get("blueprint_id"), job.get("blueprintId"))
         if not blueprint_id:
             raise JobMCPNotFoundError("The requested job MCP is unavailable.")
-        try:
-            _repo_root, blueprint = find_blueprint(state.refresh_config_from_env(), blueprint_id)
-        except Exception as error:
-            if _is_not_found_error(error):
-                raise JobMCPNotFoundError("The requested job MCP is unavailable.") from error
-            raise JobMCPUnavailableError("The job blueprint is temporarily unavailable.") from error
+        installed_profile = (job.get("mcp") or {}).get("blueprint")
+        if isinstance(installed_profile, Mapping):
+            blueprint = dict(installed_profile)
+        else:
+            try:
+                _repo_root, blueprint = find_blueprint(state.refresh_config_from_env(), blueprint_id)
+            except Exception as error:
+                if job.get("mcp"):
+                    blueprint = {"id": blueprint_id, "name": job.get("display_name") or blueprint_id, "response_service": {"enabled": False}}
+                elif _is_not_found_error(error):
+                    raise JobMCPNotFoundError("The requested job MCP is unavailable.") from error
+                else:
+                    raise JobMCPUnavailableError("The job blueprint is temporarily unavailable.") from error
         descriptor = _response_descriptor(blueprint)
+        descriptor["activity_mcp"] = bool((job.get("mcp") or {}).get("activity"))
         descriptor["response_enabled"] = _response_service_enabled(job, blueprint)
         descriptor["response_agent_enabled"] = bool(
             descriptor["response_enabled"] and _response_agent_declared(blueprint)
         )
-        if self._require_response and not descriptor["response_enabled"]:
+        if self._require_response and not descriptor["response_enabled"] and not job.get("mcp"):
             raise JobMCPNotFoundError("The requested job MCP is unavailable.")
         return job, blueprint, descriptor
 
@@ -851,6 +853,22 @@ class JobContextProvider:
             for key in ("schema_version", "fetched_at", "freshness", "identity", "state", "read_only", "response_service", "latest_run", "recent_runs", "evidence", "warnings", "truncation")
         }
 
+    def get_run_results(self, job_id: str, run_id: str) -> dict[str, Any]:
+        """Read bounded published evidence for one verified execution."""
+        run = public_value(self._service().get_run(run_id))
+        if run.get("job_id") != job_id:
+            raise KeyError("Run does not belong to this Job")
+        results, warnings = [], []
+        try:
+            workflow = public_value(runtime_job_routes._workflow_progress_snapshot_for_run(run_id))
+            results = _evidence_from_workflow(workflow, MAX_EVIDENCE_RECORDS - 1)
+        except Exception:
+            warnings.append("Published workflow evidence is temporarily unavailable.")
+        # References keep confidential artifact bodies on their existing API.
+        if is_staged_artifact_ref(run.get("result_ref")):
+            results.append({"kind": "artifact", "run_id": run_id, "resource": f"/api/v1/runs/{run_id}/artifacts/final"})
+        return {"run_id": run_id, "results": safe_context_value(results), "warnings": warnings}
+
     def get_pending_human_request(self, job_id: str) -> dict[str, Any] | None:
         """The durable interaction ID is also the MCP elicitation identity."""
         from mn_sdk.interactions import InteractionClient
@@ -1101,11 +1119,16 @@ class JobMCPGuard:
             await self.base_app(scope, receive, send)
             return
         request = Request(scope, receive)
-        if auth_enabled(state.config):
-            authorization = request.headers.get("authorization", "")
-            scheme, _, token = authorization.partition(" ")
-            expected = str(state.config.api_token or "")
-            if scheme.lower() != "bearer" or not token or not hmac.compare_digest(token, expected):
+        job_id = _first_text(scope.get("path_params", {}).get("job_id"))
+        authorization = request.headers.get("authorization", "")
+        scheme, _, bearer = authorization.partition(" ")
+        expected = str(state.config.api_token or "")
+        owner = scheme.lower() == "bearer" and bool(expected) and hmac.compare_digest(bearer, expected)
+        authority = 'internal' if owner else None
+        if not owner:
+            from mn_api.mcp_access import ConnectionStore
+            authority = await anyio.to_thread.run_sync(lambda: ConnectionStore().authority(job_id, bearer)) if scheme.lower() == 'bearer' else None
+            if authority is None:
                 response = problem_response(
                     status_code=401,
                     error="unauthorized",
@@ -1114,10 +1137,14 @@ class JobMCPGuard:
                     instance=request.url.path,
                     request_id=str(getattr(request.state, "request_id", "")),
                 )
+                from mn_api.mcp_oauth import issuer
+                policy = await anyio.to_thread.run_sync(lambda: ConnectionStore().policy(job_id))
+                server_url = policy["server_url"] or str(request.base_url).rstrip("/") + f"/api/v1/jobs/{job_id}/mcp"
+                origin = issuer(server_url).removesuffix("/api/v1/mcp/oauth")
+                response.headers["WWW-Authenticate"] = f'Bearer resource_metadata="{origin}/.well-known/oauth-protected-resource/api/v1/jobs/{job_id}/mcp"'
                 await response(scope, receive, send)
                 return
 
-        job_id = _first_text(scope.get("path_params", {}).get("job_id"))
         try:
             response_mode = await anyio.to_thread.run_sync(self.provider.response_mode, job_id)
         except JobMCPNotFoundError as error:
@@ -1144,6 +1171,8 @@ class JobMCPGuard:
             return
 
         token = _current_job_id.set(job_id)
+        from mn_api.job_supervision import native_launch_authority
+        authority_token = native_launch_authority.set(authority == 'internal')
         try:
             selected_app = {
                 "agent": self.agent_app,
@@ -1173,16 +1202,19 @@ class JobMCPGuard:
             await selected_app(scope, receive, send)
         finally:
             _current_job_id.reset(token)
+            native_launch_authority.reset(authority_token)
 
 
 def create_job_mcp(provider: JobContextProvider | None = None) -> tuple[list[MCPServer], Any]:
     context_provider = provider or JobContextProvider()
 
+    from mn_sdk_mcp import create_supervision_server
+    from mn_api.job_supervision import BoundJobSupervision
+
+    supervision = BoundJobSupervision(context_provider, lambda: _current_job_id.get())
+
     def new_server(name: str, instructions: str) -> MCPServer:
-        return MCPServer(
-            name,
-            instructions=instructions,
-        )
+        return create_supervision_server(name, supervision, instructions=instructions)
 
     base_server = new_server(
         "MirrorNeuron job context",
@@ -1263,86 +1295,6 @@ def create_job_mcp(provider: JobContextProvider | None = None) -> tuple[list[MCP
             ),
         )
 
-    def register_context_tools(server: MCPServer) -> None:
-        @server.tool(
-            name="get_job_profile",
-            description="Read this job's identity, mission, safe configuration, schedule, and lifecycle state.",
-            structured_output=True,
-        )
-        def get_job_profile() -> dict[str, Any]:
-            return context_provider.get_profile(bound_job_id())
-
-        @server.tool(
-            name="get_latest_run",
-            description="Read bounded status, workflow evidence, and final result context from this job's latest run.",
-            structured_output=True,
-        )
-        def get_latest_run() -> dict[str, Any]:
-            return context_provider.get_latest_run(bound_job_id())
-
-        @server.tool(
-            name="get_job_context",
-            description="Read the combined job profile, schedule, recent Runs, and bounded latest-run context.",
-            structured_output=True,
-        )
-        def get_job_context(
-            evidence_limit: int = MAX_EVIDENCE_RECORDS,
-            ctx: Context = None,
-        ) -> dict[str, Any] | InputRequiredResult:
-            if ctx is not None:
-                pending = resolve_human_input(ctx)
-                if pending is not None:
-                    return pending
-            return context_provider.get_context(bound_job_id(), evidence_limit=evidence_limit)
-
-        @server.tool(
-            name="watch_job_activity",
-            description=(
-                "Wait briefly for one new job-originated activity item and deliver it "
-                "to the calling chat client through an MCP multi round-trip request."
-            ),
-            structured_output=True,
-        )
-        async def watch_job_activity(
-            after_event_id: str = "",
-            wait_seconds: float = 20.0,
-            ctx: Context = None,
-        ) -> dict[str, Any] | InputRequiredResult:
-            if ctx is not None:
-                receipt = resolve_job_activity_receipt(ctx)
-                if receipt is not None:
-                    return receipt
-            bounded_wait = min(max(float(wait_seconds or 0), 0.0), _ACTIVITY_MAX_WAIT_SECONDS)
-            deadline = time.monotonic() + bounded_wait
-            while True:
-                activity = await anyio.to_thread.run_sync(
-                    lambda: context_provider.get_next_activity(
-                        bound_job_id(),
-                        after_event_id=after_event_id,
-                        wait_seconds=max(0.0, deadline - time.monotonic()),
-                    )
-                )
-                if activity is not None:
-                    return job_activity_input_required(
-                        activity,
-                        after_event_id=after_event_id,
-                    )
-                if time.monotonic() >= deadline:
-                    return {
-                        "schema_version": "mn.mcp.job_activity_watch.v1",
-                        "delivered": False,
-                        "cursor": _safe_text(after_event_id, limit=256),
-                        "activity": None,
-                    }
-                await anyio.sleep(
-                    min(_ACTIVITY_POLL_SECONDS, max(0.0, deadline - time.monotonic()))
-                )
-
-    register_context_tools(base_server)
-    register_context_tools(enhanced_server)
-    register_context_tools(agent_server)
-    register_context_tools(stream_server)
-
     @stream_server.tool(name="ask_job", structured_output=True)
     @enhanced_server.tool(
         name="ask_job",
@@ -1409,6 +1361,7 @@ def create_job_mcp(provider: JobContextProvider | None = None) -> tuple[list[MCP
     def get_job_turn(turn_id: str) -> dict[str, Any]:
         return context_provider.get_job_turn(bound_job_id(), turn_id)
 
+    supervision.resolve_human_input = resolve_human_input
     servers = [base_server, enhanced_server, agent_server, stream_server]
     return servers, JobMCPGuard(
         base_server.streamable_http_app(

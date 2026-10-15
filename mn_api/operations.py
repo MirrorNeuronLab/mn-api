@@ -111,6 +111,11 @@ def _operation_error(error: Exception) -> dict[str, Any]:
     }
     if app_error.hint:
         result["hint"] = app_error.hint
+    if app_error.details and "blockers" in app_error.details:
+        from mn_sdk.errors import sanitize_context
+        result["details"] = {"blockers": sanitize_context(app_error.details)["blockers"]}
+        result["problem_code"] = app_error.problem_code
+        result["category"] = app_error.category
     issues = getattr(error, "operation_issues", None)
     if isinstance(issues, list) and issues:
         result["errors"] = public_value(issues[:100])

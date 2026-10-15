@@ -14,6 +14,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, Request, status
 from fastapi.responses import StreamingResponse
 from mn_sdk import RuntimeConfig, RuntimeService, generate_job_definition_submission_id, generate_stable_job_id
+from mn_sdk.integrations.job_control import launch_run, transition_run
 from mn_sdk.blueprint_support.shared_outputs import load_submission_storage
 from mn_sdk.blueprint_support.observability import list_runs as list_local_runs
 from mn_sdk.shared_run_store import shared_run_dir
@@ -421,11 +422,19 @@ def update_job(
     if request.status == "archived":
         result = _service().archive_job(job_id, expected_revision=_revision(current))
     else:
-        attrs = {key: value for key, value in request.model_dump(exclude_none=True).items() if key != "status"}
+        attrs = {key: value for key, value in request.model_dump(exclude_none=True).items() if key not in {"status", "refresh_contract"}}
+        if request.refresh_contract:
+            latest_run_id = current.get("latest_run_id")
+            if latest_run_id:
+                latest = _service().get_run(latest_run_id)
+                if latest.get("status") not in _TERMINAL:
+                    raise HTTPException(status_code=409, detail="Stop the active run before updating its MCP contract.")
+            attrs["resolved_configuration"] = request.resolved_configuration if request.resolved_configuration is not None else current.get("resolved_configuration", {})
         if request.status:
             attrs["status"] = request.status
         if (
             request.resolved_configuration is not None
+            and not request.refresh_contract
             and isinstance(current.get("resolved_configuration"), dict)
             and request.resolved_configuration == current["resolved_configuration"]
         ):
@@ -438,7 +447,7 @@ def update_job(
             manifest_json, payloads = _prepare_catalog_job_update(
                 job_id,
                 current,
-                request.resolved_configuration,
+                attrs["resolved_configuration"],
                 validate_inputs=True,
             )
             result = _service().update_job(
@@ -592,8 +601,8 @@ def create_job_run(
             else:
                 relay = (repo_root, blueprint, blueprint_run_id, manifest_json, resolved_configuration, current)
         try:
-            run = _service().start_run(
-                job_id,
+            run = launch_run(
+                _service(), job_id,
                 run_id=run_id,
                 inputs=request.inputs,
                 idempotency_key=idempotency_key or "",
@@ -867,12 +876,7 @@ def update_run(run_id: str, request: RunUpdate, _principal=Depends(require_auth)
         desired == "running" and current != "paused"
     ):
         raise HTTPException(status_code=409, detail=f"A {current or 'unknown'} run cannot transition to {desired}.")
-    if desired == "paused":
-        result = _service().pause_run(run_id)
-    elif desired == "running":
-        result = _service().resume_run(run_id)
-    else:
-        result = _service().cancel_run(run_id)
+    result = transition_run(_service(), run["job_id"], run_id, desired)
     return public_value(result)
 
 
