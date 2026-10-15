@@ -669,3 +669,5 @@ MCP tunnel. Preserve the external host and forwarded HTTPS scheme at your proxy.
 The runtime and desktop do not publish a tunnel automatically. Copying a setup
 prompt provides instructions; the user still adds and authorizes the connection
 in their AI client's MCP settings.
+
+Local-source MCP integration requires the matching SDK/common/MCP family from `1.3.61.dev12` onward, below `2.0`. This floor accepts the source revision containing supervision and Skills; it does not require an unpublished `1.3.62` family.
