@@ -160,10 +160,20 @@ def test_model_installation_failure_is_sanitized_problem_in_operation(client, mo
 
 
 @pytest.mark.parametrize("remote", [False, True])
-def test_docker_installation_uses_shared_sdk_and_nim_gateway(monkeypatch, remote):
+def test_docker_installation_uses_shared_sdk_and_nim_gateway(monkeypatch, remote, tmp_path):
     from mn_sdk import resolve_model_entry, docker_model_runner_endpoint
 
-    entry = resolve_model_entry("cosmos3")
+    # Docker models are operator catalog entries, independent of the packaged
+    # DMR catalog. Exercise the real catalog and registration boundaries.
+    catalog = tmp_path / "models.json"
+    catalog.write_text(json.dumps({"version": 1, "models": [{
+        "id": "test-video:1", "model": "test-video:1", "source": "docker",
+        "provider": "docker_model_runner", "backend": "nim",
+        "api_model": "test/video", "aliases": ["test-video"],
+        "docker": {"image": "example.test/nim/video:1", "port": 30082},
+    }]}))
+    monkeypatch.setenv("MN_MODEL_CATALOG_PATH", str(catalog))
+    entry = resolve_model_entry("test-video")
     monkeypatch.setattr(model_installation, "resolve_runtime_cluster_model_for_api",
                         lambda **_kw: {"node": "spark"} if remote else None)
     calls = []
@@ -178,10 +188,10 @@ def test_docker_installation_uses_shared_sdk_and_nim_gateway(monkeypatch, remote
     monkeypatch.setattr(model_installation, "install_runtime_model", local)
     monkeypatch.setattr(model_installation, "install_runtime_cluster_model_for_api", native)
     monkeypatch.setattr(model_installation, "sync_runtime_model_gateways_for_api", lambda summary: summary["endpoints"])
-    result = model_installation.install_model("cosmos3", {}, lambda **_kwargs: None)
+    result = model_installation.install_model("test-video", {}, lambda **_kwargs: None)
     assert calls == [entry["id"]]  # No Nemotron preparation or default substitution.
     endpoint = result["endpoints"][entry["id"]]
     assert endpoint["provider"] == "openai-compatible"
     assert endpoint["api_base"] == "http://host.docker.internal:30082/v1"
-    assert endpoint["api_model"] == "nvidia/cosmos3-nano-reasoner"
+    assert endpoint["api_model"] == "test/video"
     assert get_registered_model(entry["id"])["kind"] == "docker"

@@ -4,13 +4,28 @@ import hashlib
 import json
 from urllib.parse import parse_qs, urlsplit
 
+import pytest
 from fastapi.testclient import TestClient
+from pydantic import AnyUrl
 
 from mn_api.app import create_app
 from mn_api.mcp_access import ConnectionStore
 from tests.test_job_mcp import MCPRuntime, _configure, _mcp_request
 
 RESOURCE = 'https://runtime.example/api/v1/jobs/job-1/mcp'
+
+
+@pytest.mark.parametrize(('callback', 'target'), [
+    ('https://client.example/callback', 'https://client.example:443'),
+    ('http://127.0.0.1:49152/callback', 'http://127.0.0.1:49152'),
+    ('http://[::1]:49152/callback', 'http://[::1]:49152'),
+    ('vscode:/callback', 'vscode:'),
+    ('https://user:password@client.example/callback?state=private', 'https://client.example:443'),
+    ('https://client.example;script-src*/callback', 'https://client.example%3Bscript-src%2A:443'),
+])
+def test_consent_policy_allows_only_the_registered_callback_origin(callback, target):
+    from mn_api.mcp_oauth import consent_policy
+    assert consent_policy(AnyUrl(callback)) == f"default-src 'none'; form-action 'self' {target}; frame-ancestors 'none'"
 
 
 def test_external_access_is_opt_in_scoped_revocable_and_preserves_internal_sessions(monkeypatch):
@@ -83,6 +98,7 @@ def test_oauth_pkce_link_refresh_and_revocation(monkeypatch):
         location = authorized.headers['location']
         page = client.get(location)
         assert 'Allow connection' in page.text and key not in page.text
+        assert page.headers['Content-Security-Policy'] == "default-src 'none'; form-action 'self' https://client.example:443; frame-ancestors 'none'"
         ticket = parse_qs(urlsplit(location).query)['ticket'][0]
         assert client.post('/api/v1/mcp/oauth/approve', data={'ticket': ticket, 'connection_code': 'wrong'}).status_code == 403
         approved = client.post('/api/v1/mcp/oauth/approve', data={'ticket': ticket, 'connection_code': key}, follow_redirects=False)

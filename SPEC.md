@@ -655,7 +655,9 @@ path-aware authorization-server discovery is at
 uses public-client dynamic registration, authorization code with S256 PKCE,
 Job-bound audience and scopes, atomic one-use codes, rotating refresh tokens,
 and revocation. The browser consent form requires the separately copied
-connection code and describes lifecycle authority. Owner credentials are never
+connection code and describes lifecycle authority. Its form policy permits only same-origin submission
+and the registered callback origin so Chromium can follow the OAuth redirect;
+scripts and framing remain prohibited. Owner credentials are never
 shared with external clients. Connection codes and tokens are stored as hashes
 in a private SQLite journal; OAuth grant metadata is bounded by expiry.
 

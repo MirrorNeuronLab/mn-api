@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import html
 import secrets
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 
 from fastapi import APIRouter, HTTPException, Request
 from mcp.server.auth.provider import AccessToken, AuthorizationCode, AuthorizationParams, AuthorizeError, RefreshToken, RegistrationError, TokenError
@@ -30,6 +30,17 @@ def metadata(issuer_url):
     value = build_metadata(AnyHttpUrl(issuer_url), None, OPTIONS, RevocationOptions(enabled=True))
     value.token_endpoint_auth_methods_supported = ['none']
     return value
+
+
+def consent_policy(redirect_uri):
+    # Chromium applies form-action to the POST's redirect as well. Permit only
+    # this validated client's callback origin, never arbitrary form destinations.
+    target = redirect_uri.scheme + ':'
+    if redirect_uri.host:
+        target += '//' + quote(redirect_uri.host, safe='[]:.-')
+        if redirect_uri.port is not None:
+            target += ':' + str(redirect_uri.port)
+    return f"default-src 'none'; form-action 'self' {target}; frame-ancestors 'none'"
 
 
 class CoWorkerOAuth:
@@ -120,6 +131,7 @@ async def approve(request: Request):
     if not grant:
         raise HTTPException(400, 'This connection request expired or was revoked.')
     policy = store.policy(grant['job_id'])
+    params = AuthorizationParams.model_validate(grant['data']['params'])
     failed = False
     if request.method == 'POST':
         code = str(form.get('connection_code') or '')
@@ -129,7 +141,6 @@ async def approve(request: Request):
             claimed = store.grant(ticket, 'consent', consume=True)
             if not claimed:
                 raise HTTPException(400, 'This connection request was already used.')
-            params = AuthorizationParams.model_validate(grant['data']['params'])
             authorization_code = store.issue('code', job_id=grant['job_id'], generation=grant['generation'], lifetime=120,
                 data={'client_id': grant['data']['client_id'], 'scopes': params.scopes or ['co_worker:supervise'],
                       'code_challenge': params.code_challenge, 'redirect_uri': str(params.redirect_uri),
@@ -145,7 +156,7 @@ async def approve(request: Request):
     <p>Copy the connection code from this co-worker’s MCP integration in OtterDesk. Disabling that integration revokes this connection.</p>
     {'<p role="alert">The connection code was not accepted. Try again.</p>' if failed else ''}
     <form method="post"><input type="hidden" name="ticket" value="{html.escape(ticket, quote=True)}"><label>Connection code <input name="connection_code" type="password" autocomplete="off" required maxlength="256"></label><button type="submit">Allow connection</button></form></html>'''
-    return HTMLResponse(content, status_code=403 if failed else 200, headers={'Content-Security-Policy': "default-src 'none'; form-action 'self'; frame-ancestors 'none'", 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer'})
+    return HTMLResponse(content, status_code=403 if failed else 200, headers={'Content-Security-Policy': consent_policy(params.redirect_uri), 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer'})
 
 
 class OAuthApp:
