@@ -166,10 +166,10 @@ No artificial completion percentage is inferred from elapsed time.
   sanitized failure. Replaying the same request after an API restart resumes an
   interrupted operation and reconciles a Core update that may have committed
   before its RPC deadline. A changed body with the same key is rejected.
-  A rejected run start caused by temporary runtime resource overload returns
-  HTTP 503 Problem Details with code `MN_RESOURCE_EXHAUSTED`; no schedulable
-  runtime node returns `MN_SCHEDULING_UNAVAILABLE`. These run-start responses
-  do not create an accepted run. Other operations keep their existing errors.
+  Temporary contention on the selected PC accepts an automatically queued run
+  with HTTP 202 and `status: queued`. An unreachable owner or unavailable
+  scheduling authority can still return `MN_SCHEDULING_UNAVAILABLE`; permanently
+  incompatible hardware is rejected. Other operations keep their existing errors.
   A blueprint-owned Web UI is optional singular Job state: its durable handle
   is served only at `GET /api/v1/jobs/{job_id}/ui` and is shared by every run
   of that Job. Run UI paths are not mounted. The local `mn-web-ui-server` may
@@ -674,3 +674,32 @@ prompt provides instructions; the user still adds and authorizes the connection
 in their AI client's MCP settings.
 
 Local-source MCP integration requires the matching SDK/common/MCP family from `1.3.61.dev12` onward, below `2.0`. This floor accepts the source revision containing supervision and Skills; it does not require an unpublished `1.3.62` family.
+
+
+## Automatically queued starts and schedule controls
+
+`POST /jobs/{job_id}/runs` returns HTTP 202 for an accepted start, including when
+its selected PC is busy. A queued result has `status: queued` and an `admission`
+object with durable `queue_id`, `owner_node`, node label, position and blocker.
+Launch-operation and MCP supervision results preserve that receipt. Run detail
+and monitor projections include the current admission state. Queue acceptance is
+acknowledged immediately and requires no extra confirmation.
+
+Each PC runs one MN run at a time; that run reserves CPU, memory and all GPUs,
+shared by its workers and models. Different PCs run independently. Ownership is
+checked at the authoritative owner Core, including remote starts forwarded using
+federation credentials. Cached inventory is informational. Permanently
+incompatible requirements still fail validation; unreachable owners report
+unavailability and do not grant a claim. Requests use their original idempotency
+identity when reconciled after an uncertain response.
+
+`GET /schedules` inspects the connected Core (or `owner_node` query target).
+`GET`, `PATCH`, `DELETE /schedules/{schedule_id}` use the same authenticated
+owner-routed scheduling contract. PATCH/DELETE require the current strong
+`If-Match`. For queue schedules (`queue_<run_id>`), PATCH
+`{"schedule":{"run_at":"2099-10-20T12:00:00Z"}}` defers the same execution;
+DELETE cancels only while unstarted. `PATCH /runs/{run_id}` with
+`{"desired_state":"cancelled","queued_only":true}` additionally fences the
+queued-only condition in Core, including admission races. A stale request never
+stops the active run. Paused runs and unfinished cleanup retain the reservation;
+no ETA is inferred. Core/native SDK capability `exclusive_run_v1` is required.

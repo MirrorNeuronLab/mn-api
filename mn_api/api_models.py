@@ -147,6 +147,7 @@ class BlueprintRunCreate(RunCreate):
 
 class RunUpdate(StrictModel):
     desired_state: Literal["running", "paused", "cancelled"]
+    queued_only: bool = False
 
 
 class RunRetryPlan(StrictModel):

@@ -43,6 +43,7 @@ from mn_api.api_models import (
     RunRetryPlan,
     RunRetryCreate,
     ScheduleCreate,
+    ScheduleUpdate,
     WorkflowDag,
     WorkflowSteps,
 )
@@ -872,6 +873,10 @@ def update_run(run_id: str, request: RunUpdate, _principal=Depends(require_auth)
     run = _service().get_run(run_id)
     current = str(run.get("status") or "").lower()
     desired = request.desired_state
+    if request.queued_only:
+        if desired != "cancelled" or current != "queued":
+            raise HTTPException(status_code=409, detail="This queued start has already changed. Refresh its status.")
+        return public_value(_service().cancel_run(run_id, queued_only=True))
     if current in _TERMINAL or (desired == "paused" and current not in {"pending", "running"}) or (
         desired == "running" and current != "paused"
     ):
@@ -940,6 +945,42 @@ def create_job_schedule(
     )
 
 
+@router.get("/schedules", operation_id="list_schedules", tags=["schedules"], response_model=PageResponse)
+def list_schedules(owner_node: str = "", _principal=Depends(require_auth)):
+    result = _service().list_schedules(**({"owner_node": owner_node} if owner_node else {}))
+    return {"items": public_value(records(result, "items", "schedules", "data")), "next_page_token": None}
+
+
+@router.get("/schedules/{schedule_id}", operation_id="get_schedule", tags=["schedules"], response_model=ResourceModel)
+def get_schedule(schedule_id: str, owner_node: str = "", _principal=Depends(require_auth)):
+    return resource_response(_service().get_schedule(schedule_id, **({"owner_node": owner_node} if owner_node else {})), etag=True)
+
+
+@router.patch("/schedules/{schedule_id}", operation_id="update_schedule", tags=["schedules"], response_model=ResourceModel)
+def update_schedule(schedule_id: str, request: ScheduleUpdate, owner_node: str = "",
+                    if_match: str | None = Header(default=None, alias="If-Match"), _principal=Depends(require_auth)):
+    owner = {"owner_node": owner_node} if owner_node else {}
+    current = _service().get_schedule(schedule_id, **owner)
+    require_if_match(if_match, current)
+    attrs = dict(request.schedule or {})
+    if request.desired_state is not None:
+        attrs["enabled"] = request.desired_state == "running"
+    if not attrs:
+        raise HTTPException(status_code=422, detail="Provide schedule changes.")
+    return resource_response(_service().update_schedule(schedule_id, schedule=attrs,
+        expected_revision=int(current.get("revision") or 0), **owner), etag=True)
+
+
+@router.delete("/schedules/{schedule_id}", operation_id="delete_schedule", tags=["schedules"])
+def delete_schedule(schedule_id: str, owner_node: str = "",
+                    if_match: str | None = Header(default=None, alias="If-Match"), _principal=Depends(require_auth)):
+    owner = {"owner_node": owner_node} if owner_node else {}
+    current = _service().get_schedule(schedule_id, **owner)
+    require_if_match(if_match, current)
+    return resource_response(_service().delete_schedule(schedule_id,
+        expected_revision=int(current.get("revision") or 0), **owner))
+
+
 @router.get("/runs/{run_id}/monitor", operation_id="get_run_monitor", tags=["runs"], response_model=ResourceModel)
 def get_run_monitor(run_id: str, _principal=Depends(require_auth)):
     try:
@@ -950,6 +991,7 @@ def get_run_monitor(run_id: str, _principal=Depends(require_auth)):
             raise
         progress = stored_progress(run_id) or {}
         return _run_public({"job": canonical_run, "summary": canonical_run,
+                            "status": canonical_run.get("status"), "admission": canonical_run.get("admission"),
                             "events": progress.get("recent_events") or [],
                             "workflow_progress": progress}, run_id=run_id, runtime_run_id=run_id)
     # Reuse this request's canonical read; never retain mutable Run state
@@ -961,6 +1003,7 @@ def get_run_monitor(run_id: str, _principal=Depends(require_auth)):
     canonical_status = str(canonical_run.get("status") or "").strip().lower()
     if canonical_status:
         detail["status"] = canonical_status
+        detail["admission"] = canonical_run.get("admission")
         for key in ("job", "summary"):
             projection = detail.get(key)
             if isinstance(projection, dict):

@@ -74,7 +74,6 @@ def test_otterdesk_job_mcp_mount_is_registered(api_app):
     assert any(getattr(route, "path", None) == "/api/v1/jobs/{job_id}" for route in api_app.routes)
 
 
-@pytest.mark.xfail(strict=True, reason="Schedule read/update RPCs are not yet available in Core and the SDK")
 @pytest.mark.parametrize("method", ["GET", "PATCH"])
 def test_otterdesk_schedule_detail_route_is_registered(api_app, method):
     assert method.lower() in api_app.openapi()["paths"]["/api/v1/schedules/{schedule_id}"]

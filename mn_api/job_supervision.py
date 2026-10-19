@@ -116,7 +116,7 @@ class BoundJobSupervision:
         def poll_launch(operation_id):
             snapshot = get_operation(operation_id)
             result = snapshot.get("result") or {}
-            receipt = {key: result[key] for key in ("job_id", "run_id", "execution_id", "runtime_run_id", "workflow_id", "graph_id", "status") if key in result}
+            receipt = {key: result[key] for key in ("job_id", "run_id", "execution_id", "runtime_run_id", "workflow_id", "graph_id", "status", "admission", "message") if key in result}
             projected = {"status": snapshot.get("status"), "progress": snapshot.get("progress", {})}
             if receipt:
                 projected["result"] = receipt

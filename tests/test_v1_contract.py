@@ -275,7 +275,6 @@ def test_health_capability_and_removed_routes(monkeypatch):
         "/api/v2/health",
         "/api/v1/runtime-runs",
         "/api/v1/realtime",
-        "/api/v1/schedules",
         "/api/v1/trigger-events",
         "/api/v1/deployments",
         "/api/v1/run-cleanups",
@@ -2068,3 +2067,35 @@ def test_refresh_mcp_contract_reprepares_unchanged_configuration_and_blocks_acti
     assert update[2] == {'resolved_configuration': {'input': 'saved'}}
     assert update[3]['expected_revision'] == 7
     assert update[3]['payloads']['manual'] == b'installed revision'
+
+
+def test_queued_start_receipt_and_conditional_cancel(monkeypatch):
+    client, runtime = _client(monkeypatch)
+    runtime.run_status = "queued"
+    receipt = {"job_id": "job-1", "run_id": "run-1", "status": "queued",
+        "admission": {"state": "queued", "queue_id": "queue_run-1", "owner_node": "spark@pc", "position": 1,
+            "blocked_by": {"job_name": "Research assistant"}, "message": "Queued on Spark. It will start automatically."}}
+    monkeypatch.setattr(runtime, "start_run", lambda *_args, **_kwargs: json.dumps(receipt))
+    started = client.post("/api/v1/jobs/job-1/runs", json={})
+    assert started.status_code == 202
+    assert started.json()["status"] == "queued"
+    assert started.json()["admission"]["queue_id"] == "queue_run-1"
+    calls = []
+    monkeypatch.setattr(runtime, "cancel_run", lambda run_id, **kwargs: calls.append((run_id, kwargs)) or json.dumps({"run_id": run_id, "status": "cancelled"}))
+    cancelled = client.patch("/api/v1/runs/run-1", json={"desired_state": "cancelled", "queued_only": True})
+    assert cancelled.status_code == 200
+    assert calls == [("run-1", {"queued_only": True})]
+    runtime.run_status = "running"
+    assert client.patch("/api/v1/runs/run-1", json={"desired_state": "cancelled", "queued_only": True}).status_code == 409
+    assert len(calls) == 1
+
+
+def test_queue_schedule_changes_require_current_etag(monkeypatch):
+    client, runtime = _client(monkeypatch)
+    url = "/api/v1/schedules/queue_run-1"
+    current = client.get(url)
+    assert current.status_code == 200
+    body = {"schedule": {"run_at": "2099-10-20T12:00:00Z"}}
+    assert client.patch(url, json=body).status_code == 428
+    assert client.patch(url, json=body, headers={"If-Match": '"stale"'}).status_code == 412
+    assert client.patch(url, json=body, headers={"If-Match": current.headers["etag"]}).status_code == 200
