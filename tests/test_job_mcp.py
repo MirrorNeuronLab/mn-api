@@ -1128,3 +1128,72 @@ def test_public_lifecycle_uses_runtime_receipts_and_job_scoped_operations(monkey
         assert call('job-1', 'stop_run', request_id='stop', run_id='execution')['data']['status'] == 'cancelled'
         assert transitions == [('pause', 'execution'), ('resume', 'execution'), ('stop', 'execution')]
         assert runtime.queries == []
+
+@pytest.mark.parametrize("job_id", ["job-response", "job-agent"])
+def test_async_reply_commands_return_owner_claim_and_preserve_poll_intent(monkeypatch, job_id):
+    runtime = MCPRuntime()
+    _configure(monkeypatch, runtime)
+    captured = []
+
+    def query(job, question, **kwargs):
+        if kwargs["context"].get("_mn_activity_watch"):
+            return {"schema_version": "mn.mcp.job_reply_capabilities.v1", "operation_schema": "mn.mcp.job_reply_operation.v1"}
+        captured.append((job, question, kwargs))
+        return {"schema_version": "mn.mcp.job_reply_operation.v1", "status": "running",
+                "request_id": kwargs["request_id"], "operation_id": "reply-" + "a" * 64,
+                "conversation_id": "763ea7ae-2d52-4ad6-99bd-23cccf10921e", "job_id": job,
+                "blueprint_id": runtime.jobs[job]["blueprint_id"], "text": "", "response": None}
+
+    provider = JobContextProvider()
+    service = provider._service()
+    monkeypatch.setattr(service, "query_job_response", query)
+    monkeypatch.setattr(provider, "_service", lambda: service)
+    task = {"goal": "diagnose", "state": "review", "execution_id": "run-agent" if job_id == "job-agent" else "",
+            "next_question": "Review current work."}
+    import mn_api.app as app_module
+    monkeypatch.setattr(app_module, "create_job_mcp", lambda: job_mcp.create_job_mcp(provider))
+    with TestClient(create_app()) as client:
+        assert _initialize(client, job_id).status_code == 200
+        listed = _mcp_request(client, job_id, {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}).json()
+        ask = next(tool for tool in listed["result"]["tools"] if tool["name"] == "ask_job")
+        assert {"background", "reply_action"} <= ask["inputSchema"]["properties"].keys()
+        for index, action in enumerate(["start", "read"], 3):
+            response = _mcp_request(client, job_id, {"jsonrpc": "2.0", "id": index, "method": "tools/call",
+                "params": {"name": "ask_job", "arguments": {"question": "What next?", "request_id": "same-reply",
+                    "background": True, "reply_action": action, "assistance_task": task}}}).json()
+            assert response["result"]["structuredContent"]["data"]["status"] == "running"
+    assert [call[2]["context"]["_mn_response_work"]["action"] for call in captured] == ["start", "read"]
+    assert captured[0][2]["context"]["assistance_task"] == captured[1][2]["context"]["assistance_task"]
+    assert "latest_run" not in captured[1][2]["context"]
+
+
+def test_async_reply_rejects_an_older_owner_before_forwarding_the_question(monkeypatch):
+    runtime = MCPRuntime()
+    _configure(monkeypatch, runtime)
+    provider = JobContextProvider()
+    calls = []
+    def query(job_id, question, **kwargs):
+        calls.append(kwargs["context"])
+        return {"schema_version": "mn.mcp.job_activity_watch.v1", "delivered": False}
+    service = provider._service()
+    monkeypatch.setattr(service, "query_job_response", query)
+    monkeypatch.setattr(provider, "_service", lambda: service)
+    receipt = provider.response_work_command("job-agent", "Move to Zone A", request_id="claim", conversation_id=None, action="start")
+    assert receipt == {"schema_version": "mn.mcp.job_reply_capabilities.v1", "operation_schema": None}
+    assert calls == [{"_mn_activity_watch": {"reply_work_capability": True, "wait_seconds": 0}}]
+
+
+@pytest.mark.parametrize("code", ["UNAVAILABLE", "DEADLINE_EXCEEDED"])
+def test_async_reply_relay_loss_is_observation_unavailability(monkeypatch, code):
+    import grpc
+    runtime = MCPRuntime()
+    _configure(monkeypatch, runtime)
+    class RelayError(grpc.RpcError):
+        def code(self):
+            return getattr(grpc.StatusCode, code)
+    provider = JobContextProvider()
+    service = provider._service()
+    monkeypatch.setattr(service, "query_job_response", lambda *_args, **_kwargs: (_ for _ in ()).throw(RelayError()))
+    monkeypatch.setattr(provider, "_service", lambda: service)
+    result = provider.response_work_command("job-response", "What next?", conversation_id=None, request_id="same", action="read")
+    assert result == {"schema_version": "mn.mcp.job_reply_observation.v1", "state": "unavailable"}

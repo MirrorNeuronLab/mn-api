@@ -23,7 +23,7 @@ from mn_api.job_mcp import create_job_mcp, job_mcp_lifespan
 from mn_api.host_output_delivery import host_output_delivery_loop
 from mn_sdk.errors import AppError
 from mn_api.routes import bundles
-from mn_api.routes.v1 import job_backups
+from mn_api.routes.v1 import job_backups, job_preparations
 from mn_api.routes.v1 import assistance, blueprints, infrastructure, interactions, jobs, operations, system
 from mn_api.routes.v1 import mcp_access
 from mn_api.mcp_oauth import OAuthApp, router as oauth_router
@@ -84,6 +84,7 @@ def create_app() -> FastAPI:
     app.include_router(bundles.router)
     app.include_router(jobs.router)
     app.include_router(job_backups.router)
+    app.include_router(job_preparations.router)
     app.include_router(operations.router)
     app.include_router(interactions.router)
     app.include_router(assistance.router)

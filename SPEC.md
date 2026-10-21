@@ -2,6 +2,13 @@
 
 The API requires Python 3.12 or newer. The managed runtime and contributor/CI toolchains use Python 3.12, matching the SDK and CLI.
 
+## Durable preparation and reply submission
+
+`POST /api/v1/job-preparations` accepts `JobCreate` with an `Idempotency-Key`, reserves a stable Job identity before dispatch, and returns `202` with a durable operation and `Location`. `POST /api/v1/jobs/{id}/preparations` accepts configuration-only `JobUpdate` with `Idempotency-Key` and `If-Match`. Follow `/api/v1/operations/{id}` or its authenticated SSE stream. Reading a failed preparation never restarts it; explicitly reposting retries under its original reserved Job and conditional fence. Reposting the same claim reconnects to it; after API restart the original Job identity and conditional revision fence are reused. A changed active/completed creation payload returns `409` with the original operation location for reconciliation. A corrected failed preparation receives a new operation for the original reserved Job. Synchronous REST resources remain available for existing direct clients; OtterDesk uses only the asynchronous preparation path.
+
+Job MCP `ask_job` advertises `background` and `reply_action` (`start`, `read`, `cancel`) for both read-only and bounded-agent replies. Async calls require a stable request ID and preserve the question, original conversation ID and assistance intent across reads. A read-only activity-control capability probe verifies owner support before dispatch. Each call returns `mn.mcp.job_reply_operation.v1` with Job/blueprint/request/operation/conversation identity, status, cumulative bounded text, and a final `response` retaining the existing answer contract. The Job owner persists its claim before running the answer. Relay unavailability returns `mn.mcp.job_reply_observation.v1`; clients reconnect to the original claim instead of treating it as an owner failure. Connections observe work; they do not own its lifetime. Read-only cancellation is explicit. Effectful interruption is reported for reconciliation and never automatically replayed. Deploy the matching SDK job-response component on each owner and restart the native SDK service alongside the API.
+
+
 ## Blueprint review metadata
 
 Blueprint list and detail resources preserve the SDK catalog's `skills` list

@@ -55,8 +55,8 @@ def _load_durable_operation_locked(operation_id: str) -> dict[str, Any] | None:
         operation["progress"] = {
             "percent": previous_progress.get("percent", 0),
             "stage": "reconcile",
-            "label": "Reconnect launch",
-            "detail": "The API restarted. Resubmit the same launch request to reconcile its result.",
+            "label": "Reconnect work",
+            "detail": "The API restarted. Resubmit the same request to reconcile its result.",
         }
         _operations[operation_id] = operation
         _append_local_event_locked(operation_id, "operation.interrupted", operation)
@@ -257,6 +257,7 @@ def start_local_operation(
     operation_id: str | None = None,
     request_fingerprint: str | None = None,
     durable: bool = False,
+    retry_failed: bool = False,
 ) -> dict[str, Any]:
     now = _now()
     operation_id = operation_id or f"op-local-{uuid.uuid4().hex}"
@@ -285,6 +286,7 @@ def start_local_operation(
                 or (
                     existing.get("status") == "failed"
                     and not (existing.get("error") or {}).get("retryable")
+                    and not retry_failed
                 )
                 or operation_id in _active_local_operation_ids
             ):

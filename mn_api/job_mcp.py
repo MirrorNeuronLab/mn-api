@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, Mapping
 
 import anyio
+import grpc
 from mcp.server import MCPServer
 from mcp.server.mcpserver import Context
 from mcp.server.transport_security import TransportSecuritySettings
@@ -82,6 +83,17 @@ def _attach_assistance(context, task):
 
 class JobMCPNotFoundError(RuntimeError):
     pass
+
+
+def _reply_rpc(command):
+    try:
+        return command()
+    except grpc.RpcError as error:
+        if error.code() not in {grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.DEADLINE_EXCEEDED}:
+            raise
+        # A relay timeout says nothing about the owner claim's outcome. Keep
+        # transport unavailability distinct from an owner-reported failure.
+        return {"schema_version": "mn.mcp.job_reply_observation.v1", "state": "unavailable"}
 
 
 class JobMCPUnavailableError(RuntimeError):
@@ -1103,7 +1115,48 @@ class JobContextProvider:
             turn_id = str(uuid.UUID(str(turn_id)))
         except (ValueError, TypeError, AttributeError) as error:
             raise ValueError("turn_id must be a UUID") from error
-        return self._service().get_job_response_turn(job_id, turn_id)
+        return _reply_rpc(lambda: self._service().get_job_response_turn(job_id, turn_id))
+
+    def response_work_command(self, job_id, question, *, conversation_id, request_id, action, assistance_task=None):
+        if not isinstance(question, str) or not question.strip() or len(question) > 8000:
+            raise ValueError("Invalid response question")
+        if not request_id or len(request_id) > 128 or action not in {"start", "read", "cancel"}:
+            raise ValueError("Invalid reply operation identity or action")
+        if conversation_id:
+            uuid.UUID(conversation_id)
+        base = self._base_snapshot(job_id)
+        if not base.descriptor.get("response_enabled"):
+            raise JobMCPNotFoundError("This Job does not provide replies.")
+        service = self._service()
+        # The existing activity-watch control is read-only, including on an
+        # older owner. Probe it before sending a new control that an older
+        # engine could otherwise ignore and treat as an ordinary question.
+        capabilities = _reply_rpc(lambda: service.query_job_response(job_id, "Reply operation capabilities",
+            context={"_mn_activity_watch": {"reply_work_capability": True, "wait_seconds": 0}},
+            conversation_id="", request_id=""))
+        if capabilities.get("schema_version") == "mn.mcp.job_reply_observation.v1":
+            return capabilities
+        if capabilities.get("operation_schema") != "mn.mcp.job_reply_operation.v1":
+            return {"schema_version": "mn.mcp.job_reply_capabilities.v1", "operation_schema": None}
+        context, snapshot = self._context_for_request(job_id) if action == "start" else ({}, None)
+        if action == "start":
+            _attach_assistance(context, assistance_task)
+        else:
+            # Poll the original claim even if its run has since changed. The
+            # owner checks this intent against the saved request fingerprint.
+            task = normalize_assistance_task(assistance_task.model_dump() if isinstance(assistance_task, AssistanceTask) else assistance_task)
+            if task is not None:
+                context["assistance_task"] = task
+        if base.descriptor.get("response_agent_enabled") and snapshot is not None and snapshot.active_service_run_id:
+            context["_active_service_run_id"] = snapshot.active_service_run_id
+        result = _reply_rpc(lambda: service.query_job_response(job_id, question,
+            context={**context, "_mn_response_work": {"action": action}},
+            conversation_id=conversation_id or "", request_id=request_id))
+        if result.get("schema_version") == "mn.mcp.job_reply_observation.v1":
+            return result
+        if result.get("schema_version") != "mn.mcp.job_reply_operation.v1":
+            raise ValueError("Update the Job owner's SDK to support asynchronous replies.")
+        return result
 
 
 class JobMCPGuard:
@@ -1309,6 +1362,8 @@ def create_job_mcp(provider: JobContextProvider | None = None) -> tuple[list[MCP
         conversation_id: str | None = None,
         request_id: str | None = None,
         stream: bool = False,
+        background: bool = False,
+        reply_action: str = "start",
         assistance_task: AssistanceTask | None = None,
         ctx: Context = None,
     ) -> dict[str, Any] | InputRequiredResult:
@@ -1317,6 +1372,10 @@ def create_job_mcp(provider: JobContextProvider | None = None) -> tuple[list[MCP
             if pending is not None:
                 return pending
         job_id = bound_job_id()
+        if background:
+            return await anyio.to_thread.run_sync(lambda: _reply_rpc(lambda: context_provider.response_work_command(
+                job_id, question, conversation_id=conversation_id, request_id=request_id,
+                action=reply_action, assistance_task=assistance_task)))
         if stream:
             if ctx is None:
                 raise ValueError("Streaming requires an MCP request context")
@@ -1338,6 +1397,8 @@ def create_job_mcp(provider: JobContextProvider | None = None) -> tuple[list[MCP
         question: str,
         conversation_id: str | None = None,
         request_id: str | None = None,
+        background: bool = False,
+        reply_action: str = "start",
         assistance_task: AssistanceTask | None = None,
         ctx: Context = None,
     ) -> dict[str, Any] | InputRequiredResult:
@@ -1345,6 +1406,10 @@ def create_job_mcp(provider: JobContextProvider | None = None) -> tuple[list[MCP
             pending = resolve_human_input(ctx)
             if pending is not None:
                 return pending
+        if background:
+            return _reply_rpc(lambda: context_provider.response_work_command(bound_job_id(), question,
+                conversation_id=conversation_id, request_id=request_id, action=reply_action,
+                assistance_task=assistance_task))
         return context_provider.ask_job(
             bound_job_id(),
             question,
@@ -1359,7 +1424,7 @@ def create_job_mcp(provider: JobContextProvider | None = None) -> tuple[list[MCP
         structured_output=True,
     )
     def get_job_turn(turn_id: str) -> dict[str, Any]:
-        return context_provider.get_job_turn(bound_job_id(), turn_id)
+        return _reply_rpc(lambda: context_provider.get_job_turn(bound_job_id(), turn_id))
 
     supervision.resolve_human_input = resolve_human_input
     servers = [base_server, enhanced_server, agent_server, stream_server]
