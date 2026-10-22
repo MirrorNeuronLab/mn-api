@@ -71,6 +71,7 @@ _MAX_STATUS_RUNTIME_EVENTS = 25
 _MAX_WORKFLOW_PROGRESS_EVENTS = 5000
 _TERMINAL_EVENT_TYPES = {"job_completed", "job_failed", "job_cancelled"}
 _IMMEDIATE_PROGRESS_EVENTS = {
+    "service_lifecycle",
     "job_pending",
     "job_validated",
     "job_scheduled",
@@ -207,11 +208,11 @@ def get_job_ui(job_id: str, _auth=Depends(require_auth), check_readiness: bool =
                 if isinstance(policy, dict) and "load_event" in policy:
                     live_handle["web_ui"]["metadata"]["load_event"] = policy["load_event"]
                 break
-        return _checked_job_ui_handle(live_handle) if check_readiness else live_handle
+        return _present_job_ui(live_handle, check_readiness)
     for candidate in (shared_dir, job_dir):
         handle = _job_ui_handle_from_directory(candidate, job_id)
         if handle is not None:
-            return _checked_job_ui_handle(handle) if check_readiness else handle
+            return _present_job_ui(handle, check_readiness)
 
     # A federation member owns its local job-data directory.  If the shared
     # storage backend is node-local (or is still replicating), ask the owning
@@ -220,8 +221,15 @@ def get_job_ui(job_id: str, _auth=Depends(require_auth), check_readiness: bool =
     # by the browser or the job payload.
     remote_handle = _owner_node_job_ui_handle(job_id)
     if remote_handle is not None:
-        return _checked_job_ui_handle(remote_handle) if check_readiness else remote_handle
+        return _present_job_ui(remote_handle, check_readiness)
     raise HTTPException(status_code=404, detail="job UI not found")
+
+
+def _present_job_ui(handle, check_readiness):
+    from mn_api.job_ui_routing import routed_handle
+
+    handle = routed_handle(handle)
+    return _checked_job_ui_handle(handle) if check_readiness else handle
 
 
 def _checked_job_ui_handle(handle: dict[str, Any]) -> dict[str, Any]:
@@ -300,7 +308,7 @@ def _job_ui_handle_from_services(job_id: str) -> dict[str, Any] | None:
         if "websocket" in tags:
             websocket_ports.add(candidate_port)
     title = str((service.get("meta") or {}).get("title") or service.get("name") or "Job Web UI")[:200]
-    metadata = {"job_id": job_id, "service_name": service.get("name"), "node_id": node,
+    metadata = {"job_id": job_id, "execution_id": run_id, "service_name": service.get("name"), "node_id": node,
                 "proxy": {"schema_version": "mn.web_ui.proxy.v1", "http_ports": sorted(http_ports),
                           "websocket_ports": sorted(websocket_ports)}}
     service_meta = service.get("meta")

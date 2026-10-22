@@ -710,3 +710,20 @@ DELETE cancels only while unstarted. `PATCH /runs/{run_id}` with
 queued-only condition in Core, including admission races. A stale request never
 stops the active run. Paused runs and unfinished cleanup retain the reservation;
 no ETA is inferred. Core/native SDK capability `exclusive_run_v1` is required.
+
+### Owner-scoped Job UI relay
+
+The narrow `/api/v1/jobs/{job_id}/ui-proxy/{port}/{path}` GET/HEAD resource and
+its `/ws/{path}` WebSocket companion relay only the current execution's declared
+UI ports through its Core-registered owner. They do not accept target URLs.
+Remote UI descriptors carry Core-derived `mn.web_ui.transport.v1`; the browser
+keeps its local `/job-ui-proxy` URL while private Docker DNS is resolved only on
+the hosting computer. Relays require the normal server-side API authentication,
+`X-MN-UI-Execution` and one `X-MN-UI-Hop`. Changed ownership, stale registration,
+inactive lifecycle and extra hops fail closed. Peer API authentication uses the
+existing configured `MN_API_TOKEN`; differing credentials report failure. Tokens,
+cookies and relay authority headers are stripped before the worker. Redirects
+are not followed. Streams and WebSockets close their upstream on disconnect.
+The API relay delegates to its own local Web UI proxy with an authenticated probe
+marker, avoiding recursive readiness checks. Ordinary UI discovery still probes
+the actual document/assets through the complete route.

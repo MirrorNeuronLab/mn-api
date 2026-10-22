@@ -716,3 +716,19 @@ DELETE cancels only while unstarted. `PATCH /runs/{run_id}` with
 queued-only condition in Core, including admission races. A stale request never
 stops the active run. Paused runs and unfinished cleanup retain the reservation;
 no ETA is inferred. Core/native SDK capability `exclusive_run_v1` is required.
+
+### Live UIs on another computer
+
+Job UI discovery provides owner routing from Core membership. Both Web UI proxy
+implementations consume it, keeping browser links local while the hosting
+computer resolves private worker endpoints. Deploy matching SDK/API/proxy
+versions, use the existing API authentication policy on peers, and republish the
+UI with the current execution identity. No worker port or private DNS name needs
+to be exposed to the LAN. See SPEC.md for the bounded Job UI relay contract.
+
+After installing the coordinated packages and catalog, recompile idle catalog
+Jobs with the existing `PATCH /api/v1/jobs/{id}` operation, `If-Match` revision,
+and `{"refresh_contract": true}`. This rebuilds the entire compiled bundle using
+the saved configuration and stable Job identity. The command rejects an active
+run; let it stop normally before refreshing. Do not reset Job storage or rewrite
+an active run's frozen block descriptor.

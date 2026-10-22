@@ -11,11 +11,12 @@ from pathlib import Path
 from typing import Any
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request, WebSocket
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
 from mn_api.config import WebUiConfig
 from mn_api.job_ui_readiness import PROBE_HEADER
+from mn_api.job_ui_routing import EXECUTION_HEADER, HOP_HEADER, relay_target
 
 
 HOP_BY_HOP_HEADERS = {
@@ -210,16 +211,19 @@ def proxy_job_ui_request(
         )
         web_ui = _load_job_web_ui(job_id, upstream_api=upstream_api, api_token=api_token, check_readiness=not probe)
         target_url = _job_ui_target_url(web_ui, port=port, path=path, query=query, check_readiness=not probe)
+        target_url = relay_target(web_ui, job_id, port, path, query) or target_url
     except JobUiProxyError as exc:
+        return _job_ui_proxy_problem(exc.status_code, exc.detail)
+    except HTTPException as exc:
         return _job_ui_proxy_problem(exc.status_code, exc.detail)
 
     upstream_request = urllib.request.Request(
         target_url,
-        headers=_remote_proxy_headers(headers.items()),
+        headers=_job_ui_upstream_headers(web_ui, headers, api_token),
         method=method,
     )
     try:
-        upstream_response = urllib.request.urlopen(
+        upstream_response = _open_job_ui(
             upstream_request,
             timeout=WebUiConfig.from_env().proxy_timeout_seconds,
         )
@@ -245,7 +249,7 @@ def proxy_job_ui_request(
         payload = upstream_response.read()
     finally:
         upstream_response.close()
-    if "text/html" in content_type.lower():
+    if "text/html" in content_type.lower() and not web_ui.get("transport"):
         payload = _inject_job_ui_proxy_config(payload, job_id)
     return Response(content=payload, status_code=status_code, headers=headers)
 
@@ -263,29 +267,39 @@ async def proxy_job_ui_websocket_request(
     """Bridge an explicitly declared job WebSocket without exposing Spark."""
 
     try:
+        headers = dict(websocket.headers)
+        probe = headers.get(PROBE_HEADER.lower()) == "1" and (
+            not api_token or hmac.compare_digest(headers.get("authorization", ""), f"Bearer {api_token}")
+        )
         web_ui = await asyncio.to_thread(
             _load_job_web_ui,
             job_id,
             upstream_api=upstream_api,
             api_token=api_token,
+            check_readiness=not probe,
         )
-        target_url = _job_ui_target_url(web_ui, port=port, path=path, query=query, websocket=True)
-    except JobUiProxyError:
+        target_url = _job_ui_target_url(web_ui, port=port, path=path, query=query, websocket=True, check_readiness=not probe)
+        target_url = relay_target(web_ui, job_id, port, path, query, websocket=True) or target_url
+    except (JobUiProxyError, HTTPException):
         await _close_websocket(websocket, 1008)
         return
 
     try:
         import websockets
 
+        relay_headers = _job_ui_upstream_headers(web_ui, {}, api_token) if web_ui.get("transport") else {}
         async with websockets.connect(
             target_url,
             open_timeout=WebUiConfig.from_env().proxy_timeout_seconds,
             max_size=None,
+            additional_headers=relay_headers,
         ) as upstream:
             await websocket.accept()
             await _bridge_websockets(websocket, upstream)
     except Exception:
         await _close_websocket(websocket, 1011)
+    finally:
+        await _close_websocket(websocket, 1000)
 
 
 def _load_job_web_ui(job_id: str, *, upstream_api: str, api_token: str, check_readiness: bool = True) -> dict[str, Any]:
@@ -398,8 +412,32 @@ def _normalize_proxy_query(query: str) -> str:
 
 
 def _remote_proxy_headers(headers: Iterable[tuple[str, str]]) -> dict[str, str]:
-    excluded = HOP_BY_HOP_HEADERS | {"host", "authorization", "cookie", "accept-encoding", "origin", PROBE_HEADER.lower()}
+    excluded = HOP_BY_HOP_HEADERS | {"host", "authorization", "cookie", "accept-encoding", "origin", PROBE_HEADER.lower(), EXECUTION_HEADER.lower(), HOP_HEADER.lower()}
     return {key: value for key, value in headers if key.lower() not in excluded}
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *_args, **_kwargs):
+        return None
+
+
+def _open_job_ui(request, *, timeout):
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect()).open(request, timeout=timeout)
+
+
+def _job_ui_upstream_headers(web_ui, headers, api_token):
+    forwarded = _remote_proxy_headers(headers.items())
+    transport = web_ui.get("transport")
+    if transport:
+        forwarded[EXECUTION_HEADER] = transport["execution_id"]
+        forwarded[HOP_HEADER] = "1"
+        if api_token:
+            forwarded["Authorization"] = "Bearer " + api_token
+        if headers.get(PROBE_HEADER.lower()) == "1" and (
+            not api_token or hmac.compare_digest(headers.get("authorization", ""), "Bearer " + api_token)
+        ):
+            forwarded[PROBE_HEADER] = "1"
+    return forwarded
 
 
 def _remote_response_headers(headers: Iterable[tuple[str, str]]) -> dict[str, str]:
@@ -437,26 +475,22 @@ async def _bridge_websockets(browser: WebSocket, upstream: Any) -> None:
             else:
                 await browser.send_text(message)
 
-    pending: set[asyncio.Task[Any]] = set()
+    tasks = {asyncio.create_task(browser_to_upstream()), asyncio.create_task(upstream_to_browser())}
     try:
-        _completed, pending = await asyncio.wait(
-            {
-                asyncio.create_task(browser_to_upstream()),
-                asyncio.create_task(upstream_to_browser()),
-            },
-            return_when=asyncio.FIRST_COMPLETED,
-        )
+        completed, _pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        for task in completed:
+            task.result()
     finally:
-        for task in pending:
-            task.cancel()
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def _close_websocket(websocket: WebSocket, code: int) -> None:
     try:
         await websocket.close(code=code)
-    except RuntimeError:
+    except (RuntimeError, WebSocketDisconnect):
         return
 
 

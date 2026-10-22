@@ -14,6 +14,9 @@ from mn_api.routes import jobs
 @pytest.fixture(autouse=True)
 def ready_ui_probe(monkeypatch):
     monkeypatch.setattr(jobs, "probe_job_web_ui", lambda _job_id, _url: {"schema_version": "mn.web_ui.readiness.v1", "ready": True, "reason": "ready"})
+    # These tests isolate durable-handle discovery from Core placement. Relay
+    # authority and cross-node transport are covered in test_job_ui_relay.
+    monkeypatch.setattr("mn_api.job_ui_routing.routed_handle", lambda handle: handle)
 
 
 def test_shared_job_ui_dir_uses_runtime_shared_storage(monkeypatch, tmp_path):

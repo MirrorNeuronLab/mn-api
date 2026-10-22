@@ -60,6 +60,7 @@ class WorkflowShapeBase(StrictModel):
     run_id: str | None
     workflow_id: str
     graph_revision: int | None
+    service_lifecycle: dict[str, Any] | None = None
 
 
 class WorkflowDag(WorkflowShapeBase):

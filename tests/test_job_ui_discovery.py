@@ -41,7 +41,7 @@ def test_job_ui_ignores_unavailable_unrelated_peers(
     probes = []
     monkeypatch.setattr(
         state, "config",
-        SimpleNamespace(api_token="test-token", request_size_limit_bytes=100_000),
+        SimpleNamespace(api_token="test-token", request_size_limit_bytes=100_000, port=54001),
     )
     monkeypatch.setattr(state, "client", FakeClient())
     monkeypatch.setattr(jobs, "job_data_dir_from_id", lambda *_args, **_kwargs: tmp_path / "missing")

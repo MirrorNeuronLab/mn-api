@@ -33,6 +33,7 @@ def definition_shape(job_id: str, definition: dict[str, Any]) -> dict[str, Any]:
         "steps": steps,
         "edges": graph["edges"],
         "layers": graph["layers"],
+        **({"service_lifecycle": workflow["service_lifecycle"]} if workflow.get("service_lifecycle") else {}),
     }
 
 
@@ -56,6 +57,7 @@ def latest_run_shape(job_id: str, run_id: str, snapshot: dict[str, Any]) -> dict
         "steps": steps,
         "edges": [edge for edge in snapshot.get("edges") or [] if isinstance(edge, dict)],
         "layers": [layer for layer in snapshot.get("layers") or [] if isinstance(layer, list)],
+        **({"service_lifecycle": snapshot["service_lifecycle"]} if snapshot.get("service_lifecycle") else {}),
     }
 
 
@@ -65,6 +67,7 @@ def dag_view(shape: dict[str, Any]) -> dict[str, Any]:
         "nodes": [{"id": step["id"], "label": step["label"]} for step in shape["steps"]],
         "edges": shape["edges"],
         "layers": shape["layers"],
+        **({"service_lifecycle": shape["service_lifecycle"]} if shape.get("service_lifecycle") else {}),
     }
 
 
@@ -72,6 +75,7 @@ def steps_view(shape: dict[str, Any]) -> dict[str, Any]:
     return {
         **{key: shape[key] for key in ("job_id", "source", "run_id", "workflow_id", "graph_revision")},
         "steps": shape["steps"],
+        **({"service_lifecycle": shape["service_lifecycle"]} if shape.get("service_lifecycle") else {}),
     }
 
 

@@ -121,7 +121,7 @@ def test_job_ui_proxy_uses_the_registered_spark_host_and_injects_local_proxy_con
         return Upstream()
 
     monkeypatch.setattr("mn_api.web_ui_server._load_job_web_ui", lambda *_args, **_kwargs: handle)
-    monkeypatch.setattr("mn_api.web_ui_server.urllib.request.urlopen", open_remote)
+    monkeypatch.setattr("mn_api.web_ui_server._open_job_ui", open_remote)
 
     response = TestClient(create_app(dist_dir=dist, api_url="http://api.local/api/v1")).get(
         "/job-ui-proxy/job-1/8088/"
@@ -174,7 +174,7 @@ def test_job_ui_proxy_normalizes_video_topic_and_streams_mjpeg(monkeypatch, tmp_
         return Upstream()
 
     monkeypatch.setattr("mn_api.web_ui_server._load_job_web_ui", lambda *_args, **_kwargs: handle)
-    monkeypatch.setattr("mn_api.web_ui_server.urllib.request.urlopen", open_remote)
+    monkeypatch.setattr("mn_api.web_ui_server._open_job_ui", open_remote)
 
     response = TestClient(create_app(dist_dir=dist, api_url="http://api.local/api/v1")).get(
         "/job-ui-proxy/job-1/8080/stream?topic=%2Fcamera%2Fcolor%2Fimage_raw&type=mjpeg"
@@ -290,7 +290,7 @@ def test_only_authenticated_probe_can_load_an_unchecked_descriptor(monkeypatch, 
         return Upstream()
 
     monkeypatch.setattr("mn_api.web_ui_server._load_job_web_ui", load)
-    monkeypatch.setattr("mn_api.web_ui_server.urllib.request.urlopen", open_remote)
+    monkeypatch.setattr("mn_api.web_ui_server._open_job_ui", open_remote)
     response = proxy_job_ui_request(job_id="job-1", port=8080, path="", query="", method="GET",
                                     request_headers=[("X-MN-Job-UI-Probe", "1"), ("Authorization", f"Bearer {token}")],
                                     upstream_api="http://api/api/v1", api_token="test-token")
