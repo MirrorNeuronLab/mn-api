@@ -369,6 +369,36 @@ def test_page_snapshot_is_stable_under_inserts(monkeypatch):
     assert [item["id"] for item in continued["items"]] == ["d"]
 
 
+def test_restore_archived_job_is_conditional_and_does_not_create_or_start_work(monkeypatch):
+    client, runtime = _client(monkeypatch)
+    saved = {"job_id": "job-1", "status": "archived", "revision": 7,
+             "latest_run_id": "completed-run", "data_generation": 3,
+             "resolved_configuration": {"mode": "saved"}, "schedules": [{"status": "paused"}]}
+    monkeypatch.setattr(runtime, "get_job", lambda _job_id, **_kwargs: json.dumps(saved))
+
+    def update_job(job_id, attrs, **kwargs):
+        runtime.calls.append(("update_job", job_id, attrs, kwargs))
+        saved.update(attrs)
+        saved["revision"] += 1
+        return json.dumps(saved)
+
+    monkeypatch.setattr(runtime, "update_job", update_job)
+    resource = "/api/v1/jobs/job-1"
+    assert client.patch(resource, json={"status": "active"}).status_code == 428
+    assert client.patch(resource, headers={"If-Match": '"stale"'}, json={"status": "active"}).status_code == 412
+    current = client.get(resource)
+    restored = client.patch(resource, headers={"If-Match": current.headers["etag"]}, json={"status": "active"})
+    assert restored.status_code == 200
+    assert restored.json() == saved
+    assert saved["status"] == "active"
+    assert saved["latest_run_id"] == "completed-run"
+    assert saved["resolved_configuration"] == {"mode": "saved"}
+    assert saved["schedules"] == [{"status": "paused"}]
+    assert restored.headers["etag"] != current.headers["etag"]
+    assert runtime.calls == [("update_job", "job-1", {"status": "active"},
+                              {"expected_revision": 7, "replace_existing_run": False})]
+
+
 def test_etag_precondition_and_idempotent_run_creation(monkeypatch):
     client, runtime = _client(monkeypatch)
     current = {"job_id": "job-1", "status": "active", "revision": 1}
