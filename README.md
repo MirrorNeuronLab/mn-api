@@ -380,6 +380,16 @@ All failures use RFC 9457 `application/problem+json` with `type`, `title`,
 `status`, `detail`, `instance`, `code`, and `request_id`; field errors are
 bounded in `errors`.
 
+Immediate HTTP errors and API-owned asynchronous operations share the same error
+identity. Failed operation errors retain their original HTTP `status` as well as
+`code` and `retryable`; a validation failure remains 422, a stale revision 412,
+and a rate limit 429. Structured validation failures keep up to 100 issues with
+bounded messages, guidance, rule names and field locations through polling, SSE
+and durable preparation receipts. Input values, command output, debug data,
+source URLs and credentials are excluded or redacted. Clients should build
+recovery guidance from the stable code and issue metadata rather than displaying
+raw validator diagnostics.
+
 ## Details
 
 - [MirrorNeuron Component Guide](../mn-docs/component-guide.md#api)
