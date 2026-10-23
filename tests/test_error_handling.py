@@ -1,10 +1,67 @@
 import grpc
+import json
+import pytest
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 from mn_api.app import create_app
 from mn_api.errors import handle_grpc_error
+
+
+def test_structured_http_validation_keeps_rule_and_field_without_private_values():
+    from fastapi import HTTPException
+    app = create_app()
+
+    @app.get("/invalid-input")
+    def invalid_input():
+        raise HTTPException(422, {"ok": False, "issues": [{
+            "code": "stream.unreachable", "severity": "error",
+            "message": "401 Unauthorized rtsp://user:password@camera/live?token=private-token /Users/private/file",
+            "help": "Check credentials", "actual": "private input", "debug": {"stdout": "private content"},
+            "rule": {"name": "video_source_validate", "command": ["/private/script"]},
+            "location": {"source": "config", "path": "video_source.uri"},
+        }]})
+
+    response = TestClient(app).get("/invalid-input")
+    assert response.status_code == 422
+    body = response.json()
+    assert body["code"] == "validation_failed"
+    issue = body["errors"][0]
+    assert issue["rule"] == {"name": "video_source_validate"}
+    assert issue["location"]["path"] == "video_source.uri"
+    assert "401 Unauthorized" in issue["message"]
+    assert not any(value in response.text for value in ("private-token", "password@", "private content", "/Users", "stdout"))
+    assert "actual" not in issue and "debug" not in issue
+
+
+@pytest.mark.parametrize("status,code,retryable", [
+    (409, "conflict", False), (412, "precondition_failed", False),
+    (429, "rate_limited", True), (503, "service_unavailable", True),
+])
+def test_http_and_operation_errors_share_identity_and_original_status(status, code, retryable):
+    from fastapi import HTTPException
+    from mn_api.errors import http_exception_problem
+    from mn_api.operations import _operation_error
+    error = HTTPException(status, "private detail token=private-token")
+    problem = http_exception_problem(error)
+    assert _operation_error(error) == problem
+    assert problem["code"] == code
+    assert problem["status"] == status
+    assert problem["retryable"] is retryable
+    assert "private-token" not in json.dumps(problem)
+
+
+def test_validation_projection_bounds_issues_and_discards_command_output():
+    from mn_api.errors import public_validation_issues
+    issues = public_validation_issues({"issues": [{
+        "code": "validator.command_failed", "message": "Traceback private contents",
+        "debug": {"stderr": "private contents"}, "actual": "private input",
+        "rule": {"name": "source_checker"},
+    }] * 200})
+    assert len(issues) == 100
+    assert issues[0]["rule"]["name"] == "source_checker"
+    assert "private" not in json.dumps(issues)
 
 
 class PermissionRpcError(grpc.RpcError):

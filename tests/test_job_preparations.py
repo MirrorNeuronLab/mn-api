@@ -191,3 +191,32 @@ def test_explicit_retry_of_failed_preparation_reconciles_the_same_job(api, monke
     assert second["operation_id"] == first["operation_id"]
     assert wait(client, second["operation_id"])["status"] == "completed"
     assert len(set(calls)) == 1
+
+
+def test_failed_preparation_preserves_validation_in_poll_stream_and_durable_receipt(api, monkeypatch):
+    client, _ = api
+
+    def create(*_):
+        raise HTTPException(422, {"ok": False, "issues": [{
+            "code": "stream.unreachable", "message": "401 Unauthorized rtsp://camera/live?token=private-token",
+            "rule": {"name": "video_source_validate"}, "location": {"path": "video_source.uri"},
+            "actual": "private input", "debug": {"stdout": "private content"},
+        }]})
+
+    monkeypatch.setattr(jobs, "create_job", create)
+    initial = client.post("/api/v1/job-preparations", headers={"Idempotency-Key": "invalid-camera"},
+                          json={"blueprint_id": "camera"}).json()
+    operation_id = initial["operation_id"]
+    failed = wait(client, operation_id)
+    assert failed["error"]["code"] == "validation_failed"
+    assert failed["error"]["status"] == 422
+    assert failed["error"]["retryable"] is False
+    assert failed["error"]["errors"][0]["rule"]["name"] == "video_source_validate"
+    stream = client.get(f"/api/v1/operations/{operation_id}/events/stream")
+    assert "stream.unreachable" in stream.text
+    assert "401 Unauthorized" in stream.text
+    assert "private" not in stream.text
+    receipt = operations._durable_operation_path(operation_id).read_text()
+    assert "private" not in receipt
+    restart()
+    assert client.get(f"/api/v1/operations/{operation_id}").json()["error"] == failed["error"]

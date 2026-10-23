@@ -12,6 +12,7 @@ import uuid
 from fastapi import HTTPException
 
 from mn_api import state
+from mn_api.errors import http_exception_problem, public_validation_issues
 from mn_api.public import decode, first_identifier, public_value
 from mn_api.path_utils import resolve_mn_home
 from mn_sdk.errors import AppError, normalize_exception
@@ -90,23 +91,13 @@ def _operation_title(code: str) -> str:
 
 def _operation_error(error: Exception) -> dict[str, Any]:
     if isinstance(error, HTTPException):
-        code = "not_found" if error.status_code == 404 else "operation_failed"
-        detail = (
-            error.detail
-            if error.status_code < 500 and isinstance(error.detail, str)
-            else "The API could not complete the operation."
-        )
-        return {
-            "code": code,
-            "title": _operation_title(code),
-            "detail": detail,
-            "retryable": error.status_code >= 500,
-        }
+        return http_exception_problem(error)
     app_error = error if isinstance(error, AppError) else normalize_exception(error)
     result = {
         "code": app_error.code,
         "title": _operation_title(app_error.code),
         "detail": app_error.user_message,
+        "status": app_error.http_status,
         "retryable": app_error.http_status >= 500,
     }
     if app_error.hint:
@@ -118,7 +109,7 @@ def _operation_error(error: Exception) -> dict[str, Any]:
         result["category"] = app_error.category
     issues = getattr(error, "operation_issues", None)
     if isinstance(issues, list) and issues:
-        result["errors"] = public_value(issues[:100])
+        result["errors"] = public_validation_issues({"issues": issues})
     return result
 
 

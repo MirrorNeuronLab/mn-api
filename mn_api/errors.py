@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Mapping
 
 from fastapi import HTTPException, Request
@@ -9,6 +10,52 @@ from fastapi.responses import JSONResponse
 from mn_api import state
 from mn_sdk.admission_errors import run_start_admission_error
 from mn_sdk.errors import AppError, normalize_exception, sanitize_context
+
+
+def _public_text(value: Any, limit: int = 500) -> str:
+    if not isinstance(value, str):
+        return ""
+    # Validator output can contain camera credentials, query tokens and paths.
+    # Strip whole URLs before bounding text so truncation cannot split a secret.
+    text = re.sub(r"\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s<>\"']+", "[URL]", value)
+    return str(sanitize_context({"message": text})["message"])[:limit]
+
+
+def public_validation_issues(validation: dict) -> list[dict]:
+    """Keep bounded rule/field identity and guidance, excluding input values and debug output."""
+    issues = validation.get("issues") or validation.get("errors") or []
+    if not isinstance(issues, list):
+        return []
+    result = []
+    for issue in issues[:100]:
+        if isinstance(issue, str):
+            issue = {"code": "validation_failed", "message": issue}
+        if not isinstance(issue, dict):
+            continue
+        public = {key: _public_text(issue[key]) for key in ("code", "message", "help", "field", "severity")
+                  if isinstance(issue.get(key), str)}
+        if issue.get("code") == "validator.command_failed":
+            public["message"] = "The input validator failed. Check its dependencies and input configuration."
+        for key, fields in (("location", ("source", "path")), ("rule", ("name", "type"))):
+            if isinstance(issue.get(key), dict):
+                public[key] = {field: _public_text(issue[key][field], 120) for field in fields
+                               if isinstance(issue[key].get(field), str)}
+        result.append(public)
+    return result
+
+
+def http_exception_problem(exc: HTTPException) -> dict:
+    """Use the same problem identity for immediate HTTP and durable operation failures."""
+    code, title = _http_problem_identity(exc.status_code)
+    validation = exc.detail if exc.status_code == 422 and isinstance(exc.detail, dict) else None
+    return {
+        "code": code,
+        "title": title,
+        "status": exc.status_code,
+        "detail": _public_text(exc.detail) if isinstance(exc.detail, str) and exc.status_code < 500 else title,
+        "retryable": exc.status_code in {408, 425, 429} or exc.status_code >= 500,
+        **({"errors": public_validation_issues(validation)} if validation is not None else {}),
+    }
 
 
 
@@ -34,10 +81,7 @@ def problem_response(
         "request_id": request_id or "",
     }
     if validation is not None:
-        content["errors"] = (validation.get("issues") or [
-            {"code": error, "message": message, "severity": "error"}
-            for message in validation.get("errors", [])
-        ])[:100]
+        content["errors"] = public_validation_issues(validation)
     if extra:
         content.update(extra)
     return JSONResponse(
@@ -97,13 +141,13 @@ async def app_error_exception_handler(request: Request, exc: AppError):
 
 
 async def http_exception_handler(request: Request, exc: HTTPException):
-    code, title = _http_problem_identity(exc.status_code)
-    detail = exc.detail if isinstance(exc.detail, str) else title
+    problem = http_exception_problem(exc)
     return problem_response(
         status_code=exc.status_code,
-        error=code,
-        title=title,
-        detail=detail,
+        error=problem["code"],
+        title=problem["title"],
+        detail=problem["detail"],
+        extra={key: value for key, value in problem.items() if key in {"errors", "retryable"}},
         instance=request.url.path,
         request_id=_request_id(request),
         headers=exc.headers,
@@ -160,14 +204,17 @@ def _http_problem_identity(status_code: int) -> tuple[str, str]:
         403: ("permission_denied", "Permission denied"),
         404: ("not_found", "Resource not found"),
         405: ("method_not_allowed", "Method not allowed"),
+        408: ("request_timeout", "Request timed out"),
         409: ("conflict", "Request conflict"),
         412: ("precondition_failed", "Precondition failed"),
         413: ("request_too_large", "Request too large"),
         422: ("validation_failed", "Request validation failed"),
+        425: ("not_ready", "Resource not ready"),
         428: ("precondition_required", "Precondition required"),
         429: ("rate_limited", "Too many requests"),
         502: ("upstream_failure", "Upstream service failed"),
         503: ("service_unavailable", "Service unavailable"),
+        504: ("upstream_timeout", "Upstream service timed out"),
         500: ("internal_error", "Internal server error"),
     }.get(status_code, ("request_failed", "Request failed"))
 
