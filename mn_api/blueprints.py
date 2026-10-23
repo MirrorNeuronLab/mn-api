@@ -43,6 +43,7 @@ from mn_sdk import (
     model_endpoints_json,
     model_service_tags as sdk_model_service_tags,
     blueprint_model_dependency_summary,
+    generate_job_definition_submission_id,
     install_model_entry,
     is_custom_model_requirement,
     gateway_endpoint_map,
@@ -1402,14 +1403,6 @@ def load_blueprint_bundle(
         stage="packaged_models",
     ):
         package_payload_models_for_api(bundle_root, manifest)
-    with launch_activity(
-        progress_callback,
-        "Prepare sandbox images.",
-        "Checking or building declared OpenShell images.",
-        "A first image build can take several minutes.",
-        stage="sandbox_images",
-    ):
-        prepare_openshell_custom_images(bundle_root, manifest)
 
     metadata = manifest.setdefault("metadata", {})
     if not isinstance(metadata, dict):
@@ -1507,6 +1500,13 @@ def load_blueprint_bundle(
         "The first launch can take several minutes while runtime dependencies are installed. Keep Docker running.",
         stage="runtime_resources",
     ):
+        from mn_sdk.openshell_preparation import prepare_openshell_workers
+
+        submission_id = submission_id or generate_job_definition_submission_id(stable_job_id or run_id)
+        prepare_openshell_workers(
+            manifest, payloads, submission_id=submission_id, job_id=stable_job_id,
+            cluster_client=state.client, env=submission_environment,
+        )
         prepared = prepare_job_submission(
             manifest,
             payloads,
@@ -1818,150 +1818,6 @@ def stage_local_input_payloads_for_manifest(
 
 def manifest_agent_nodes(manifest: Dict[str, Any]) -> list[Dict[str, Any]]:
     return sdk_submission_manifest_nodes(manifest)
-
-
-def prepare_openshell_custom_images(bundle_root: Path, manifest: Dict[str, Any]) -> None:
-    nodes = manifest_agent_nodes(manifest)
-    if not nodes:
-        return
-
-    for node in nodes:
-        config = node.get("config")
-        if not isinstance(config, dict):
-            continue
-        if config.get("runner_module") != "MirrorNeuron.Sandbox.OpenShell":
-            continue
-
-        custom_image = config.get("custom_openshell_image")
-        if custom_image is not None:
-            source_path = openshell_local_from_path(bundle_root, custom_image)
-            if source_path is None:
-                raise HTTPException(
-                    status_code=500,
-                    detail=(
-                        f"custom_openshell_image for {node.get('node_id') or 'OpenShell node'} "
-                        f"must point to a payload directory or Dockerfile: {custom_image}"
-                    ),
-                )
-        else:
-            source_path = openshell_local_from_path(bundle_root, config.get("from"))
-
-        if source_path is None:
-            continue
-
-        config["from"] = build_openshell_sandbox_image(source_path)
-
-
-def openshell_local_from_path(bundle_root: Path, source: Any) -> Path | None:
-    if not isinstance(source, str) or not source.strip() or "://" in source:
-        return None
-
-    source_value = source.strip()
-    raw = Path(source_value).expanduser()
-    candidates = [raw] if raw.is_absolute() else [bundle_root / "payloads" / source_value, bundle_root / source_value]
-    for candidate in candidates:
-        resolved = candidate.resolve()
-        if resolved.is_dir() and (resolved / "Dockerfile").is_file():
-            return resolved
-        if resolved.is_file() and resolved.name == "Dockerfile":
-            return resolved
-    return None
-
-
-def openshell_config_dir() -> Path:
-    return config_path("OPENSHELL_CONFIG_DIR", default=Path.home() / ".config" / "openshell") or (
-        Path.home() / ".config" / "openshell"
-    )
-
-
-def openshell_gateway_name() -> str:
-    configured = config_value("OPENSHELL_GATEWAY").strip()
-    if configured:
-        return configured
-    config_dir = openshell_config_dir()
-    try:
-        active = (config_dir / "active_gateway").read_text(encoding="utf-8").strip()
-        if active:
-            return active
-    except OSError:
-        pass
-    if (config_dir / "gateways" / "openshell" / "metadata.json").is_file():
-        return "openshell"
-    return ""
-
-
-def openshell_gateway_metadata(gateway_name: str) -> Dict[str, Any]:
-    if not gateway_name:
-        return {}
-    try:
-        metadata = json.loads((openshell_config_dir() / "gateways" / gateway_name / "metadata.json").read_text())
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return metadata if isinstance(metadata, dict) else {}
-
-
-def openshell_gateway_uses_local_docker() -> bool:
-    gateway_name = openshell_gateway_name()
-    if not gateway_name:
-        return False
-    metadata = openshell_gateway_metadata(gateway_name)
-    if metadata.get("is_remote") is True:
-        return False
-    endpoint = metadata.get("gateway_endpoint")
-    if not isinstance(endpoint, str):
-        return False
-    parsed = urlparse(endpoint)
-    return parsed.hostname in {"127.0.0.1", "localhost", "::1"}
-
-
-def openshell_env() -> Dict[str, str]:
-    env = subprocess_environment()
-    if env.get("OPENSHELL_GATEWAY_ENDPOINT"):
-        return env
-    gateway_name = openshell_gateway_name()
-    if gateway_name:
-        env.setdefault("OPENSHELL_GATEWAY", gateway_name)
-    return env
-
-
-def build_openshell_sandbox_image(source_path: Path) -> str:
-    source_path = source_path.resolve()
-    if openshell_gateway_uses_local_docker():
-        digest = hashlib.sha256(str(source_path).encode("utf-8")).hexdigest()[:12]
-        image_ref = f"openshell/sandbox-from:{digest}"
-        result = subprocess.run(
-            ["docker", "build", "-t", image_ref, str(source_path)],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            detail = f"{result.stdout}\n{result.stderr}".strip() or "docker build failed"
-            raise HTTPException(status_code=500, detail=f"OpenShell sandbox image build failed: {detail}")
-        return image_ref
-
-    result = subprocess.run(
-        [
-            "openshell",
-            "sandbox",
-            "create",
-            "--from",
-            str(source_path),
-            "--no-tty",
-            "--no-keep",
-            "--",
-            "true",
-        ],
-        capture_output=True,
-        text=True,
-        env=openshell_env(),
-    )
-    output = f"{result.stdout}\n{result.stderr}"
-    if result.returncode != 0:
-        raise HTTPException(status_code=500, detail=f"OpenShell sandbox image build failed: {output.strip()}")
-    matches = re.findall(r"Image\s+([^\s]+)\s+is available in the gateway", output)
-    if not matches:
-        raise HTTPException(status_code=500, detail="OpenShell did not report an image reference")
-    return ANSI_ESCAPE_PATTERN.sub("", matches[-1])
 
 
 def render_agent_templates_for_submission(manifest: Dict[str, Any], *, bundle_root: Path | None = None) -> None:

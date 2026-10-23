@@ -9,7 +9,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
 ]
 dependencies = [
-    "mirrorneuron-python-sdk[local-source]>=1.3.61.dev32,<2.0",
+    "mirrorneuron-python-sdk[local-source]>=1.3.61.dev41,<2.0",
     "mn-python-sdk-common>=1.3.61.dev12,<2.0",
     "mn-python-sdk-web-ui>=1.3.61.dev32,<2.0",
     "mn-python-sdk-mcp>=1.3.61.dev12,<2.0",
@@ -96,8 +96,6 @@ exclude_also = [
     "def run_blueprint_launch\\(",
     "def run_blueprint_record\\(",
     "def run_launch_preflight\\(",
-    "def prepare_openshell_custom_images\\(",
-    "def build_openshell_sandbox_image\\(",
     "def start_blueprint_pre_launch_hook\\(",
     "def register_post_launch_hook\\(",
     "def wait_for_pre_launch_ready\\(",

@@ -166,35 +166,6 @@ def test_agent_topology_and_openshell_path_helpers(tmp_path):
 
     assert blueprints.manifest_agent_nodes(manifest) == [{"node_id": "a"}]
 
-    docker_dir = tmp_path / "payloads" / "image"
-    docker_dir.mkdir(parents=True)
-    (docker_dir / "Dockerfile").write_text("FROM scratch", encoding="utf-8")
-    assert blueprints.openshell_local_from_path(tmp_path, "image") == docker_dir.resolve()
-    assert blueprints.openshell_local_from_path(tmp_path, "https://example.com/image") is None
-
-
-def test_openshell_gateway_helpers(monkeypatch, tmp_path):
-    config_dir = tmp_path / "openshell"
-    gateway_dir = config_dir / "gateways" / "openshell"
-    gateway_dir.mkdir(parents=True)
-    (config_dir / "active_gateway").write_text("active", encoding="utf-8")
-    (config_dir / "gateways" / "active").mkdir()
-    (config_dir / "gateways" / "active" / "metadata.json").write_text(
-        json.dumps({"is_remote": False, "gateway_endpoint": "http://127.0.0.1:8080"}),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr("mn_api.blueprints.config_value", lambda name: "")
-    monkeypatch.setattr("mn_api.blueprints.openshell_config_dir", lambda: config_dir)
-
-    assert blueprints.openshell_gateway_name() == "active"
-    assert blueprints.openshell_gateway_metadata("active")["gateway_endpoint"] == "http://127.0.0.1:8080"
-    assert blueprints.openshell_gateway_metadata("") == {}
-    assert blueprints.openshell_gateway_uses_local_docker() is True
-
-    monkeypatch.setattr("mn_api.blueprints.subprocess_environment", lambda: {})
-    assert blueprints.openshell_env()["OPENSHELL_GATEWAY"] == "active"
-
-
 def test_background_relay_config_helpers(monkeypatch):
     values = {}
     monkeypatch.setattr("mn_api.blueprints.config_optional_value", lambda name: values.get(name))

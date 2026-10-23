@@ -1,5 +1,18 @@
 # MirrorNeuron API Specification
 
+## OpenShell preparation
+
+SDK 1.3.61.dev41 or matching source is required. Job creation and executable
+configuration updates prepare canonical
+`MirrorNeuron.Runner.OpenShell` workers through the SDK after placement and
+payload staging. The selected native owner builds declared custom images with
+runtime dependencies, preserves rendered policy restrictions, and creates the
+definition-scoped shared sandbox. The API stores the definition only after a
+matching receipt supplies its sandbox identity. Native owners must advertise
+`openshell_prepare_v1`; missing capability or preparation failure is an operation
+failure, never a successful unprepared Job. The API does not maintain a separate
+image-builder implementation or import CLI provisioning code.
+
 The API requires Python 3.12 or newer. The managed runtime and contributor/CI toolchains use Python 3.12, matching the SDK and CLI.
 
 ## Durable preparation and reply submission

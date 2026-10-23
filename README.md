@@ -1,5 +1,13 @@
 # MirrorNeuron API
 
+API preparation recognizes `MirrorNeuron.Runner.OpenShell`. Before storing a Job
+definition or configuration update, it uses the SDK to build the declared image
+and prepare its shared sandbox on the selected runtime host, including federated
+owners. The verified sandbox identity is attached to the executable definition;
+preparation failure prevents submission. Deploy matching SDK source and restart
+the API and native SDK services on the participating hosts. Remote owners must
+advertise `openshell_prepare_v1`; a running OpenShell gateway alone is insufficient.
+
 The API requires Python 3.12 or newer. The managed runtime and contributor/CI toolchains use Python 3.12, matching the SDK and CLI.
 
 `mn-api` is the FastAPI REST gateway for MirrorNeuron. It exposes runtime,

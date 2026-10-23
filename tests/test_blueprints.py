@@ -1874,9 +1874,10 @@ class TestBlueprintServices(unittest.TestCase):
 
         manifest = json.loads(manifest_json)
         env = manifest["flow"]["nodes"][0]["config"]["environment"]
-        self.assertEqual(env["MN_LLM_PROVIDER"], "litellm")
+        self.assertEqual(env["MN_LLM_PROVIDER"], "docker_model_runner")
         self.assertEqual(env["MN_LLM_MODEL"], "docker.io/ai/gemma4:E2B")
-        self.assertEqual(env["MN_LLM_API_BASE"], "http://127.0.0.1:4000/v1")
+        self.assertEqual(env["MN_LLM_API_BASE"], "auto")
+        self.assertEqual(env["MN_RUNTIME_MODEL_MANAGED"], "1")
 
     def test_load_blueprint_bundle_stages_configured_local_input_folder(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1985,7 +1986,7 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertIn(["git", "-C", str(target), "clean", "-fdx"], calls)
         self.assertIn(["git", "-C", str(target), "pull", "--ff-only"], calls)
 
-    def test_load_blueprint_bundle_prepares_openshell_custom_image(self):
+    def test_load_blueprint_bundle_prepares_canonical_openshell_sandbox(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
             bundle = repo / "worker_one"
@@ -2004,8 +2005,9 @@ class TestBlueprintServices(unittest.TestCase):
                                 {
                                     "node_id": "worker",
                                     "config": {
-                                        "runner_module": "MirrorNeuron.Sandbox.OpenShell",
+                                        "runner_module": "MirrorNeuron.Runner.OpenShell",
                                         "custom_openshell_image": "worker/openshell_sandbox",
+                                        "reuse_shared_sandbox": True,
                                     },
                                 }
                             ]
@@ -2019,9 +2021,12 @@ class TestBlueprintServices(unittest.TestCase):
 
             def fake_run(command, **_kwargs):
                 calls.append(command)
-                return SimpleNamespace(returncode=0, stdout="", stderr="")
+                return SimpleNamespace(returncode=int(command[1:3] == ["sandbox", "get"]), stdout="", stderr="")
 
-            with patch("mn_api.blueprints.openshell_gateway_uses_local_docker", return_value=True):
+            with patch.dict(os.environ, {"MN_NODE_NAME": "test-runtime-node"}), \
+                    patch.object(state.client, "get_resource", return_value=_single_node_resource_report()), \
+                    patch.object(state.client, "get_system_summary", return_value=_single_node_resource_report()), \
+                    patch("mn_sdk.openshell_native.shutil.which", return_value="openshell"):
                 with patch("mn_api.blueprints.subprocess.run", side_effect=fake_run):
                     manifest_json, _payloads = load_blueprint_bundle(
                         repo.resolve(),
@@ -2032,7 +2037,11 @@ class TestBlueprintServices(unittest.TestCase):
         manifest = json.loads(manifest_json)
         config = manifest["flow"]["nodes"][0]["config"]
         self.assertTrue(config["from"].startswith("openshell/sandbox-from:"))
+        self.assertEqual(config["runner_module"], "MirrorNeuron.Runner.OpenShell")
+        self.assertTrue(config["sandbox_name"].startswith("mirror-neuron-"))
+        self.assertEqual(config["ssh_host"], f"openshell-{config['sandbox_name']}")
         self.assertEqual(calls[0][:3], ["docker", "build", "-t"])
+        self.assertTrue(any(command[1:3] == ["sandbox", "create"] for command in calls))
 
     def test_load_blueprint_bundle_ignores_misnamed_overwrite_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:
