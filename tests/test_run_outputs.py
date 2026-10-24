@@ -6,9 +6,27 @@ import unittest
 from pathlib import Path
 
 from mn_api.run_outputs import output_path_by_index, output_refs
+from mn_sdk.published_outputs import record_delivered_outputs
+from mn_sdk.artifacts import file_sha256
 
 
 class TestRunOutputs(unittest.TestCase):
+    def test_receipt_delivered_download_does_not_require_domain_output_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            report = run_dir / "result.json"
+            report.write_text('{"status":"completed"}')
+            record_delivered_outputs(run_dir, {"result.json": {
+                "kind": "result", "size_bytes": report.stat().st_size, "sha256": file_sha256(report),
+            }})
+            refs = output_refs("run-publication", run_dir)
+            self.assertEqual(len(refs), 1)
+            self.assertEqual(refs[0]["url"], "/api/v1/runs/run-publication/outputs/0")
+            self.assertEqual(refs[0]["sha256"], file_sha256(report))
+            self.assertEqual(output_path_by_index(run_dir, 0), report.resolve())
+            report.write_text("corrupt")
+            self.assertEqual(output_refs("run-publication", run_dir), [])
+
     def test_output_refs_collect_nested_payloads_dedupe_and_skip_missing_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
