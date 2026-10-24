@@ -438,7 +438,8 @@ def test_get_job_ui_rejects_handles_owned_by_another_job(monkeypatch, tmp_path):
     assert error.value.status_code == 404
 
 
-def test_get_job_ui_falls_back_to_its_federated_owner(monkeypatch, tmp_path):
+@pytest.mark.parametrize("replica_exists", [False, True])
+def test_get_job_ui_reads_its_current_federated_owner_before_replicas(monkeypatch, tmp_path, replica_exists):
     remote_handle = {
         "job_id": "job-1",
         "ui": {"job_id": "job-1", "title": "Example"},
@@ -448,7 +449,7 @@ def test_get_job_ui_falls_back_to_its_federated_owner(monkeypatch, tmp_path):
 
     class FakeClient:
         def get_job(self, _job_id):
-            return json.dumps({"owner_node": "mirror_neuron@10.0.4.26"})
+            return json.dumps({"owner_node": "mirror_neuron@10.0.4.26", "latest_run_id": "execution-1"})
 
         def get_system_summary(self):
             return json.dumps(
@@ -458,6 +459,7 @@ def test_get_job_ui_falls_back_to_its_federated_owner(monkeypatch, tmp_path):
                             "name": "mirror_neuron@10.0.4.26",
                             "address": "10.0.4.26",
                             "self?": False,
+                            "hardware": {"http_api": {"schema_version": "mn.http_api.endpoint.v1", "enabled": True, "scheme": "http", "port": 54001}},
                         }
                     ]
                 }
@@ -478,17 +480,23 @@ def test_get_job_ui_falls_back_to_its_federated_owner(monkeypatch, tmp_path):
     monkeypatch.setattr(
         state,
         "refresh_config_from_env",
-        lambda: SimpleNamespace(port=54001, api_token=""),
+        lambda: SimpleNamespace(port=61407, api_token=""),
     )
     monkeypatch.setattr(jobs, "job_data_dir_from_id", lambda *_args, **_kwargs: tmp_path / "missing")
-    monkeypatch.setattr(jobs, "shared_job_ui_dir_from_id", lambda *_args, **_kwargs: tmp_path / "also-missing")
+    shared = tmp_path / "shared"
+    if replica_exists:
+        shared.mkdir()
+        (shared / "ui.json").write_text(json.dumps(remote_handle["ui"]))
+        (shared / "web_ui.json").write_text(json.dumps({**remote_handle["web_ui"], "status": "starting"}))
+    monkeypatch.setattr(jobs, "shared_job_ui_dir_from_id", lambda *_args, **_kwargs: shared)
     monkeypatch.setattr(
         jobs.urllib.request,
         "urlopen",
         lambda request, timeout: seen.append(request) or FakeResponse(),
     )
 
-    assert jobs.get_job_ui("job-1") == remote_handle
+    result = jobs.get_job_ui("job-1", check_readiness=False)
+    assert result == remote_handle
     assert seen[0].full_url == "http://10.0.4.26:54001/api/v1/jobs/job-1/ui?check_readiness=false"
 
 

@@ -209,19 +209,15 @@ def get_job_ui(job_id: str, _auth=Depends(require_auth), check_readiness: bool =
                     live_handle["web_ui"]["metadata"]["load_event"] = policy["load_event"]
                 break
         return _present_job_ui(live_handle, check_readiness)
+    # The owner has the current lifecycle and address. Shared copies may still
+    # describe a starting or previous attempt while replication catches up.
+    remote_handle = _owner_node_job_ui_handle(job_id)
+    if remote_handle is not None:
+        return _present_job_ui(remote_handle, check_readiness)
     for candidate in (shared_dir, job_dir):
         handle = _job_ui_handle_from_directory(candidate, job_id)
         if handle is not None:
             return _present_job_ui(handle, check_readiness)
-
-    # A federation member owns its local job-data directory.  If the shared
-    # storage backend is node-local (or is still replicating), ask the owning
-    # node's authenticated API for the same durable handle.  The host is read
-    # only from the core's registered federation metadata; it is never supplied
-    # by the browser or the job payload.
-    remote_handle = _owner_node_job_ui_handle(job_id)
-    if remote_handle is not None:
-        return _present_job_ui(remote_handle, check_readiness)
     raise HTTPException(status_code=404, detail="job UI not found")
 
 
@@ -366,21 +362,21 @@ def _owner_node_job_ui_handle(job_id: str) -> dict[str, Any] | None:
         if not _valid_owner_api_host(host):
             return None
         config = state.refresh_config_from_env()
-        port = int(getattr(config, "port", 54001))
-        if not 1 <= port <= 65_535:
-            return None
-        display_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
+        from mn_api.job_ui_routing import node_api_base_url
+        base_url = node_api_base_url(owner)
         headers = {}
         token = str(getattr(config, "api_token", "") or "").strip()
         if token:
             headers["Authorization"] = f"Bearer {token}"
         request = urllib.request.Request(
-            f"http://{display_host}:{port}/api/v1/jobs/{urllib.parse.quote(job_id, safe='-._')}/ui?check_readiness=false",
+            f"{base_url}/jobs/{urllib.parse.quote(job_id, safe='-._')}/ui?check_readiness=false",
             headers=headers,
             method="GET",
         )
         with urllib.request.urlopen(request, timeout=3.0) as response:
             remote = _json_object(response.read())
+    except HTTPException:
+        raise
     except (OSError, ValueError, urllib.error.URLError, urllib.error.HTTPError):
         return None
     except Exception:

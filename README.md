@@ -301,10 +301,10 @@ The desktop defaults to `dom-ready`. A blueprint can select `did-finish-load`
 through the Web UI SDK claim's `load_event` parameter (or Core service
 `meta.load_event`). Registry projections preserve claimed load policy only for
 the same current page; they never adopt a stale claim's address or lifecycle.
-Job UI reads prefer the Web UI skill's cross-node handle under shared storage
-and fall back to the host-local job-data handle. This lets a DockerWorker on a
-federated owner publish its OS-selected listener while the browser continues to
-use only the submit host's `/jobs/{job_id}/ui` route.
+After Core service discovery, remote Job UI reads ask the registered owner for
+its current handle before considering shared replicas or host-local handles.
+This prevents a delayed starting-state replica from hiding a ready service.
+The browser continues to use only the submit host's `/jobs/{job_id}/ui` route.
 
 Job workflow `dag` responses contain logical step nodes, dependency edges,
 and layers. `steps` responses contain each step and its agents. The
@@ -756,6 +756,10 @@ computer resolves private worker endpoints. Deploy matching SDK/API/proxy
 versions, use the existing API authentication policy on peers, and republish the
 UI with the current execution identity. No worker port or private DNS name needs
 to be exposed to the LAN. See SPEC.md for the bounded Job UI relay contract.
+Peer API ports come from the native SDK's Core-registered
+`hardware.http_api` advertisement (`mn.http_api.endpoint.v1`), independently of
+the caller's listener port. Missing or invalid advertisements fail with HTTP 503;
+update and restart the owner's native SDK service to publish its endpoint.
 
 After installing the coordinated packages and catalog, recompile idle catalog
 Jobs with the existing `PATCH /api/v1/jobs/{id}` operation, `If-Match` revision,

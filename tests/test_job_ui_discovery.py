@@ -34,7 +34,8 @@ def test_job_ui_ignores_unavailable_unrelated_peers(
 
         def get_system_summary(self):
             return json.dumps({"nodes": [
-                {"name": owner, "address": host, "self?": owner_is_local},
+                {"name": owner, "address": host, "self?": owner_is_local,
+                 "hardware": {"http_api": {"schema_version": "mn.http_api.endpoint.v1", "enabled": True, "scheme": "http", "port": 54001}}},
                 {"name": "mirror_neuron@unavailable", "address": "unavailable", "self?": False},
             ]})
 
@@ -84,3 +85,21 @@ def test_job_ui_without_an_owner_does_not_broadcast_service_discovery(monkeypatc
     monkeypatch.setattr(jobs, "shared_job_ui_dir_from_id", lambda *_args, **_kwargs: None)
 
     assert jobs.get_job_ui("job-1", check_readiness=False)["web_ui"] == handle
+
+
+def test_remote_ui_without_a_registered_api_endpoint_returns_safe_problem(api_client, monkeypatch, tmp_path):
+    config = SimpleNamespace(api_token="test-token", request_size_limit_bytes=100_000, port=61407)
+    monkeypatch.setattr(state, "config", config)
+    monkeypatch.setattr(state, "refresh_config_from_env", lambda: config)
+    monkeypatch.setattr(state, "client", SimpleNamespace(
+        get_job=lambda _: json.dumps({"latest_run_id": "execution", "owner_node": "core@spark"}),
+        list_services=lambda **_: '{"items":[]}',
+        get_system_summary=lambda: json.dumps({"nodes": [{"name": "core@spark", "address": "10.0.4.32", "self?": False}]}),
+    ))
+    monkeypatch.setattr(jobs, "job_data_dir_from_id", lambda *_a, **_k: tmp_path / "missing")
+    monkeypatch.setattr(jobs, "shared_job_ui_dir_from_id", lambda *_a, **_k: None)
+    response = api_client.get('/api/v1/jobs/job/ui', headers={"Authorization": "Bearer test-token"})
+    assert response.status_code == 503
+    assert response.headers["content-type"].startswith("application/problem+json")
+    assert response.json()["code"] == "service_unavailable"
+    assert "10.0.4.32" not in response.text and "test-token" not in response.text

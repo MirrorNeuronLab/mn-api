@@ -17,6 +17,32 @@ def _record(value):
     return value if isinstance(value, dict) else {}
 
 
+def node_api_base_url(node):
+    """Use the peer's registered endpoint, independently of our listener."""
+    host = _registered_host(node)
+    hardware = node.get("hardware")
+    endpoint = hardware.get("http_api") if isinstance(hardware, dict) else None
+    if (not isinstance(endpoint, dict) or endpoint.get("schema_version") != "mn.http_api.endpoint.v1"
+            or endpoint.get("enabled") is not True or endpoint.get("scheme") not in {"http", "https"}
+            or type(endpoint.get("port")) is not int or not 1 <= endpoint["port"] <= 65535):
+        raise HTTPException(503, "The computer hosting this Web UI has no registered API endpoint. Update its runtime.")
+    return f"{endpoint['scheme']}://{'[' + host + ']' if ':' in host else host}:{endpoint['port']}/api/v1"
+
+
+def _registered_host(node):
+    if not isinstance(node, dict):
+        raise HTTPException(503, "The computer hosting this Web UI has no valid address.")
+    host = str(node.get("address") or node.get("grpc_host") or "")
+    try:
+        parsed = urlsplit("http://" + (f"[{host}]" if ":" in host else host))
+        valid = parsed.hostname and parsed.hostname == host and not parsed.username and not parsed.path and not parsed.query and not parsed.fragment
+    except ValueError:
+        valid = False
+    if not valid or host in {"0.0.0.0", "::"}:
+        raise HTTPException(503, "The computer hosting this Web UI has no valid address.")
+    return host
+
+
 def placement(job_id, job=None):
     job = _record(state.client.get_job(job_id)) if job is None else job
     execution_id = str(job.get("latest_run_id") or "").strip()
@@ -28,18 +54,12 @@ def placement(job_id, job=None):
                  if node.get("name") == owner), None)
     if not node:
         raise HTTPException(503, "The computer hosting this Web UI is unavailable.")
-    host = str(node.get("address") or node.get("grpc_host") or "")
     # Only Core membership may select the peer, never a handle or query value.
-    try:
-        parsed = urlsplit("http://" + (f"[{host}]" if ":" in host else host))
-        valid = parsed.hostname and parsed.hostname == host and not parsed.username and not parsed.path and not parsed.query and not parsed.fragment
-    except ValueError:
-        valid = False
-    if not valid or host in {"0.0.0.0", "::"}:
-        raise HTTPException(503, "The computer hosting this Web UI has no valid address.")
+    host = _registered_host(node)
+    local = node.get("self?") is True or node.get("self") is True
     return {"execution_id": execution_id, "owner_node": owner,
-            "local": node.get("self?") is True or node.get("self") is True,
-            "host": host}
+            "local": local, "host": host,
+            **({"api_base_url": node_api_base_url(node)} if not local else {})}
 
 
 def routed_handle(handle):
@@ -56,11 +76,9 @@ def routed_handle(handle):
         ui["status"] = "stopped"
         ui["metadata"] = {**metadata, "readiness": {"ready": False, "reason": "stale_execution"}}
     if not location["local"]:
-        host = location["host"]
-        port = state.config.port
         ui["transport"] = {
             "schema_version": "mn.web_ui.transport.v1",
-            "owner_api_url": f"http://{'[' + host + ']' if ':' in host else host}:{port}/api/v1",
+            "owner_api_url": location["api_base_url"],
             "execution_id": location["execution_id"],
         }
     return {**handle, "web_ui": ui}

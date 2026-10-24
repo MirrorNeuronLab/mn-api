@@ -21,18 +21,20 @@ def handle():
     }}
 
 
-def core(monkeypatch, *, local=False):
+def core(monkeypatch, *, local=False, api_port=54001):
     monkeypatch.setattr(state, "client", SimpleNamespace(
         get_job=lambda _: json.dumps({"owner_node": "core@spark", "latest_run_id": "execution"}),
-        get_system_summary=lambda: json.dumps({"nodes": [{"name": "core@spark", "address": "10.0.4.32", "self?": local}]}),
+        get_system_summary=lambda: json.dumps({"nodes": [{"name": "core@spark", "address": "10.0.4.32", "self?": local,
+            "hardware": {"http_api": {"schema_version": "mn.http_api.endpoint.v1", "scheme": "http", "enabled": True, "port": api_port}}}]}),
     ))
 
 
 def test_routing_uses_core_owner_and_binds_execution(monkeypatch, state_snapshot):
-    core(monkeypatch)
+    core(monkeypatch, api_port=54007)
+    monkeypatch.setattr(state, "config", SimpleNamespace(port=61407))
     value = routing.routed_handle(handle())
     transport = value["web_ui"]["transport"]
-    assert transport["owner_api_url"].startswith("http://10.0.4.32:")
+    assert transport["owner_api_url"] == "http://10.0.4.32:54007/api/v1"
     assert transport["execution_id"] == "execution"
     target = routing.relay_target(value["web_ui"], "job", 41371, "assets/app.js", "v=2")
     assert target.endswith("/api/v1/jobs/job/ui-proxy/41371/assets/app.js?v=2")

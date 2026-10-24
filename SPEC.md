@@ -739,6 +739,13 @@ no ETA is inferred. Core/native SDK capability `exclusive_run_v1` is required.
 
 ### Owner-scoped Job UI relay
 
+The native SDK advertises the node's HTTP API as `hardware.http_api` with
+schema `mn.http_api.endpoint.v1`, an enabled flag, scheme and port. Discovery and
+relay use that port with the Core-registered node address; the caller's API port
+never selects a peer endpoint. Missing, disabled or invalid endpoint metadata
+fails with HTTP 503. Current owner handles take precedence over asynchronous
+shared replicas so stale starting-state metadata cannot hide a serving UI.
+
 The narrow `/api/v1/jobs/{job_id}/ui-proxy/{port}/{path}` GET/HEAD resource and
 its `/ws/{path}` WebSocket companion relay only the current execution's declared
 UI ports through its Core-registered owner. They do not accept target URLs.
