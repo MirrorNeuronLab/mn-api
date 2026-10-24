@@ -149,3 +149,28 @@ def test_blueprint_run_forwards_progress_id_without_changing_request(monkeypatch
     assert response.status_code == 202
     assert seen[0].progress_id == "sample-run"
     assert response.json()["run_id"] == "run-1"
+
+
+def test_operation_observer_is_captured_by_heartbeat_and_reset(monkeypatch):
+    monkeypatch.setattr(launch_progress, "HEARTBEAT_SECONDS", 0.01)
+    events = []
+    heartbeat = Event()
+    def observe(**event):
+        events.append(event)
+        if "elapsed" in event["detail"]:
+            heartbeat.set()
+    assert launch_progress.progress_reporter(None) is None
+    with launch_progress.operation_progress(observe):
+        reporter = launch_progress.progress_reporter(None)
+        with launch_progress.launch_activity(reporter, "Build workers", "Preparing container"):
+            assert heartbeat.wait(2)
+    assert launch_progress.progress_reporter(None) is None
+    assert all(set(item) == {"stage", "label", "detail"} for item in events)
+    assert all(item["label"] == "Build workers" for item in events)
+
+
+def test_unavailable_operation_observer_does_not_change_preparation():
+    def broken(**_event):
+        raise OSError("unavailable")
+    with launch_progress.operation_progress(broken):
+        launch_progress.progress_reporter(None)("Prepare", "Ready", "")

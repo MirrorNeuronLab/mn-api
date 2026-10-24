@@ -13,6 +13,7 @@ from mn_api.api_models import JobCreate, JobUpdate, ResourceModel
 from mn_api.contracts import API_PREFIX
 from mn_api.dependencies import require_auth
 from mn_api.http_semantics import idempotency_records, strong_etag
+from mn_api.launch_progress import operation_progress
 from mn_api.operations import get_operation, start_local_operation
 from mn_api.public import resource_response
 from mn_api.routes.v1 import jobs
@@ -99,11 +100,13 @@ def prepare_job(
             if current.get("resolved_configuration", {}) != request.resolved_configuration:
                 if not corrected:
                     raise HTTPException(status_code=409, detail="The prepared Job configuration changed.")
-                response = jobs.update_job(job_id, JobUpdate(resolved_configuration=request.resolved_configuration),
-                                           strong_etag(current), principal)
+                with operation_progress(progress):
+                    response = jobs.update_job(job_id, JobUpdate(resolved_configuration=request.resolved_configuration),
+                                               strong_etag(current), principal)
                 return json.loads(response.body)
             return current
-        response = jobs.create_job(prepared_request, operation_id, principal, None)
+        with operation_progress(progress):
+            response = jobs.create_job(prepared_request, operation_id, principal, None)
         return json.loads(response.body)
 
     return _accepted("prepare_job", operation_id, {"job_id": job_id, "definition_fingerprint": definition_fingerprint},
@@ -140,7 +143,8 @@ def prepare_job_update(
                 strong_etag(current) != expected_etag and
                 current.get("resolved_configuration") == request.resolved_configuration):
             return current
-        response = jobs.update_job(job_id, request, expected_etag, principal)
+        with operation_progress(progress):
+            response = jobs.update_job(job_id, request, expected_etag, principal)
         return json.loads(response.body)
 
     return _accepted("prepare_job_update", operation_id, {"job_id": job_id, "expected_etag": expected_etag},

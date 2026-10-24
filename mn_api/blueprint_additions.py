@@ -140,6 +140,7 @@ def add_catalog_blueprint(
     blueprint_id: str,
     *,
     force: bool = False,
+    config_overrides: dict[str, Any] | None = None,
     report_progress: ProgressReporter | None = None,
 ) -> dict[str, Any]:
     report = report_progress or (lambda **_progress: None)
@@ -156,7 +157,7 @@ def add_catalog_blueprint(
         detail="Validating model requirements and preparing required runtime services. Models install on first use.",
     )
     try:
-        model_summary = defer_blueprint_runtime_models(repo_root, blueprint, force=force)
+        model_summary = defer_blueprint_runtime_models(repo_root, blueprint, force=force, config_overrides=config_overrides)
     except Exception as exc:
         raise BlueprintAddError() from exc
     if not model_summary.get("ok", True):

@@ -554,7 +554,6 @@ def defer_blueprint_runtime_models(
         raise HTTPException(status_code=500, detail="blueprint manifest.json must be an object")
     manifest = expand_blueprint_manifest_if_source(bundle_root, manifest)
     resolve_blueprint_payload_contract(manifest, bundle_root)
-    package_payload_models_for_api(bundle_root, manifest)
     config = load_blueprint_config(bundle_root, config_overrides=config_overrides) or {}
     if blueprint_uses_fake_llm(config):
         return {
@@ -572,6 +571,7 @@ def defer_blueprint_runtime_models(
             "config_overrides": None,
             "errors": [],
         }
+    package_payload_models_for_api(bundle_root, manifest)
     document = load_model_catalog_document()
     catalog = document.models
     resource_report = runtime_resource_report()
@@ -1349,12 +1349,13 @@ def load_blueprint_bundle(
             config_overrides=config_overrides,
         )
         validation_env.update(preparation_env)
-        input_validation_report = run_input_validation(
-            bundle_root,
-            validation_manifest,
-            config=validation_config,
-            env=validation_env,
-        )
+        with launch_activity(
+            progress_callback, "Validate configured inputs.",
+            "Checking configured inputs and their declared validators.", stage="input_validation",
+        ):
+            input_validation_report = run_input_validation(
+                bundle_root, validation_manifest, config=validation_config, env=validation_env,
+            )
         if not input_validation_report.get("ok"):
             raise HTTPException(status_code=422, detail=input_validation_report)
 
@@ -1402,7 +1403,8 @@ def load_blueprint_bundle(
         "Large local model files can take several minutes to import.",
         stage="packaged_models",
     ):
-        package_payload_models_for_api(bundle_root, manifest)
+        if not blueprint_uses_fake_llm(shared_preparation.resolved_config or {}):
+            package_payload_models_for_api(bundle_root, manifest)
 
     metadata = manifest.setdefault("metadata", {})
     if not isinstance(metadata, dict):

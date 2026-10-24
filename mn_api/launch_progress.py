@@ -6,21 +6,41 @@ import logging
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from contextvars import ContextVar
 from threading import Event, Thread
 
 ProgressCallback = Callable[[str, str, str], None]
 HEARTBEAT_SECONDS = 10.0
 logger = logging.getLogger("mn-api")
+_operation_observer: ContextVar[Callable[..., None] | None] = ContextVar("preparation_progress", default=None)
+
+
+@contextmanager
+def operation_progress(observer: Callable[..., None]) -> Iterator[None]:
+    """Bind nested SDK preparation activity to its durable API operation."""
+    token = _operation_observer.set(observer)
+    try:
+        yield
+    finally:
+        _operation_observer.reset(token)
+
 
 
 def progress_reporter(progress_id: str | None, phase: str = "prepare_bundle") -> ProgressCallback | None:
-    if not progress_id:
+    observer = _operation_observer.get()
+    if not progress_id and observer is None:
         return None
 
     def report(message: str, detail: str, expectation: str) -> None:
         from mn_api.routes.blueprints import record_launch_progress
 
         record_launch_progress(progress_id, phase, "running", message, detail=detail, expectation=expectation)
+        if observer is not None:
+            try:
+                observer(stage=phase, label=message, detail=detail)
+            except Exception:
+                # Observability cannot fail or restart the owned preparation.
+                pass
 
     return report
 

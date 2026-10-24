@@ -1,5 +1,18 @@
 # MirrorNeuron API Specification
 
+## Invocation configuration during hiring
+
+Durable Job preparation forwards nested input validation, dependency, image, and
+worker preparation activity into its operation progress. Heartbeats retain the
+same operation and reserved Job; observing progress never resubmits work.
+
+`POST /api/v1/blueprints/{id}/additions` accepts optional `config_overrides`,
+using the same SDK configuration resolution as launch. This lets explicit fake
+model/skill sessions prepare prerequisites consistently while retaining bundle
+validation. Overrides apply to that preparation invocation and are not persisted
+as catalog defaults or operator settings. Request idempotency includes the
+overrides; progress and addition records do not expose the configuration.
+
 ## OpenShell preparation
 
 SDK 1.3.61.dev41 or matching source is required. Job creation and executable

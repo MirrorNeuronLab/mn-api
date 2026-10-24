@@ -220,3 +220,27 @@ def test_failed_preparation_preserves_validation_in_poll_stream_and_durable_rece
     assert "private" not in receipt
     restart()
     assert client.get(f"/api/v1/operations/{operation_id}").json()["error"] == failed["error"]
+
+
+def test_durable_preparation_reports_nested_runtime_activity(api, monkeypatch):
+    from mn_api.launch_progress import progress_reporter
+    client, _records = api
+    entered, release = Event(), Event()
+    def create(request, key, principal, progress_id):
+        progress_reporter(progress_id)("Prepare Python environments", "Resolving declared dependencies", "")
+        entered.set()
+        assert release.wait(2)
+        return JSONResponse({"job_id": request.job_id, "blueprint_id": request.blueprint_id})
+    monkeypatch.setattr(jobs, "create_job", create)
+    response = client.post("/api/v1/job-preparations", headers={"Idempotency-Key": "visible-progress"},
+                           json={"blueprint_id": "sample"})
+    operation_id = response.json()["operation_id"]
+    try:
+        assert entered.wait(1)
+        current = client.get(f"/api/v1/operations/{operation_id}").json()
+        assert current["status"] == "running"
+        assert current["progress"]["label"] == "Prepare Python environments"
+        assert current["progress"]["detail"] == "Resolving declared dependencies"
+    finally:
+        release.set()
+    assert wait(client, operation_id)["status"] == "completed"

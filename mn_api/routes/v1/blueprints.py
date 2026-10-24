@@ -96,6 +96,7 @@ def create_blueprint_addition(
                 _config(),
                 blueprint_id,
                 force=payload.force,
+                config_overrides=payload.config_overrides or None,
                 report_progress=report,
             ),
         )

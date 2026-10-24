@@ -110,3 +110,22 @@ def test_add_catalog_blueprint_wraps_unexpected_runtime_errors(monkeypatch, tmp_
     assert raised.value.code == "MN_BLUEPRINT_ADD_FAILED"
     assert "secret" not in raised.value.user_message
     assert "/private/runtime" not in raised.value.user_message
+
+
+def test_addition_passes_invocation_mode_to_runtime_preparation(monkeypatch, tmp_path):
+    blueprint = {"id": "worker", "path": "worker"}
+    config = SimpleNamespace(active_blueprint_location=str(tmp_path))
+    monkeypatch.setenv("MN_BLUEPRINT_INSTALLS_DIR", str(tmp_path / "additions"))
+    monkeypatch.setattr(blueprint_additions, "find_blueprint", lambda *_a: (tmp_path, blueprint))
+    monkeypatch.setattr(blueprint_additions, "validate_blueprint_bundle", lambda *_a: tmp_path)
+    seen = []
+    def prepare(*_a, **kwargs):
+        seen.append(kwargs)
+        return {"ok": True, "models": [], "services": []}
+    monkeypatch.setattr(blueprint_additions, "defer_blueprint_runtime_models", prepare)
+    overrides = {"llm": {"mode": "fake"}, "execution": {"fake_skills": True}}
+    result = blueprint_additions.add_catalog_blueprint(config, "worker", config_overrides=overrides)
+    assert seen == [{"force": False, "config_overrides": overrides}]
+    assert result["added"] is True
+    record = json.loads((tmp_path / "additions/worker.json").read_text())
+    assert "config_overrides" not in record

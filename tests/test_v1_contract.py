@@ -2129,3 +2129,19 @@ def test_queue_schedule_changes_require_current_etag(monkeypatch):
     assert client.patch(url, json=body).status_code == 428
     assert client.patch(url, json=body, headers={"If-Match": '"stale"'}).status_code == 412
     assert client.patch(url, json=body, headers={"If-Match": current.headers["etag"]}).status_code == 200
+
+
+def test_blueprint_addition_preserves_invocation_configuration(monkeypatch):
+    client, _runtime = _client(monkeypatch)
+    seen = []
+    def add(_config, blueprint_id, *, config_overrides, **_kwargs):
+        seen.append((blueprint_id, config_overrides))
+        return {"added": True, "blueprint": {"id": blueprint_id}}
+    monkeypatch.setattr(blueprints, "add_catalog_blueprint", add)
+    overrides = {"llm": {"mode": "fake"}, "execution": {"fake_skills": True}}
+    response = client.post("/api/v1/blueprints/worker-1/additions", json={"config_overrides": overrides})
+    assert response.status_code == 202
+    operation = _wait_for_operation(client, response.json()["operation_id"])
+    assert operation["status"] == "completed"
+    assert seen == [("worker-1", overrides)]
+    assert "config_overrides" not in operation["options"]
