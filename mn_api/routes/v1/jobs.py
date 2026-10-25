@@ -68,6 +68,7 @@ from mn_api.operations import encode_sse, sse_envelope, start_local_operation, s
 from mn_api.pagination import page, page_tokens
 from mn_api.public import decode, idempotent_response, public_value, records, resource_response
 from mn_api.run_recovery import stored_progress, stored_run
+from mn_api.run_file_routing import HOP_HEADER as RUN_FILE_HOP_HEADER, owner_file_response
 from mn_api.run_store import shared_result_events
 from mn_api.routes import jobs as runtime_job_routes
 from mn_api.routes import runs as runtime_run_routes
@@ -167,14 +168,17 @@ def _runtime_output_id(run_id: str, *, run: dict[str, Any] | None = None) -> str
     return run_id
 
 
-def _runtime_output_location(run_id: str) -> tuple[str, dict[str, Any]]:
+def _runtime_output_location(
+    run_id: str, *, run: dict[str, Any] | None = None,
+) -> tuple[str, dict[str, Any]]:
     """Carry Core's exact data binding into file readers without another RPC."""
-    try:
-        run = _service().get_run(run_id)
-    except Exception:
-        if stored_run(run_id) is None:
-            raise
-        return run_id, {}
+    if run is None:
+        try:
+            run = _service().get_run(run_id)
+        except Exception:
+            if stored_run(run_id) is None:
+                raise
+            return run_id, {}
     runtime_id = _runtime_output_id(run_id, run=run)
     reference = run.get("run_data_ref")
     if (isinstance(reference, dict) and reference.get("storage") == "syncthing"
@@ -183,8 +187,25 @@ def _runtime_output_location(run_id: str) -> tuple[str, dict[str, Any]]:
     return runtime_id, {}
 
 
-def _resolve_run_result_reference(run_id: str) -> Any | None:
-    run = _service().get_run(run_id)
+def _run_file_location(run_id: str, request: Request, resource: str):
+    """Resolve one canonical Run read for owner routing and local file access."""
+    try:
+        run = _service().get_run(run_id)
+    except Exception:
+        if request.headers.get(RUN_FILE_HOP_HEADER) is not None:
+            raise HTTPException(503, "The run-file owner could not verify its storage binding.")
+        if stored_run(run_id) is None:
+            raise
+        return None, run_id, {}, {}
+    response = owner_file_response(run_id, run, request, resource)
+    if response is not None:
+        return response, "", {}, run
+    runtime_id, options = _runtime_output_location(run_id, run=run)
+    return None, runtime_id, options, run
+
+
+def _resolve_run_result_reference(run_id: str, *, run: dict[str, Any] | None = None) -> Any | None:
+    run = _service().get_run(run_id) if run is None else run
     reference = run.get("result_ref")
     if not is_staged_artifact_ref(reference):
         result = run.get("result")
@@ -1293,15 +1314,17 @@ def create_run_human_acknowledgement(
     tags=["runs"],
     response_model=ResourceModel,
 )
-def get_run_final_artifact(run_id: str, principal=Depends(require_auth)):
-    runtime_id, output_location = _runtime_output_location(run_id)
+def get_run_final_artifact(run_id: str, request: Request, principal=Depends(require_auth)):
+    response, runtime_id, output_location, run = _run_file_location(run_id, request, "artifacts/final")
+    if response is not None:
+        return response
     try:
         value = runtime_run_routes.get_run_final_artifact(runtime_id, principal, **output_location)
     except HTTPException as exc:
         if exc.status_code != status.HTTP_404_NOT_FOUND:
             raise
         try:
-            value = _resolve_run_result_reference(run_id)
+            value = _resolve_run_result_reference(run_id, run=run)
         except ArtifactNotReadyError as resolve_exc:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1326,11 +1349,14 @@ def get_run_final_artifact(run_id: str, principal=Depends(require_auth)):
 @router.get("/runs/{run_id}/artifacts", operation_id="list_run_artifacts", tags=["runs"], response_model=PageResponse)
 def list_run_artifacts(
     run_id: str,
+    request: Request,
     page_size: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     page_token: str | None = None,
     principal: str = Depends(require_auth),
 ):
-    runtime_id, output_location = _runtime_output_location(run_id)
+    response, runtime_id, output_location, _run = _run_file_location(run_id, request, "artifacts")
+    if response is not None:
+        return response
     value = _run_public(runtime_run_routes.list_run_artifacts(runtime_id, principal, **output_location), run_id=run_id, runtime_run_id=runtime_id)
     return _page_run_records(
         value,
@@ -1344,19 +1370,28 @@ def list_run_artifacts(
 
 
 @router.get("/runs/{run_id}/artifacts/{artifact_path:path}", operation_id="download_run_artifact", tags=["runs"])
-def download_run_artifact(run_id: str, artifact_path: str, principal=Depends(require_auth)):
-    runtime_id, output_location = _runtime_output_location(run_id)
+def download_run_artifact(run_id: str, artifact_path: str, request: Request, principal=Depends(require_auth)):
+    from urllib.parse import quote
+
+    response, runtime_id, output_location, _run = _run_file_location(
+        run_id, request, "artifacts/" + quote(artifact_path, safe=""),
+    )
+    if response is not None:
+        return response
     return runtime_run_routes.get_run_artifact(runtime_id, artifact_path, principal, **output_location)
 
 
 @router.get("/runs/{run_id}/outputs", operation_id="list_run_outputs", tags=["runs"], response_model=PageResponse)
 def list_run_outputs(
     run_id: str,
+    request: Request,
     page_size: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     page_token: str | None = None,
     principal: str = Depends(require_auth),
 ):
-    runtime_id, output_location = _runtime_output_location(run_id)
+    response, runtime_id, output_location, _run = _run_file_location(run_id, request, "outputs")
+    if response is not None:
+        return response
     value = _run_public(runtime_run_routes.list_run_outputs(runtime_id, principal, **output_location), run_id=run_id, runtime_run_id=runtime_id)
     return _page_run_records(
         value,
@@ -1370,8 +1405,10 @@ def list_run_outputs(
 
 
 @router.get("/runs/{run_id}/outputs/{output_index}", operation_id="download_run_output", tags=["runs"])
-def download_run_output(run_id: str, output_index: int, principal=Depends(require_auth)):
-    runtime_id, output_location = _runtime_output_location(run_id)
+def download_run_output(run_id: str, output_index: int, request: Request, principal=Depends(require_auth)):
+    response, runtime_id, output_location, _run = _run_file_location(run_id, request, f"outputs/{output_index}")
+    if response is not None:
+        return response
     return runtime_run_routes.get_run_output(runtime_id, output_index, principal, **output_location)
 
 

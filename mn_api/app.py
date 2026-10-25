@@ -21,6 +21,7 @@ from mn_api.errors import (
 )
 from mn_api.job_mcp import create_job_mcp, job_mcp_lifespan
 from mn_api.host_output_delivery import host_output_delivery_loop
+from mn_api.run_file_routing import BINDING_HEADER
 from mn_sdk.errors import AppError
 from mn_api.routes import bundles
 from mn_api.routes.v1 import job_backups, job_preparations
@@ -77,6 +78,8 @@ def create_app() -> FastAPI:
         response = await call_next(request)
         response.headers["X-Request-ID"] = request_id
         response.headers["X-API-Contract"] = API_CONTRACT
+        if binding := getattr(request.state, "run_file_binding", None):
+            response.headers[BINDING_HEADER] = binding
         return response
 
     app.middleware("http")(enforce_request_size)

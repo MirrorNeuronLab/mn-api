@@ -82,6 +82,27 @@ bundle. It also reconciles completed Core-scheduled runs from replicated
 completion receipts. The relay reports delivery separately from Core execution
 completion.
 
+Canonical final-result, artifact-list/download, and output-list/download GETs
+read from the run's Core-selected owner when that node advertises an enabled
+native HTTP API. This avoids coupling completed-file availability to the
+ingress computer's asynchronous shared-storage replica. Each request reads the
+canonical Run once; Core membership selects the peer's advertised host/port.
+The receiving API must confirm the same execution, owner, data generation and
+storage reference before serving bytes. Changed bindings or a second hop fail
+with HTTP 409. Authentication precedes routing; only configured peer API
+credentials are sent. Redirects and environment proxies are disabled. Reads
+use 15-second I/O timeouts and 64-KiB streaming chunks, with upstream closure on
+completion, failure and cancellation. Byte ranges and download metadata survive
+the relay. No caller-provided target URL or host path is accepted.
+Local owners, legacy owners without an HTTP advertisement, and deliberately
+disabled HTTP endpoints retain the existing exact-binding replica reader.
+Failures from an advertised enabled owner never substitute a stale local copy.
+Both APIs need this run-file protocol: the peer acknowledges the binding through
+`X-MN-Run-File-Binding`, under a single `X-MN-Run-File-Hop`. Direct authenticated
+clients keep the same public routes, JSON shapes and downloads. The documented
+offline replica read remains available when Core cannot return a Run; it cannot
+acknowledge an owner routing request without verifying its binding.
+
 Blueprint additions and launch validate declared runtime model policies and
 hardware compatibility without installing generation models. Launch retains
 `model_install` as the compatibility phase identifier for this check. The SDK

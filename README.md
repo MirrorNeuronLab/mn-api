@@ -324,6 +324,17 @@ run-scoped output-copy state and starts the background output relay. This keeps
 shared-output materialization identical to a direct blueprint launch whether
 or not the request contains configuration overrides.
 
+Final results, artifact lists/downloads, and published output lists/downloads
+read from the run's Core-selected owner when it advertises an enabled API.
+Reports can be reviewed before the ingress computer's shared-storage replica
+arrives. Core selects the endpoint and the receiving API confirms the exact run
+and storage binding. Reads stream through the existing authenticated routes;
+clients keep their existing URLs and size/hash receipts. Deploy matching APIs
+on both computers. Redirects are refused, peer credentials follow the existing
+API authentication policy, and a changed owner or storage binding returns 409.
+Local owners and owners without an enabled HTTP advertisement retain verified
+replica reads. An enabled owner's failure never substitutes stale local data.
+
 Collections use `items` and `next_page_token`; clients pass `page_size`
 (default 50, maximum 200) and an opaque `page_token`. Persistent resources use
 strong ETags. Mutating or deleting jobs, schedules, deployments, model

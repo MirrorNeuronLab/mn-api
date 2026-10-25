@@ -1923,7 +1923,8 @@ def test_staged_final_artifact_errors_preserve_retry_and_integrity_contract(monk
         (jobs.ArtifactIntegrityError("digest mismatch"), 500, "internal_error"),
         (jobs.StagedArtifactError("invalid reference"), 500, "internal_error"),
     ]:
-        def resolve(_run_id, failure=error):
+        def resolve(_run_id, *, run, failure=error):
+            assert run["run_id"] == _run_id
             raise failure
         monkeypatch.setattr(jobs, "_resolve_run_result_reference", resolve)
         response = client.get("/api/v1/runs/run-1/artifacts/final")
