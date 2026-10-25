@@ -188,6 +188,7 @@ def create_blueprint_run(
             blueprint_id,
             BlueprintRunRequest(
                 job_id=payload.job_id,
+                admission_policy=payload.admission_policy,
                 run_id=payload.run_id,
                 config_overrides=payload.config_overrides,
                 secret_environment=payload.secret_environment,

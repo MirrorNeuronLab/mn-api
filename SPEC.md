@@ -781,3 +781,10 @@ are not followed. Streams and WebSockets close their upstream on disconnect.
 The API relay delegates to its own local Web UI proxy with an authenticated probe
 marker, avoiding recursive readiness checks. Ordinary UI discovery still probes
 the actual document/assets through the complete route.
+
+## Admission and relocation resources
+
+Run admission checks are read-only projections of owner Core policy. Manual run
+requests default to start_now and must explicitly request enqueue_if_busy. Job
+relocation is an authenticated durable operation with a stable transfer identity;
+HTTP adaptation must not implement ownership or filesystem-copy policy.

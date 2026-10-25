@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Literal
 
 from pydantic import BaseModel as PydanticBaseModel, ConfigDict, Field, SecretStr
 
@@ -68,6 +68,7 @@ class RestoreJobBackupRequest(BaseModel):
 
 
 class BlueprintRunRequest(BaseModel):
+    admission_policy: Literal["start_now", "enqueue_if_busy"] = "start_now"
     job_id: Optional[str] = None
     run_id: Optional[str] = None
     config_overwrite: Optional[Dict[str, Any]] = None

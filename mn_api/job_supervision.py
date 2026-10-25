@@ -65,15 +65,15 @@ class BoundJobSupervision:
             from mn_api.routes.v1.jobs import create_job_run_operation
             from mn_api.routes.v1.blueprints import create_blueprint_run
 
-            if not isinstance(metadata, dict) or set(metadata) - {"config_overrides", "secret_environment", "force"}:
+            if not isinstance(metadata, dict) or set(metadata) - {"config_overrides", "secret_environment", "force", "admission_policy"}:
                 raise ValueError("Invalid native launch metadata")
             configuration = metadata.get("config_overrides", {})
             secrets = metadata.get("secret_environment", {})
             if not secrets:
-                response = create_job_run_operation(job_id, RunCreate(config_overrides=configuration), request_id, "mcp")
+                response = create_job_run_operation(job_id, RunCreate(config_overrides=configuration, admission_policy=metadata.get("admission_policy", "start_now")), request_id, "mcp")
                 return json.loads(response.body)
             request = BlueprintRunCreate(job_id=job_id, config_overrides=configuration,
-                                         secret_environment=secrets, force=metadata.get("force", False))
+                                         secret_environment=secrets, force=metadata.get("force", False), admission_policy=metadata.get("admission_policy", "start_now"))
             # Credentials are captured only by this in-memory callback. The
             # durable operation stores identity and progress, never this request.
             operation_id = "op-local-" + hashlib.sha256(f"mcp:{job_id}:{request_id}".encode()).hexdigest()

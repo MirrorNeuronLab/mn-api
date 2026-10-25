@@ -33,7 +33,7 @@ def test_planning_and_submission_forward_explicit_selection(client):
     body = {"configuration_overrides": {"budget.minutes": 60}, "expected_attempt": 1, "checkpoint_revision": REVISION}
     response = api.post("/api/v1/runs/run-1/retries", json=body, headers={"Idempotency-Key": "key-1"})
     assert response.status_code == 202, response.text
-    assert runtime.calls[-1] == ("retry", "run-1", {**body, "idempotency_key": "key-1"})
+    assert runtime.calls[-1] == ("retry", "run-1", {**body, "idempotency_key": "key-1", "admission_policy": "start_now"})
     assert response.json()["attempt"] == 2
 
 

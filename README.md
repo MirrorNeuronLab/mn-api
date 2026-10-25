@@ -778,3 +778,20 @@ and `{"refresh_contract": true}`. This rebuilds the entire compiled bundle using
 the saved configuration and stable Job identity. The command rejects an active
 run; let it stop normally before refreshing. Do not reset Job storage or rewrite
 an active run's frozen block descriptor.
+
+## Run admission and moving Jobs
+
+`POST /api/v1/jobs/{id}/run-admission-checks` accepts action `start`, `resume`, or
+`retry` (the latter two require `run_id`). It reports `runnable_now`, `runnable_later`,
+`not_runnable`, or `unavailable`, with measured blockers when available. It has no
+preparation or run-creation side effects. Save changed configuration before checking.
+Run creation/retry and blueprint launches accept `admission_policy: start_now`
+(default) or `enqueue_if_busy`; only compatible busy work can queue.
+
+`POST /api/v1/jobs/{id}/relocations` accepts `target_node` and a 32-hex
+`transfer_id`. It returns a durable operation (202); follow its Location or events.
+Reuse the transfer identity after a lost response. Core freezes the idle source,
+verifies an inactive destination, commits ownership, then activates it. Job details
+include a bounded transfer journal. Paused schedules and historical evidence move
+without replaying execution. Runtime policy, preparation and checksums remain owned
+by Core and the SDK.

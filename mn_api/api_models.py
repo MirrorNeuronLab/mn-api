@@ -130,7 +130,19 @@ class JobBundleReplacement(StrictModel):
     replace_existing_run: bool = False
 
 
+class JobRelocationCreate(StrictModel):
+    target_node: str = Field(min_length=1, max_length=255)
+    transfer_id: str = Field(pattern=r"^[a-f0-9]{32}$")
+
+
+class RunAdmissionCheck(StrictModel):
+    run_id: str | None = None
+    action: Literal["start", "resume", "retry"] = "start"
+    config_overrides: dict[str, Any] = Field(default_factory=dict)
+
+
 class RunCreate(StrictModel):
+    admission_policy: Literal["start_now", "enqueue_if_busy"] = "start_now"
     run_id: str | None = None
     inputs: dict[str, Any] = Field(default_factory=dict)
     config_overrides: dict[str, Any] = Field(default_factory=dict)
@@ -156,6 +168,7 @@ class RunRetryPlan(StrictModel):
 
 
 class RunRetryCreate(RunRetryPlan):
+    admission_policy: Literal["start_now", "enqueue_if_busy"] = "start_now"
     expected_attempt: StrictInt = Field(ge=1)
     checkpoint_revision: str = Field(pattern=r"^[a-f0-9]{64}$")
 

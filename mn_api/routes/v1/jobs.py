@@ -36,9 +36,11 @@ from mn_api.api_models import (
     JobBundleReplacement,
     JobCreate,
     JobUpdate,
+    JobRelocationCreate,
     PageResponse,
     ResourceModel,
     RunCreate,
+    RunAdmissionCheck,
     RunUpdate,
     RunRetryPlan,
     RunRetryCreate,
@@ -81,6 +83,20 @@ _TERMINAL = {"completed", "failed", "cancelled", "canceled", "deleted"}
 
 def _service() -> RuntimeService:
     return RuntimeService(state.client)
+
+
+@router.post("/jobs/{job_id}/relocations", status_code=202, operation_id="relocate_job", tags=["jobs"], response_model=ResourceModel)
+def relocate_job(job_id: str, request: JobRelocationCreate, principal=Depends(require_auth)):
+    operation_id = "op-local-" + sha256(json.dumps([principal, job_id, request.transfer_id]).encode()).hexdigest()
+    options = {"job_id": job_id, **request.model_dump()}
+
+    def work(progress):
+        progress(stage="transfer", label="Move co-worker", detail="Verifying data and transferring ownership.")
+        return _service().relocate_job(job_id, request.target_node, transfer_id=request.transfer_id)
+
+    operation = start_local_operation("relocate_job", options, work, operation_id=operation_id,
+        request_fingerprint=idempotency_records.fingerprint(options), durable=True, retry_failed=True)
+    return resource_response(operation, status_code=202, location=f"{API_PREFIX}/operations/{operation_id}")
 
 
 def _sort_timestamp(resource: dict[str, Any]) -> str:
@@ -548,6 +564,18 @@ def create_job_data_reset(
     )
 
 
+@router.post("/jobs/{job_id}/run-admission-checks", operation_id="check_job_run_admission", tags=["runs"], response_model=ResourceModel)
+def check_job_run_admission(job_id: str, request: RunAdmissionCheck, _principal=Depends(require_auth)):
+    current = public_value(_service().get_job(job_id))
+    saved = current.get("resolved_configuration") or {}
+    if request.config_overrides and deep_merge(saved, request.config_overrides) != saved:
+        # A read-only check must never prepare containers or update a Job.
+        raise HTTPException(status_code=409, detail="Save the co-worker configuration before checking resources.")
+    if request.action != "start" and not request.run_id:
+        raise HTTPException(status_code=422, detail="run_id is required for resume or retry admission.")
+    return public_value(_service().check_run_admission(job_id, run_id=request.run_id or ""))
+
+
 @router.post(
     "/jobs/{job_id}/runs",
     status_code=status.HTTP_202_ACCEPTED,
@@ -629,6 +657,7 @@ def create_job_run(
                 inputs=request.inputs,
                 idempotency_key=idempotency_key or "",
                 replace_existing_run=request.replace_existing_run,
+                admission_policy=request.admission_policy,
             )
         except Exception as exc:
             if relay:
@@ -926,7 +955,8 @@ def retry_run(run_id: str, request: RunRetryCreate,
     try:
         return public_value(_service().retry_run(
             run_id, expected_attempt=request.expected_attempt, checkpoint_revision=request.checkpoint_revision,
-            configuration_overrides=request.configuration_overrides, idempotency_key=idempotency_key))
+            configuration_overrides=request.configuration_overrides,
+            admission_policy=request.admission_policy, idempotency_key=idempotency_key))
     except grpc.RpcError as exc:
         return handle_grpc_error(exc)
 
