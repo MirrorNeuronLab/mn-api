@@ -59,6 +59,15 @@ This specification covers only this repository. Core runtime semantics and
 shared Python behavior are external contracts consumed through
 `mirrorneuron-python-sdk`.
 
+Run detail and monitor responses expose
+Core's `placement` with `owner_node`, friendly `node_label`, and a current
+`reservation` summary. Its `state` is `reserved`, `queued`, `unreserved`, or
+`unavailable`; held claims include allocation mode, CPU cores, RAM/disk MB,
+GPU count and GPU memory MB. Unknown quantities remain null. This is admission
+accounting, independent of measured usage. Monitor reads reuse the same canonical
+Run, overriding any replica placement. Offline history returns null placement.
+The matching Core detailed Run projection is required for these fields.
+
 Compact run monitors bind resource aggregation to the same resolved run
 directory as their artifacts. Core's explicit storage reference takes precedence
 over local mappings; an unavailable explicit reference does not fall back to a

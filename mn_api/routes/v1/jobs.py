@@ -40,6 +40,7 @@ from mn_api.api_models import (
     PageResponse,
     ResourceModel,
     RunCreate,
+    RunResource,
     RunAdmissionCheck,
     RunUpdate,
     RunRetryPlan,
@@ -901,7 +902,7 @@ def list_runs(
     )
 
 
-@router.get("/runs/{run_id}", operation_id="get_run", tags=["runs"], response_model=ResourceModel)
+@router.get("/runs/{run_id}", operation_id="get_run", tags=["runs"], response_model=RunResource)
 def get_run(run_id: str, _principal=Depends(require_auth)):
     try:
         result = _service().get_run(run_id)
@@ -912,6 +913,7 @@ def get_run(run_id: str, _principal=Depends(require_auth)):
             raise
         missing = isinstance(exc, grpc.RpcError) and exc.code() == grpc.StatusCode.NOT_FOUND
         recovered["control_status"] = "missing" if missing else "unavailable"
+        recovered["placement"] = None
         recovered["retry"] = {"available": False, "reason": (
             "Stored history remains, but its Core control record is missing. Start a new run."
             if missing else "Core is unavailable. Reconnect and plan a retry to check recovery.")}
@@ -1032,7 +1034,7 @@ def delete_schedule(schedule_id: str, owner_node: str = "",
         expected_revision=int(current.get("revision") or 0), **owner))
 
 
-@router.get("/runs/{run_id}/monitor", operation_id="get_run_monitor", tags=["runs"], response_model=ResourceModel)
+@router.get("/runs/{run_id}/monitor", operation_id="get_run_monitor", tags=["runs"], response_model=RunResource)
 def get_run_monitor(run_id: str, _principal=Depends(require_auth)):
     try:
         canonical_run = _service().get_run(run_id)
@@ -1040,9 +1042,11 @@ def get_run_monitor(run_id: str, _principal=Depends(require_auth)):
         canonical_run = stored_run(run_id)
         if canonical_run is None:
             raise
+        canonical_run = {**canonical_run, "placement": None}
         progress = stored_progress(run_id) or {}
         return _run_public({"job": canonical_run, "summary": canonical_run,
                             "status": canonical_run.get("status"), "admission": canonical_run.get("admission"),
+                            "placement": None,
                             "events": progress.get("recent_events") or [],
                             "workflow_progress": progress}, run_id=run_id, runtime_run_id=run_id)
     # Reuse this request's canonical read; never retain mutable Run state
@@ -1051,6 +1055,7 @@ def get_run_monitor(run_id: str, _principal=Depends(require_auth)):
     reference = canonical_run.get("run_data_ref")
     source_options = {"run_data_ref": reference} if isinstance(reference, dict) else {}
     detail = dict(runtime_job_routes._compact_job_detail(run_id, **source_options))
+    detail["placement"] = canonical_run.get("placement")
     canonical_status = str(canonical_run.get("status") or "").strip().lower()
     if canonical_status:
         detail["status"] = canonical_status

@@ -15,6 +15,26 @@ class ResourceModel(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
+class RunReservation(StrictModel):
+    state: Literal["reserved", "queued", "unreserved", "unavailable"]
+    mode: Literal["shared", "exclusive_node"] | None = None
+    cpu_cores: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    memory_mb: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    disk_mb: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    gpu_count: int | None = Field(default=None, ge=0)
+    gpu_memory_mb: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+
+
+class RunPlacement(StrictModel):
+    owner_node: str
+    node_label: str | None = None
+    reservation: RunReservation
+
+
+class RunResource(ResourceModel):
+    placement: RunPlacement | None = None
+
+
 class PageResponse(StrictModel):
     items: list[ResourceModel]
     next_page_token: str | None = None

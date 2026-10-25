@@ -733,6 +733,15 @@ Local-source MCP integration requires the matching SDK/common/MCP family from `1
 
 ## Automatically queued starts and schedule controls
 
+`GET /api/v1/runs/{run_id}` and `/api/v1/runs/{run_id}/monitor` expose the same
+Core-owned `placement`: `owner_node`, optional friendly `node_label`, and
+`reservation` with `state`, allocation `mode`, `cpu_cores`, `memory_mb`,
+`disk_mb`, `gpu_count`, and `gpu_memory_mb`. Reservation states are `reserved`,
+`queued`, `unreserved`, and `unavailable`; missing quantities are null. These
+are reserved amounts, separate from `/resources` utilization. Paused runs and
+terminal cleanup may still hold resources. Replica history never supplies a
+current reservation. Deploy matching Core/API versions to receive this data.
+
 `POST /jobs/{job_id}/runs` returns HTTP 202 for an accepted start, including when
 its selected PC is busy. A queued result has `status: queued` and an `admission`
 object with durable `queue_id`, `owner_node`, node label, position and blocker.
