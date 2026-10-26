@@ -16,6 +16,7 @@ from mn_api.errors import http_exception_problem, public_validation_issues
 from mn_api.public import decode, first_identifier, public_value
 from mn_api.path_utils import resolve_mn_home
 from mn_sdk.errors import AppError, normalize_exception
+from mn_sdk.openshell_errors import public_details as openshell_error_details
 
 
 _MAX_OPERATIONS = 10_000
@@ -102,6 +103,11 @@ def _operation_error(error: Exception) -> dict[str, Any]:
     }
     if app_error.hint:
         result["hint"] = app_error.hint
+    preparation = openshell_error_details(app_error)
+    if preparation:
+        result["details"] = preparation
+        result["problem_code"] = app_error.problem_code
+        result["category"] = app_error.category
     if app_error.details and "blockers" in app_error.details:
         from mn_sdk.errors import sanitize_context
         result["details"] = {"blockers": sanitize_context(app_error.details)["blockers"]}

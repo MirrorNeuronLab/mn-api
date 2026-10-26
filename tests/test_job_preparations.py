@@ -48,6 +48,42 @@ def restart():
         operations._durable_local_operation_ids.clear()
 
 
+@pytest.mark.parametrize("stage", ["image_build", "gateway_connection", "sandbox_create"])
+def test_openshell_errors_survive_http_durable_operation_and_sse(api, monkeypatch, stage):
+    from mn_api.errors import app_error_response
+    from mn_sdk.errors import normalize_exception
+    from mn_sdk.openshell_errors import OpenShellPreparationError, encode_error
+    import grpc
+
+    client, _ = api
+    original = OpenShellPreparationError(stage, "mirror_neuron@spark")
+    original.details["stderr"] = "private-token"
+    class RpcFailure(grpc.RpcError):
+        def code(self):
+            return grpc.StatusCode.FAILED_PRECONDITION
+        def details(self):
+            return encode_error(original)
+    def create(*_args):
+        raise RpcFailure()
+    monkeypatch.setattr(jobs, "create_job", create)
+    accepted = client.post("/api/v1/job-preparations", headers={"Idempotency-Key": f"sandbox-{stage}"},
+                           json={"blueprint_id": "architecture"}).json()
+    operation = wait(client, accepted["operation_id"])
+    assert operation["status"] == "failed"
+    expected = {"stage": stage, "node": "mirror_neuron@spark"}
+    assert operation["error"]["details"] == expected
+    assert operation["error"]["code"] == original.code
+    assert operation["error"]["status"] == 412
+    assert operation["error"]["retryable"] is False
+    direct = app_error_response(normalize_exception(RpcFailure()))
+    assert direct.status_code == 412
+    assert direct.media_type == "application/problem+json"
+    assert json.loads(direct.body)["details"] == expected
+    stream = client.get(f"/api/v1/operations/{accepted['operation_id']}/events/stream").text
+    assert original.code in stream
+    assert "private-token" not in stream + json.dumps(operation) + direct.body.decode()
+
+
 def test_creation_claim_precedes_work_and_reconnect_never_creates_another_job(api, monkeypatch):
     client, records = api
     started, release = Event(), Event()

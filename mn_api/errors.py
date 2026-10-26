@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from mn_api import state
 from mn_sdk.admission_errors import run_start_admission_error
 from mn_sdk.errors import AppError, normalize_exception, sanitize_context
+from mn_sdk.openshell_errors import public_details as openshell_error_details
 
 
 def _public_text(value: Any, limit: int = 500) -> str:
@@ -116,6 +117,9 @@ def app_error_response(app_error: AppError, *, request: Request | None = None, c
     extra = {"problem_code": app_error.problem_code, "category": app_error.category, "retryable": app_error.retryable}
     if app_error.hint:
         extra["hint"] = app_error.hint
+    preparation = openshell_error_details(app_error)
+    if preparation:
+        extra["details"] = preparation
     if app_error.details and "blockers" in app_error.details:
         extra["details"] = {"blockers": sanitize_context(app_error.details)["blockers"]}
     return problem_response(

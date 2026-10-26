@@ -2040,7 +2040,8 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertEqual(config["runner_module"], "MirrorNeuron.Runner.OpenShell")
         self.assertTrue(config["sandbox_name"].startswith("mirror-neuron-"))
         self.assertEqual(config["ssh_host"], f"openshell-{config['sandbox_name']}")
-        self.assertEqual(calls[0][:3], ["docker", "build", "-t"])
+        self.assertEqual(calls[0], ["openshell", "sandbox", "list"])
+        self.assertEqual(calls[1][:3], ["docker", "build", "-t"])
         self.assertTrue(any(command[1:3] == ["sandbox", "create"] for command in calls))
 
     def test_load_blueprint_bundle_ignores_misnamed_overwrite_file(self):

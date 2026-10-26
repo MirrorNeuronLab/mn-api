@@ -24,6 +24,11 @@ The shared business logic lives in `../mn-python-sdk/mn_sdk`. The CLI and API
 are adapters over that SDK: CLI commands render terminal output, while API
 routes validate HTTP payloads and return JSON/problem responses.
 
+OpenShell preparation errors retain distinct image-build, gateway-connection and
+sandbox-creation codes with safe stage and runtime-node details through HTTP,
+operation polling and SSE. They remain non-retryable prerequisite failures;
+subprocess output is never returned. Deploy the API with the matching SDK.
+
 Blueprint launch accepts blueprint-owned source packages or wheels below
 `payloads/skills` and `payloads/agents`, including a bundled agent index. It
 streams large assets to the shared blob store and packages declared

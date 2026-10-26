@@ -26,6 +26,13 @@ matching receipt supplies its sandbox identity. Native owners must advertise
 failure, never a successful unprepared Job. The API does not maintain a separate
 image-builder implementation or import CLI provisioning code.
 
+OpenShell preparation failures preserve the SDK's three `MN_OPENSHELL_*` codes
+for image build, gateway connection and sandbox creation, plus allowlisted
+`details.stage` and optional `details.node`. Synchronous Problem Details and
+durable operation polling/SSE expose the same non-retryable HTTP 412 failure.
+Raw subprocess output and arbitrary diagnostic fields remain private. Deploy
+with the matching SDK's OpenShell error contract.
+
 The API requires Python 3.12 or newer. The managed runtime and contributor/CI toolchains use Python 3.12, matching the SDK and CLI.
 
 ## Durable preparation and reply submission
