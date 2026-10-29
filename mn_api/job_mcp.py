@@ -17,6 +17,7 @@ from typing import Any, Literal, Mapping
 
 import anyio
 import grpc
+from fastapi import HTTPException
 from mcp.server import MCPServer
 from mcp.server.mcpserver import Context
 from mcp.server.transport_security import TransportSecuritySettings
@@ -1223,9 +1224,28 @@ class JobMCPGuard:
             await response(scope, receive, send)
             return
 
+        from mn_api.job_mcp_routing import BINDING_HEADER, EXTERNAL_HEADER, owner_mcp_response
+        try:
+            peer_response, binding = await owner_mcp_response(job_id, request, authority)
+        except HTTPException as error:
+            await problem_response(status_code=error.status_code, error="job_mcp_unavailable",
+                title="Co-worker connection unavailable", detail=str(error.detail),
+                instance=request.url.path, request_id=str(getattr(request.state, "request_id", "")))(scope, receive, send)
+            return
+        if peer_response is not None:
+            await peer_response(scope, receive, send)
+            return
+        if binding:
+            original_send = send
+            async def confirm_binding(message):
+                if message["type"] == "http.response.start":
+                    message = {**message, "headers": [*message.get("headers", []),
+                        (BINDING_HEADER.lower().encode(), binding.encode())]}
+                await original_send(message)
+            send = confirm_binding
         token = _current_job_id.set(job_id)
         from mn_api.job_supervision import native_launch_authority
-        authority_token = native_launch_authority.set(authority == 'internal')
+        authority_token = native_launch_authority.set(authority == 'internal' and request.headers.get(EXTERNAL_HEADER) != '1')
         try:
             selected_app = {
                 "agent": self.agent_app,

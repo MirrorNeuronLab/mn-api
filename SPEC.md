@@ -804,3 +804,13 @@ Run admission checks are read-only projections of owner Core policy. Manual run
 requests default to start_now and must explicitly request enqueue_if_busy. Job
 relocation is an authenticated durable operation with a stable transfer identity;
 HTTP adaptation must not implement ownership or filesystem-copy policy.
+
+Job MCP requests authenticate at ingress and run on the Core-selected Job owner,
+including declared domain controls and their durable operation receipts. The API
+relays to the owner's registered HTTP endpoint; private loopback service addresses
+remain local to that owner. Each hop binds Job, execution, data generation and
+revision; changed placement or a second hop fails closed. Peer API credentials or
+the existing internal Job session grant replace ingress credentials. External
+clients retain their restricted native-launch authority. Redirects and environment
+proxies are disabled, request bodies are bounded to 1 MiB, and peer streams close
+on completion or disconnect. Deploy this API revision on ingress and owner nodes.

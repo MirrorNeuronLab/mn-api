@@ -809,3 +809,13 @@ verifies an inactive destination, commits ownership, then activates it. Job deta
 include a bounded transfer journal. Paused schedules and historical evidence move
 without replaying execution. Runtime policy, preparation and checksums remain owned
 by Core and the SDK.
+
+Job MCP requests authenticate at ingress and run on the Core-selected Job owner,
+including declared domain controls and their durable operation receipts. The API
+relays to the owner's registered HTTP endpoint; private loopback service addresses
+remain local to that owner. Each hop binds Job, execution, data generation and
+revision; changed placement or a second hop fails closed. Peer API credentials or
+the existing internal Job session grant replace ingress credentials. External
+clients retain their restricted native-launch authority. Redirects and environment
+proxies are disabled, request bodies are bounded to 1 MiB, and peer streams close
+on completion or disconnect. Deploy this API revision on ingress and owner nodes.
