@@ -5,6 +5,7 @@ import os
 from types import SimpleNamespace
 
 from mn_api import host_output_delivery
+from mn_sdk.blueprint_support.relay_ownership import relay_owner
 
 
 def test_reconciles_completed_scheduled_run_without_desktop_copy(monkeypatch, tmp_path):
@@ -13,6 +14,7 @@ def test_reconciles_completed_scheduled_run_without_desktop_copy(monkeypatch, tm
     run = submission / "outputs" / "runs" / "scheduled-1"
     run.mkdir(parents=True)
     storage = {
+        "installation_ownership": relay_owner(dict(os.environ)),
         "host_root": str(shared),
         "host_submission_path": str(submission),
         "runtime_root": "/runtime/shared",
@@ -45,7 +47,21 @@ def test_reconciles_completed_scheduled_run_without_desktop_copy(monkeypatch, tm
     assert calls == [("scheduled-1", "scheduled-1", storage)]
 
     (local_run / "event_relay.json").write_text(json.dumps({"pid": os.getpid()}), encoding="utf-8")
+    # A live but unrelated PID must not prevent recovery of run delivery.
+    assert host_output_delivery.reconcile_host_output_delivery() == 1
+    monkeypatch.setattr("mn_sdk.blueprint_support.relay_ownership.process_identity", lambda pid: "relay-birth")
+    (local_run / "event_relay.json").write_text(json.dumps({"pid": os.getpid(), "process_identity": "relay-birth"}), encoding="utf-8")
     assert host_output_delivery.reconcile_host_output_delivery() == 0
     (local_run / "event_relay.json").unlink()
+    from pathlib import Path
+    token = Path(os.environ["MN_HOME"]) / "grpc_auth.token"
+    old_token = token.read_text()
+    token.write_text("replacement-installation")
+    assert host_output_delivery.reconcile_host_output_delivery() == 0
+    token.write_text(old_token)
+    old_storage = {key: value for key, value in storage.items() if key != "installation_ownership"}
+    (submission / "submission.json").write_text(json.dumps(old_storage))
+    assert host_output_delivery.reconcile_host_output_delivery() == 0
+    (submission / "submission.json").write_text(json.dumps(storage))
     (local_run / "shared_output_materialized.json").write_text('{"ok":true}', encoding="utf-8")
     assert host_output_delivery.reconcile_host_output_delivery() == 0

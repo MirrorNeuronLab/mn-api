@@ -10,8 +10,11 @@ from mn_api.main import app
 
 
 @pytest.fixture(autouse=True)
-def isolated_mn_home(tmp_path, monkeypatch):
-    monkeypatch.setenv("MN_HOME", str(tmp_path / "mn-home"))
+def isolated_mn_home(tmp_path_factory, monkeypatch):
+    runtime_home = tmp_path_factory.mktemp("api-runtime-home")
+    monkeypatch.setenv("MN_HOME", str(runtime_home))
+    (runtime_home / "grpc_auth.token").write_text("isolated-api-credential")
+    monkeypatch.setattr("mn_sdk.blueprint_support.relay_ownership.process_identity", lambda pid: f"fixture-{pid}")
     monkeypatch.delenv("MN_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MN_HOST_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MN_RUNTIME_SHARED_STORAGE_ROOT", raising=False)

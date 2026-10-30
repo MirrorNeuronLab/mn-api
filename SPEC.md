@@ -1,5 +1,15 @@
 # MirrorNeuron API Specification
 
+## Local output observer ownership
+
+API-spawned output relays use the SDK installation fence and execution lock.
+Their local metadata records installation and process birth identity; recovery
+never treats an unrelated live PID as an observer. Permanent missing-run or
+credential errors stop observation; transient transport errors reconnect to the
+original execution without replaying work. Deploy matching SDK, CLI and installer
+versions together.
+
+
 ## Invocation configuration during hiring
 
 Durable Job preparation forwards nested input validation, dependency, image, and
@@ -814,3 +824,5 @@ the existing internal Job session grant replace ingress credentials. External
 clients retain their restricted native-launch authority. Redirects and environment
 proxies are disabled, request bodies are bounded to 1 MiB, and peer streams close
 on completion or disconnect. Deploy this API revision on ingress and owner nodes.
+
+Automatic host-output recovery accepts only submissions stamped by the current installation. Reset preserves external user outputs but cannot adopt their old delivery contracts. Unstamped historical submissions require an explicit new launch; they are not automatically replayed.

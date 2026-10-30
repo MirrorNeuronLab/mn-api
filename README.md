@@ -1,5 +1,13 @@
 # MirrorNeuron API
 
+## Output observer upgrades
+
+Use the matching SDK and installer. Output observers require the private
+installation credential file, carry its fingerprint, and stop after reset,
+credential revocation or authoritative run deletion. PID reuse does not suppress
+recovery, and an OS execution lock prevents duplicate delivery observers.
+
+
 API preparation recognizes `MirrorNeuron.Runner.OpenShell`. Before storing a Job
 definition or configuration update, it uses the SDK to build the declared image
 and prepare its shared sandbox on the selected runtime host, including federated

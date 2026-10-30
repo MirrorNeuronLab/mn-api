@@ -5,12 +5,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 from pathlib import Path
 import re
 
 from mn_sdk import RuntimeConfig
 from mn_sdk.blueprint_support.shared_outputs import load_submission_storage
+from mn_sdk.blueprint_support.relay_ownership import owner_current
 
 from mn_api.blueprints import shared_runs_root, start_background_run_relay
 
@@ -22,11 +22,8 @@ _LOG = logging.getLogger(__name__)
 def _relay_running(run_dir: Path) -> bool:
     try:
         metadata = json.loads((run_dir / "event_relay.json").read_text(encoding="utf-8"))
-        pid = int(metadata.get("pid") or 0)
-        if pid <= 0:
-            return False
-        os.kill(pid, 0)
-        return True
+        from mn_sdk.blueprint_support.relay_ownership import relay_process_running
+        return relay_process_running(metadata)
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         return False
 
@@ -43,7 +40,8 @@ def reconcile_host_output_delivery() -> int:
         if not submission.is_dir() or submission.is_symlink():
             continue
         storage = load_submission_storage(shared_root, submission.name)
-        if not storage.get("output_copy"):
+        ownership = storage.get("installation_ownership")
+        if not storage.get("output_copy") or not ownership or not owner_current(ownership):
             continue
         run_outputs = submission / "outputs" / "runs"
         if not run_outputs.is_dir():

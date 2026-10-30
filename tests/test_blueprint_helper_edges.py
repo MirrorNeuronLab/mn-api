@@ -188,11 +188,14 @@ def test_result_copy_starts_background_relay_without_post_launch_hook(monkeypatc
     monkeypatch.setattr(blueprints, "validate_blueprint_bundle", lambda *_args: tmp_path)
     monkeypatch.setattr(blueprints, "load_blueprint_config", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(blueprints, "with_shared_run_store_config", lambda config, *_args: config)
-    monkeypatch.setattr(blueprints, "subprocess_environment", lambda: {})
+    monkeypatch.setattr(blueprints, "subprocess_environment", lambda: {"MN_HOME": str(tmp_path / "runtime")} )
+    (tmp_path / "runtime").mkdir()
+    (tmp_path / "runtime/grpc_auth.token").write_text("isolated-runtime-credential")
     monkeypatch.setattr(blueprints, "runtime_path_environment", lambda: {})
     monkeypatch.setattr(blueprints, "string_env_values", lambda *_args: {})
     monkeypatch.setattr(blueprints, "process_group_id_for_pid", lambda *_args: None)
     monkeypatch.setattr(blueprints.subprocess, "Popen", lambda *_args, **_kwargs: SimpleNamespace(pid=1234))
+    monkeypatch.setattr("mn_sdk.blueprint_support.relay_ownership.process_identity", lambda pid: "test-relay-birth")
 
     blueprints.start_background_event_relay_if_needed(
         tmp_path, {"id": "purchasing_manager"}, "planned-run", "actual-run", json.dumps(manifest)

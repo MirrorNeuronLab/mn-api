@@ -2446,10 +2446,15 @@ def start_background_run_relay(
         "--poll-seconds",
         f"{poll_seconds:g}",
     ]
+    from mn_sdk.blueprint_support.relay_ownership import relay_owner, process_identity
+
+    env = subprocess_environment()
+    ownership = relay_owner(env)
+    if ownership:
+        command.extend(["--owner-home", ownership["home"], "--owner-stamp", ownership["stamp"]])
     if max_seconds is not None:
         command.extend(["--max-seconds", f"{max_seconds:g}"])
 
-    env = subprocess_environment()
     env.update(runtime_path_environment())
     env.update(string_env_values(env_overrides))
     env["MN_RUN_EVENT_RELAY_CHILD"] = "1"
@@ -2478,6 +2483,8 @@ def start_background_run_relay(
 
     relay_info = {
         "execution_id": execution_id,
+        "ownership": ownership,
+        "process_identity": process_identity(process.pid),
         "pid": process.pid,
         "poll_seconds": poll_seconds,
         "max_seconds": max_seconds,
