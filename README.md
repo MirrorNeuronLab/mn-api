@@ -81,6 +81,11 @@ declared by the selected blueprint through `pass_env`; the API injects each
 value only into matching executable workers and omits the values from resolved
 configuration and public monitor manifests.
 
+A native Job launch that supplies credentials also verifies the owner catalog's
+model bindings against Core's prepared Job definition before dispatch. A stale
+owner must update its catalog and reprepare the Job; credential delivery cannot
+silently replace a selected model.
+
 Blueprint additions and launch validate model declarations and compatibility
 without installing generation models. Launch preserves the `model_install`
 progress phase for compatibility and uses it to report this validation. The

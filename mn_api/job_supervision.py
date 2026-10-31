@@ -72,6 +72,16 @@ class BoundJobSupervision:
             if not secrets:
                 response = create_job_run_operation(job_id, RunCreate(config_overrides=configuration, admission_policy=metadata.get("admission_policy", "start_now")), request_id, "mcp")
                 return json.loads(response.body)
+            # A credential-only launch on the owner must not replace the
+            # definition prepared by a different computer's catalog.
+            from mn_api.blueprints import find_blueprint, validate_blueprint_bundle
+            from mn_api.job_launch_definition import require_prepared_launch_models
+            from mn_api.routes.blueprints import read_manifest_for_launch
+
+            repo_root, blueprint = find_blueprint(state.refresh_config_from_env(), blueprint_id)
+            manifest = read_manifest_for_launch(validate_blueprint_bundle(repo_root, blueprint))
+            prepared_job = runtime.get_job(job_id, include_workflow_definition=True)
+            require_prepared_launch_models(prepared_job, manifest)
             request = BlueprintRunCreate(job_id=job_id, config_overrides=configuration,
                                          secret_environment=secrets, force=metadata.get("force", False), admission_policy=metadata.get("admission_policy", "start_now"))
             # Credentials are captured only by this in-memory callback. The

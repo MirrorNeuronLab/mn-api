@@ -833,3 +833,14 @@ proxies are disabled, request bodies are bounded to 1 MiB, and peer streams clos
 on completion or disconnect. Deploy this API revision on ingress and owner nodes.
 
 Automatic host-output recovery accepts only submissions stamped by the current installation. Reset preserves external user outputs but cannot adopt their old delivery contracts. Unstamped historical submissions require an explicit new launch; they are not automatically replayed.
+
+## Prepared models during secure native launch
+
+A native MCP launch with credentials must retain the prepared Job's model bindings.
+The owner reads Core's detailed workflow definition and compares its step/worker/model identities with
+the SDK-expanded owner catalog before dispatching credential-bearing preparation.
+A missing prepared definition or differing model declarations rejects the launch
+with a safe conflict and instructions to update the owner catalog and reprepare.
+No model binding or secret is returned in the error. Explicit conditional Job
+preparation remains the way to change recipes; unchanged credential-free starts
+continue to use the prepared Job without catalog work.
