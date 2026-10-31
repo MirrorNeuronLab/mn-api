@@ -154,3 +154,23 @@ def test_owner_guard_confirms_binding_and_preserves_native_authority(monkeypatch
     asyncio.run(guard(req.scope, req.receive, send))
     assert (routing.BINDING_HEADER.lower().encode(), binding.encode()) in sent[0]['headers']
     assert sent[1]['body'] == (b'{"native":true}' if allowed else b'{"native":false}')
+
+
+@pytest.mark.parametrize('method,name', [('server/discover', None), ('tools/list', None), ('tools/call', 'watch_job_activity')])
+def test_owner_relay_preserves_modern_discovery_and_named_tool_headers(monkeypatch, method, name):
+    base, binding = routing._location('job-1', request())
+    calls = []
+    reply = Reply(headers={routing.BINDING_HEADER: binding, 'Content-Type': 'application/json'})
+    monkeypatch.setattr(routing, '_open', lambda req, **kw: calls.append(req) or reply)
+    headers = {'MCP-Protocol-Version': '2026-07-28', 'Mcp-Method': method,
+               'Content-Type': 'application/json', 'X-Unrelated-Client-Header': 'must-not-forward'}
+    if name:
+        headers['Mcp-Name'] = name
+    body = ('{"jsonrpc":"2.0","id":1,"method":"' + method + '"}').encode()
+    routing._relay(base, binding, 'job-1', request(headers), body, 'internal')
+    forwarded = {key.lower(): value for key, value in calls[0].header_items()}
+    assert forwarded['mcp-protocol-version'] == '2026-07-28'
+    assert forwarded['mcp-method'] == method
+    assert forwarded.get('mcp-name') == name
+    assert 'x-unrelated-client-header' not in forwarded
+    assert calls[0].data == body

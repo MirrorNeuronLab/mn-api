@@ -20,7 +20,8 @@ HOP_HEADER = 'X-MN-MCP-Hop'
 BINDING_HEADER = 'X-MN-MCP-Binding'
 EXTERNAL_HEADER = 'X-MN-MCP-External'
 MAX_BODY_BYTES = 1_048_576
-_REQUEST_HEADERS = {'accept', 'content-type', 'mcp-protocol-version', 'mcp-session-id', 'last-event-id'}
+_REQUEST_HEADERS = {'accept', 'content-type', 'mcp-protocol-version', 'mcp-method', 'mcp-name',
+                    'mcp-session-id', 'last-event-id'}
 _RESPONSE_HEADERS = {'content-type', 'cache-control', 'mcp-session-id', 'mcp-protocol-version', BINDING_HEADER.lower()}
 _sessions = OrderedDict()
 _session_lock = threading.Lock()

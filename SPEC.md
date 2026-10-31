@@ -667,6 +667,13 @@ raw events remain available for diagnostics.
 
 ## Standard Job MCP supervision
 
+The owner relay preserves `MCP-Protocol-Version`, `Mcp-Method` and `Mcp-Name`
+with the request body, session and event cursor headers. Modern discovery and
+named-tool calls must reach the owner with their matching method/name headers;
+otherwise discovery silently downgrades and MRTR activity cannot be serialized.
+The relay still replaces ingress authentication with the existing owner grant
+and preserves the caller's internal/external authority boundary.
+
 Every blueprint declares the required `mn.mcp` extension independently of
 `mn.response`. The versioned profile is `mn.mcp.supervision.v1`; the public
 endpoint is `/api/v1/jobs/{job_id}/mcp`. The prepared Job stores the installed
