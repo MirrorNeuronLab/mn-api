@@ -138,7 +138,7 @@ model requirements. Required context services retain their existing
 preparation lifecycle. Explicit model-install routes remain eager.
 
 The SDK default policy is medium → small → nano: Nemotron 3.5 Lightning at
-48 GB accelerator memory, Bonsai2 27B PTQ1_0 at 24 GB, then Gemma 4 E2B.
+48 GB accelerator memory, Bonsai2 27B PTQ1_0 at 24 GB, then Nemotron 3.5 Bolt E4B Q4_K_M.
 VRAM and integrated/shared GPU memory qualify; CPU RAM alone does not.
 Bonsai2's catalog `preparation` recipe makes the SDK automatically build/cache
 and start the pinned native Prism DMR backend on the selected model owner.

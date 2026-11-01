@@ -26,13 +26,13 @@ def test_model_collection_defaults_to_catalog_and_marks_default_chain(client, mo
     assert response.status_code == 200, response.text
     items = response.json()["items"]
     assert {item["id"] for item in items} == {
-        "gemma4:e2b", "bonsai2:ptq1_0", "nemotron3:q4_K_M",
+        "gemma4:e2b", "nemotron-3.5-bolt-e4b:q4_k_m", "bonsai2:ptq1_0", "nemotron3:q4_K_M",
         "nemotron-3.5-lightning:latest", "nemotron-3.5-super-vl:120b-a12b",
         "huggingface.co/mirrorneuronlab/embeddinggemma-2-gguf:Q4_K_M",
     }
     assert next(item for item in items if item["id"] == "bonsai2:ptq1_0")["source"] == "dmr"
     assert next(item for item in items if item["id"] == "bonsai2:ptq1_0")["preparation"]["kind"] == "dmr_native"
-    assert {item["id"] for item in items if item["default"]} == {"nemotron-3.5-lightning:latest", "bonsai2:ptq1_0", "gemma4:e2b"}
+    assert {item["id"] for item in items if item["default"]} == {"nemotron-3.5-lightning:latest", "bonsai2:ptq1_0", "nemotron-3.5-bolt-e4b:q4_k_m"}
     assert client.get("/api/v1/models?installed_only=true").json()["items"] == []
 
 
@@ -101,7 +101,7 @@ def test_default_install_selects_feasible_cluster_model(monkeypatch, remote):
     monkeypatch.setattr(model_installation, "install_runtime_cluster_model_for_api", prepare)
     monkeypatch.setattr(model_installation, "sync_runtime_model_gateways_for_api", lambda summary: summary["endpoints"])
     result = model_installation.install_model("default", {}, lambda **_kwargs: None)
-    expected = "nemotron-3.5-lightning:latest" if remote else "gemma4:e2b"
+    expected = "nemotron-3.5-lightning:latest" if remote else "nemotron-3.5-bolt-e4b:q4_k_m"
     assert result["model"] == expected
     assert result["node"] == ("spark" if remote else "local")
     assert [call["entry"]["id"] for call in calls] == [expected]
@@ -123,8 +123,8 @@ def test_default_install_without_core_uses_local_fallback(monkeypatch):
     )
     monkeypatch.setattr(model_installation, "sync_runtime_model_gateways_for_api", lambda summary: summary["endpoints"])
     result = model_installation.install_model("default", {}, lambda **_kwargs: None)
-    assert result["model"] == "gemma4:e2b"
-    assert installed == ["gemma4:e2b"]
+    assert result["model"] == "nemotron-3.5-bolt-e4b:q4_k_m"
+    assert installed == ["nemotron-3.5-bolt-e4b:q4_k_m"]
 
 
 def test_default_install_reuses_operator_provider_default(monkeypatch):
