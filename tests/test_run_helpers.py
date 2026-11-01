@@ -5,7 +5,7 @@ import json
 import pytest
 from fastapi import HTTPException
 
-from mn_api.routes import runs
+from mn_api import run_projection as runs
 
 
 def test_run_compare_payload_uses_result_final_artifact_fallback():

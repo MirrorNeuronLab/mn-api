@@ -7,13 +7,13 @@ from urllib.request import Request
 import pytest
 from fastapi import HTTPException
 
-from mn_api import job_store, state
-from mn_api.routes import jobs
+from mn_api import job_store, state, job_ui
+from mn_api import job_projection as jobs
 
 
 @pytest.fixture(autouse=True)
 def ready_ui_probe(monkeypatch):
-    monkeypatch.setattr(jobs, "probe_job_web_ui", lambda _job_id, _url: {"schema_version": "mn.web_ui.readiness.v1", "ready": True, "reason": "ready"})
+    monkeypatch.setattr(job_ui, "probe_job_web_ui", lambda _job_id, _url: {"schema_version": "mn.web_ui.readiness.v1", "ready": True, "reason": "ready"})
     # These tests isolate durable-handle discovery from Core placement. Relay
     # authority and cross-node transport are covered in test_job_ui_relay.
     monkeypatch.setattr("mn_api.job_ui_routing.routed_handle", lambda handle: handle)
@@ -50,9 +50,9 @@ def test_decode_manifest(monkeypatch):
     with pytest.raises(HTTPException):
         jobs._decode_manifest("[]")
 
-    monkeypatch.setattr("mn_api.routes.jobs.manifest_form", lambda manifest: "source")
+    monkeypatch.setattr("mn_api.job_projection.manifest_form", lambda manifest: "source")
     monkeypatch.setattr(
-        "mn_api.routes.jobs.expand_manifest_source", lambda manifest, root_dir=None: {"expanded": root_dir}
+        "mn_api.job_projection.expand_manifest_source", lambda manifest, root_dir=None: {"expanded": root_dir}
     )
     assert jobs._decode_manifest('{"source":"x"}', root_dir="root") == {"expanded": "root"}
 
@@ -276,13 +276,13 @@ def test_run_artifacts_dedupes_output_refs(monkeypatch, tmp_path):
     artifact.write_text("{}", encoding="utf-8")
     output = tmp_path / "output.json"
     output.write_text("{}", encoding="utf-8")
-    monkeypatch.setattr("mn_api.routes.jobs.list_artifact_files", lambda run_dir: [artifact])
+    monkeypatch.setattr("mn_api.job_projection.list_artifact_files", lambda run_dir: [artifact])
     monkeypatch.setattr(
-        "mn_api.routes.jobs.artifact_ref",
+        "mn_api.job_projection.artifact_ref",
         lambda run_id, path, run_dir: {"path": str(path), "artifact_id": "artifact"},
     )
     monkeypatch.setattr(
-        "mn_api.routes.jobs.output_refs",
+        "mn_api.job_projection.output_refs",
         lambda run_id, run_dir: [{"path": str(artifact)}, {"path": str(output), "artifact_id": "output"}],
     )
 
@@ -300,14 +300,14 @@ def test_get_job_ui_reads_the_durable_job_data_directory(monkeypatch, tmp_path):
     (job_dir / "web_ui.json").write_text(
         json.dumps({"job_id": "job-1", "url": "http://127.0.0.1:61000", "status": "running"}), encoding="utf-8"
     )
-    monkeypatch.setattr(jobs, "job_data_dir_from_id", lambda _job_id, must_exist=False: job_dir)
+    monkeypatch.setattr(job_ui, "job_data_dir_from_id", lambda _job_id, must_exist=False: job_dir)
     monkeypatch.setattr(
-        jobs,
+        job_ui,
         "shared_job_ui_dir_from_id",
         lambda _job_id, must_exist=False: tmp_path / "missing-shared",
     )
 
-    assert jobs.get_job_ui("job-1") == {
+    assert job_ui.get_job_ui("job-1") == {
         "job_id": "job-1",
         "ui": {"job_id": "job-1", "title": "Example"},
         "web_ui": {"job_id": "job-1", "url": "http://127.0.0.1:61000", "status": "running",
@@ -339,9 +339,9 @@ def test_get_job_ui_uses_selected_runtime_node_for_passing_service(monkeypatch, 
         def get_system_summary(self):
             return json.dumps({"nodes": [{"name": "mirror_neuron@10.0.4.32", "address": "10.0.4.32"}]})
 
-    monkeypatch.setattr(jobs.state, "client", FakeClient())
-    monkeypatch.setattr(jobs, "job_data_dir_from_id", lambda _job_id, must_exist=False: tmp_path / "job-1")
-    handle = jobs.get_job_ui("job-1")
+    monkeypatch.setattr(job_ui.state, "client", FakeClient())
+    monkeypatch.setattr(job_ui, "job_data_dir_from_id", lambda _job_id, must_exist=False: tmp_path / "job-1")
+    handle = job_ui.get_job_ui("job-1")
     assert handle["web_ui"]["url"] == "http://10.0.4.32:8088"
     assert handle["web_ui"]["metadata"]["load_event"] == "did-finish-load"
     assert handle["web_ui"]["metadata"]["proxy"] == {
@@ -350,10 +350,10 @@ def test_get_job_ui_uses_selected_runtime_node_for_passing_service(monkeypatch, 
         "websocket_ports": [9090],
     }
 
-    monkeypatch.setattr(jobs, "probe_job_web_ui", lambda _job_id, _url: {"ready": False, "reason": "unreachable"})
-    assert jobs.get_job_ui("job-1")["web_ui"]["status"] == "starting"
-    monkeypatch.setattr(jobs, "probe_job_web_ui", lambda _job_id, _url: {"ready": True, "reason": "ready"})
-    assert jobs.get_job_ui("job-1")["web_ui"]["status"] == "running"
+    monkeypatch.setattr(job_ui, "probe_job_web_ui", lambda _job_id, _url: {"ready": False, "reason": "unreachable"})
+    assert job_ui.get_job_ui("job-1")["web_ui"]["status"] == "starting"
+    monkeypatch.setattr(job_ui, "probe_job_web_ui", lambda _job_id, _url: {"ready": True, "reason": "ready"})
+    assert job_ui.get_job_ui("job-1")["web_ui"]["status"] == "running"
 
 
 @pytest.mark.parametrize("claim_url,expected", [
@@ -368,17 +368,17 @@ def test_live_ui_preserves_load_event_only_for_the_claimed_page(monkeypatch, tmp
         "job_id": "job-1", "url": claim_url, "metadata": {"load_event": "did-finish-load"}
     }))
     live = {"job_id": "job-1", "web_ui": {"url": "http://10.0.4.32:8088", "status": "running", "metadata": {"load_event": "dom-ready"}}}
-    monkeypatch.setattr(jobs, "job_data_dir_from_id", lambda *_args, **_kwargs: directory)
-    monkeypatch.setattr(jobs, "shared_job_ui_dir_from_id", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(jobs, "_job_ui_handle_from_services", lambda _job_id: live)
-    assert jobs.get_job_ui("job-1")["web_ui"]["metadata"]["load_event"] == expected
+    monkeypatch.setattr(job_ui, "job_data_dir_from_id", lambda *_args, **_kwargs: directory)
+    monkeypatch.setattr(job_ui, "shared_job_ui_dir_from_id", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(job_ui, "_job_ui_handle_from_services", lambda _job_id: live)
+    assert job_ui.get_job_ui("job-1")["web_ui"]["metadata"]["load_event"] == expected
 
 
 @pytest.mark.parametrize("status", ["", "starting", "paused", "stopped", "failed", "cancelled"])
 def test_job_ui_does_not_promote_lifecycle_state_from_reachability(monkeypatch, status):
-    monkeypatch.setattr(jobs, "probe_job_web_ui", lambda *_args: pytest.fail("inactive service must not be probed"))
+    monkeypatch.setattr(job_ui, "probe_job_web_ui", lambda *_args: pytest.fail("inactive service must not be probed"))
     handle = {"web_ui": {"url": "http://worker:8080/", "status": status}}
-    result = jobs._checked_job_ui_handle(handle)
+    result = job_ui._checked_job_ui_handle(handle)
     assert result["web_ui"]["status"] == status
     assert result["web_ui"]["metadata"]["readiness"]["ready"] is False
 
@@ -387,8 +387,8 @@ def test_job_ui_rechecks_stale_ready_receipts_without_changing_persisted_handle(
     handle = {"job_id": "job-1", "web_ui": {"url": "http://worker:8080/", "status": "running",
                          "metadata": {"readiness": {"ready": True}}}}
     urls = []
-    monkeypatch.setattr(jobs, "probe_job_web_ui", lambda job_id, url: urls.append((job_id, url)) or {"ready": False, "reason": "unreachable"})
-    result = jobs._checked_job_ui_handle(handle)
+    monkeypatch.setattr(job_ui, "probe_job_web_ui", lambda job_id, url: urls.append((job_id, url)) or {"ready": False, "reason": "unreachable"})
+    result = job_ui._checked_job_ui_handle(handle)
     assert result["web_ui"]["status"] == "starting"
     assert result["web_ui"]["metadata"]["readiness"]["ready"] is False
     assert handle["web_ui"]["status"] == "running"
@@ -410,15 +410,15 @@ def test_get_job_ui_prefers_the_cross_node_shared_handle(monkeypatch, tmp_path):
             encoding="utf-8",
         )
     monkeypatch.setattr(
-        jobs, "job_data_dir_from_id", lambda _job_id, must_exist=False: local_dir
+        job_ui, "job_data_dir_from_id", lambda _job_id, must_exist=False: local_dir
     )
     monkeypatch.setattr(
-        jobs,
+        job_ui,
         "shared_job_ui_dir_from_id",
         lambda _job_id, must_exist=False: shared_dir,
     )
 
-    assert jobs.get_job_ui("job-1")["web_ui"]["url"] == "http://10.0.4.26:44161"
+    assert job_ui.get_job_ui("job-1")["web_ui"]["url"] == "http://10.0.4.26:44161"
 
 
 def test_get_job_ui_rejects_handles_owned_by_another_job(monkeypatch, tmp_path):
@@ -426,15 +426,15 @@ def test_get_job_ui_rejects_handles_owned_by_another_job(monkeypatch, tmp_path):
     job_dir.mkdir()
     (job_dir / "ui.json").write_text(json.dumps({"job_id": "job-2"}), encoding="utf-8")
     (job_dir / "web_ui.json").write_text(json.dumps({"job_id": "job-2"}), encoding="utf-8")
-    monkeypatch.setattr(jobs, "job_data_dir_from_id", lambda _job_id, must_exist=False: job_dir)
+    monkeypatch.setattr(job_ui, "job_data_dir_from_id", lambda _job_id, must_exist=False: job_dir)
     monkeypatch.setattr(
-        jobs,
+        job_ui,
         "shared_job_ui_dir_from_id",
         lambda _job_id, must_exist=False: tmp_path / "missing-shared",
     )
 
     with pytest.raises(HTTPException) as error:
-        jobs.get_job_ui("job-1")
+        job_ui.get_job_ui("job-1")
     assert error.value.status_code == 404
 
 
@@ -482,31 +482,31 @@ def test_get_job_ui_reads_its_current_federated_owner_before_replicas(monkeypatc
         "refresh_config_from_env",
         lambda: SimpleNamespace(port=61407, api_token=""),
     )
-    monkeypatch.setattr(jobs, "job_data_dir_from_id", lambda *_args, **_kwargs: tmp_path / "missing")
+    monkeypatch.setattr(job_ui, "job_data_dir_from_id", lambda *_args, **_kwargs: tmp_path / "missing")
     shared = tmp_path / "shared"
     if replica_exists:
         shared.mkdir()
         (shared / "ui.json").write_text(json.dumps(remote_handle["ui"]))
         (shared / "web_ui.json").write_text(json.dumps({**remote_handle["web_ui"], "status": "starting"}))
-    monkeypatch.setattr(jobs, "shared_job_ui_dir_from_id", lambda *_args, **_kwargs: shared)
+    monkeypatch.setattr(job_ui, "shared_job_ui_dir_from_id", lambda *_args, **_kwargs: shared)
     monkeypatch.setattr(
-        jobs.urllib.request,
+        job_ui.urllib.request,
         "urlopen",
         lambda request, timeout: seen.append(request) or FakeResponse(),
     )
 
-    result = jobs.get_job_ui("job-1", check_readiness=False)
+    result = job_ui.get_job_ui("job-1", check_readiness=False)
     assert result == remote_handle
     assert seen[0].full_url == "http://10.0.4.26:54001/api/v1/jobs/job-1/ui?check_readiness=false"
 
 
 def test_proxy_descriptor_read_does_not_reenter_readiness(monkeypatch, tmp_path):
     handle = {"job_id": "job-1", "web_ui": {"status": "running", "url": "http://worker:8080/"}}
-    monkeypatch.setattr(jobs, "job_data_dir_from_id", lambda *_args, **_kwargs: tmp_path)
-    monkeypatch.setattr(jobs, "shared_job_ui_dir_from_id", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(jobs, "_job_ui_handle_from_services", lambda *_args: handle)
-    monkeypatch.setattr(jobs, "probe_job_web_ui", lambda *_args: pytest.fail("descriptor lookup must not probe"))
-    assert jobs.get_job_ui("job-1", check_readiness=False) is handle
+    monkeypatch.setattr(job_ui, "job_data_dir_from_id", lambda *_args, **_kwargs: tmp_path)
+    monkeypatch.setattr(job_ui, "shared_job_ui_dir_from_id", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(job_ui, "_job_ui_handle_from_services", lambda *_args: handle)
+    monkeypatch.setattr(job_ui, "probe_job_web_ui", lambda *_args: pytest.fail("descriptor lookup must not probe"))
+    assert job_ui.get_job_ui("job-1", check_readiness=False) is handle
 
 
 def test_get_job_ui_never_uses_an_untrusted_owner_address(monkeypatch, tmp_path):
@@ -528,16 +528,16 @@ def test_get_job_ui_never_uses_an_untrusted_owner_address(monkeypatch, tmp_path)
             )
 
     monkeypatch.setattr(state, "client", FakeClient())
-    monkeypatch.setattr(jobs, "job_data_dir_from_id", lambda *_args, **_kwargs: tmp_path / "missing")
-    monkeypatch.setattr(jobs, "shared_job_ui_dir_from_id", lambda *_args, **_kwargs: tmp_path / "also-missing")
+    monkeypatch.setattr(job_ui, "job_data_dir_from_id", lambda *_args, **_kwargs: tmp_path / "missing")
+    monkeypatch.setattr(job_ui, "shared_job_ui_dir_from_id", lambda *_args, **_kwargs: tmp_path / "also-missing")
     monkeypatch.setattr(
-        jobs.urllib.request,
+        job_ui.urllib.request,
         "urlopen",
         lambda *_args, **_kwargs: pytest.fail("invalid owner host must not be requested"),
     )
 
     with pytest.raises(HTTPException) as error:
-        jobs.get_job_ui("job-1")
+        job_ui.get_job_ui("job-1")
     assert error.value.status_code == 404
 
 

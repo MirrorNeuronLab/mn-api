@@ -8,7 +8,7 @@ from mn_api.job_activity import (
     compact_value,
     enrich_workflow_progress_activity,
 )
-from mn_api.routes.jobs import _progress_event_should_flush
+from mn_api.job_projection import _progress_event_should_flush
 
 
 class TestJobActivity(unittest.TestCase):

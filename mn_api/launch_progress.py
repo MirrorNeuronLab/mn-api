@@ -32,7 +32,7 @@ def progress_reporter(progress_id: str | None, phase: str = "prepare_bundle") ->
         return None
 
     def report(message: str, detail: str, expectation: str) -> None:
-        from mn_api.routes.blueprints import record_launch_progress
+        from mn_api.blueprint_launch import record_launch_progress
 
         record_launch_progress(progress_id, phase, "running", message, detail=detail, expectation=expectation)
         if observer is not None:
@@ -48,7 +48,7 @@ def progress_reporter(progress_id: str | None, phase: str = "prepare_bundle") ->
 @contextmanager
 def observe_submission(progress_id: str | None) -> Iterator[None]:
     """Record request lifecycle only; job ownership and error handling stay with the caller."""
-    from mn_api.routes.blueprints import record_launch_progress
+    from mn_api.blueprint_launch import record_launch_progress
 
     record_launch_progress(progress_id, "launch", "running", "Submission request started.")
     try:
@@ -67,7 +67,7 @@ def observe_submission(progress_id: str | None) -> Iterator[None]:
 
 def public_progress_snapshot(progress_id: str) -> dict:
     """Expose presentation fields, excluding configs, validation payloads, and diagnostics."""
-    from mn_api.routes.blueprints import launch_progress_snapshot
+    from mn_api.blueprint_launch import launch_progress_snapshot
 
     snapshot = launch_progress_snapshot(progress_id)
 

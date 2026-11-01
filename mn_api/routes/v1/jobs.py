@@ -73,8 +73,8 @@ from mn_api.public import decode, idempotent_response, public_value, records, re
 from mn_api.run_recovery import stored_progress, stored_run
 from mn_api.run_file_routing import HOP_HEADER as RUN_FILE_HOP_HEADER, owner_file_response
 from mn_api.run_store import shared_result_events
-from mn_api.routes import jobs as runtime_job_routes
-from mn_api.routes import runs as runtime_run_routes
+from mn_api import job_projection as runtime_job_routes
+from mn_api import run_projection as runtime_run_routes
 from mn_api.workflow_shape import dag_view, definition_shape, latest_run_shape, progress_only, steps_view
 
 
@@ -272,7 +272,7 @@ def create_job(
     principal: str = Depends(require_auth),
     progress_id: str | None = Header(default=None, alias="X-Launch-Progress-ID", max_length=220),
 ):
-    from mn_api.routes.blueprints import validate_progress_id
+    from mn_api.blueprint_launch import validate_progress_id
 
     progress_id = validate_progress_id(progress_id if isinstance(progress_id, str) else None)
     sources = int(bool(request.blueprint_id)) + int(bool(request.bundle_id))

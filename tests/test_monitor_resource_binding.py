@@ -1,7 +1,7 @@
 import json
 from datetime import datetime, timezone
 
-from mn_api.routes import jobs
+from mn_api import job_projection as jobs
 
 
 def test_compact_monitor_reads_replicated_measurements_from_its_resolved_run(monkeypatch, tmp_path):

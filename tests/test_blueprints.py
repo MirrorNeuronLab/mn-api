@@ -16,7 +16,7 @@ from mn_sdk import add_registered_models, provider_registration, set_registered_
 
 import mn_api.blueprints as blueprints_module
 from mn_api import state
-from mn_api.routes import blueprints as blueprint_routes
+from mn_api import blueprint_launch as blueprint_routes
 from mn_api.blueprints import (
     blueprint_requires_context_engine,
     blueprint_bundle_root,

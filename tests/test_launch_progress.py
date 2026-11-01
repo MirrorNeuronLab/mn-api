@@ -5,7 +5,7 @@ from threading import Event
 import pytest
 
 from mn_api import launch_progress, state
-from mn_api.routes import blueprints as legacy
+from mn_api import blueprint_launch as legacy
 from mn_api.routes.v1 import blueprints, jobs
 from tests.test_v1_contract import _client
 

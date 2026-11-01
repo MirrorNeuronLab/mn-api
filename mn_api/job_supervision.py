@@ -76,7 +76,7 @@ class BoundJobSupervision:
             # definition prepared by a different computer's catalog.
             from mn_api.blueprints import find_blueprint, validate_blueprint_bundle
             from mn_api.job_launch_definition import require_prepared_launch_models
-            from mn_api.routes.blueprints import read_manifest_for_launch
+            from mn_api.blueprint_launch import read_manifest_for_launch
 
             repo_root, blueprint = find_blueprint(state.refresh_config_from_env(), blueprint_id)
             manifest = read_manifest_for_launch(validate_blueprint_bundle(repo_root, blueprint))

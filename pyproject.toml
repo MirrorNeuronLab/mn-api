@@ -70,10 +70,10 @@ omit = [
     # These are internal runtime projection engines retained while their pure
     # service helpers are extracted from the retired HTTP routers. Canonical
     # REST behavior is measured through routes/v1 and contract tests.
-    "mn_api/routes/blueprints.py",
-    "mn_api/routes/jobs.py",
+    "mn_api/blueprint_launch.py",
+    "mn_api/job_projection.py",
     "mn_api/routes/models.py",
-    "mn_api/routes/runs.py",
+    "mn_api/run_projection.py",
     "mn_api/routes/system.py",
     # Large non-HTTP blueprint/runtime projection engines have their own
     # focused helper suites. The REST gate measures the canonical boundary.

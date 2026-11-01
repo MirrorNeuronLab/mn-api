@@ -13,13 +13,15 @@ def client(monkeypatch):
         def get(self, id): return {"id": id, "state": "pending", "revision": 1}
         def respond(self, id, **kwargs):
             self.commands.append((id, kwargs))
-            if kwargs["expected_revision"] != 1: raise InteractionError("revision_conflict")
+            if kwargs["expected_revision"] != 1:
+                raise InteractionError("revision_conflict")
             return {"id": id, "state": "responded", "effect": "not_started"}
         def events(self, cursor):
             class Events:
                 def __iter__(self): return self
                 def __next__(self):
-                    if self.done: raise StopIteration
+                    if self.done:
+                        raise StopIteration
                     self.done = True
                     return {"id": "cursor2", "type": "interaction.updated", "data": {"id": "review-1"}}
                 done = False

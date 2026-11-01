@@ -30,8 +30,8 @@ from mn_api import state
 from mn_api.blueprints import find_blueprint
 from mn_api.errors import problem_response
 from mn_api.public import decode, public_value
-from mn_api.routes import jobs as runtime_job_routes
-from mn_api.routes import runs as runtime_run_routes
+from mn_api import job_projection as runtime_job_routes
+from mn_api import run_projection as runtime_run_routes
 from mn_sdk import RuntimeConfig, RuntimeService
 from mn_sdk.staged_artifacts import is_staged_artifact_ref, resolve_json_reference
 from mn_sdk.job_context import (

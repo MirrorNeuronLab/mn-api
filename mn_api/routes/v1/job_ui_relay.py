@@ -13,7 +13,7 @@ from mn_api.config import WebUiConfig, auth_enabled
 from mn_api.dependencies import require_auth
 from mn_api.job_ui_readiness import PROBE_HEADER
 from mn_api.job_ui_routing import EXECUTION_HEADER, HOP_HEADER, placement
-from mn_api.routes import jobs
+from mn_api import job_ui as jobs
 from mn_api.web_ui_server import (
     _job_ui_target_url, _remote_proxy_headers, _remote_response_headers,
     _stream_binary_response, _bridge_websockets, JobUiProxyError,

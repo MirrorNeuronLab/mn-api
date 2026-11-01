@@ -4,9 +4,9 @@ import json
 import os
 from typing import Any, Iterable
 
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
-from mn_api.http_semantics import idempotency_records, strong_etag
+from mn_api.http_semantics import Replay, idempotency_records, strong_etag
 
 
 _PRIVATE_KEYS = {
@@ -94,36 +94,37 @@ def idempotent_response(
     call,
     status_code: int,
     location,
-) -> JSONResponse:
+) -> Response:
     fingerprint = idempotency_records.fingerprint(body)
-    if key:
-        replay = idempotency_records.find(
-            principal=principal,
-            route=route,
-            key=key,
-            fingerprint=fingerprint,
-        )
-        if replay is not None:
-            headers = {**dict(replay.headers), "Idempotency-Replayed": "true"}
-            return JSONResponse(status_code=replay.status_code, content=replay.body, headers=headers)
 
-    raw_result = call()
-    if isinstance(raw_result, JSONResponse):
-        return raw_result
-    result = public_value(decode(raw_result))
-    resolved_location = location(result) if callable(location) else location
-    headers = {"Location": resolved_location} if resolved_location else {}
-    if key:
-        idempotency_records.store(
-            principal=principal,
-            route=route,
-            key=key,
-            fingerprint=fingerprint,
-            status_code=status_code,
-            headers=headers,
-            body=result,
-        )
-    return JSONResponse(status_code=status_code, content=result, headers=headers)
+    def execute():
+        raw_result = call()
+        if isinstance(raw_result, JSONResponse):
+            return raw_result
+        result = public_value(decode(raw_result))
+        resolved_location = location(result) if callable(location) else location
+        headers = {"Location": resolved_location} if resolved_location else {}
+        if key:
+            idempotency_records.store(
+                principal=principal, route=route, key=key, fingerprint=fingerprint,
+                status_code=status_code, headers=headers, body=result,
+            )
+        return JSONResponse(status_code=status_code, content=result, headers=headers)
+
+    if not key:
+        return execute()
+    response, replayed = idempotency_records.execute(
+        principal=principal, route=route, key=key, fingerprint=fingerprint, call=execute,
+    )
+    if isinstance(response, Replay):
+        return JSONResponse(status_code=response.status_code, content=response.body,
+                            headers={**response.headers, "Idempotency-Replayed": "true"})
+    if replayed:
+        replay = Response(status_code=response.status_code, content=response.body)
+        replay.raw_headers = list(response.raw_headers)
+        replay.headers["Idempotency-Replayed"] = "true"
+        return replay
+    return response
 
 
 def first_identifier(resource: Any, names: Iterable[str]) -> str:

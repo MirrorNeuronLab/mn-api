@@ -59,7 +59,7 @@ def test_model_free_job_does_not_acquire_a_model_during_credential_delivery():
 @pytest.fixture
 def launch(monkeypatch):
     from mn_api import job_supervision, operations, blueprints
-    from mn_api.routes import blueprints as legacy
+    from mn_api import blueprint_launch as legacy
     from mn_api.routes.v1 import blueprints as routes, jobs
 
     current = job()

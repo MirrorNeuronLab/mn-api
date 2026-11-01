@@ -17,7 +17,7 @@ from mn_api.blueprint_additions import BlueprintAddError
 from mn_api.contracts import API_CONTRACT
 from mn_api.http_semantics import strong_etag
 from mn_api.pagination import PageTokenRegistry, page
-from mn_api.routes import jobs as internal_jobs
+from mn_api import job_projection as internal_jobs
 from mn_api.routes.v1 import blueprints, infrastructure, jobs, system
 
 

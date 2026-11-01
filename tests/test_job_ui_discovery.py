@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from mn_api import state
-from mn_api.routes import jobs
+from mn_api import job_ui as jobs
 
 
 @pytest.mark.parametrize("owner_is_local", [True, False], ids=["local-owner", "federated-owner"])

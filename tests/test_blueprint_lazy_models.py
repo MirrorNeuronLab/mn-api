@@ -8,7 +8,7 @@ from unittest.mock import Mock
 import pytest
 
 from mn_api import blueprint_additions, blueprints
-from mn_api.routes import blueprints as routes
+from mn_api import blueprint_launch as routes
 
 
 @pytest.fixture

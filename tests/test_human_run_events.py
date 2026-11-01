@@ -5,7 +5,7 @@ import pytest
 from fastapi import HTTPException
 from mn_sdk.blueprint_support import append_human_event, list_pending_human_requests
 
-from mn_api.routes import runs
+from mn_api import run_projection as runs
 
 
 def test_completed_shared_run_human_choice_is_read_and_recorded_in_shared_ledger(tmp_path, monkeypatch):

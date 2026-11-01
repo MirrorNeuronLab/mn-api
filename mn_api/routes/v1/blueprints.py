@@ -21,7 +21,7 @@ from mn_api.launch_progress import public_progress_snapshot
 from mn_api.operations import complete_local_operation, start_local_operation, start_operation
 from mn_api.pagination import page
 from mn_api.public import idempotent_response, public_value
-from mn_api.routes import blueprints as legacy_blueprints
+from mn_api import blueprint_launch as legacy_blueprints
 from mn_api.schemas import BlueprintRunRequest, BlueprintUninstallRequest
 
 

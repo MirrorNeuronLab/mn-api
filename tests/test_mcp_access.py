@@ -193,7 +193,7 @@ def test_native_secret_launch_is_ephemeral_idempotent_and_observed(monkeypatch, 
     monkeypatch.setenv('MN_HOME', str(tmp_path))
     # Native launch must see the same model contract on the owner and Core.
     from mn_api import blueprints as catalog
-    from mn_api.routes import blueprints as legacy
+    from mn_api import blueprint_launch as legacy
     runtime.jobs['job-1']['workflow_definition'] = {'runtime': {'bindings': {}}}
     get_job = runtime.get_job
     monkeypatch.setattr(runtime, 'get_job', lambda job_id, **_: get_job(job_id))
