@@ -941,7 +941,14 @@ def _run_store_events(run_dir: Path | None, *, limit: int = 5000) -> list[dict[s
     if run_dir is None:
         return []
     records: list[dict[str, Any]] = []
-    for path in _stream_jsonl_files(run_dir, "events.jsonl"):
+    paths = _stream_jsonl_files(run_dir, "events.jsonl")
+    if limit > 0:
+        for path in reversed(paths):
+            records[:0] = _read_jsonl_file(path, limit=limit - len(records))
+            if len(records) >= limit:
+                break
+        return records
+    for path in paths:
         if limit == 0:
             try:
                 opener = gzip.open if path.suffix == ".gz" else Path.open

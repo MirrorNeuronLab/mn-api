@@ -93,6 +93,35 @@ def test_stream_job_events_handles_bad_json_and_stream_errors(monkeypatch):
     assert error == "stream down"
 
 
+def test_recent_run_events_read_newest_segments_only_and_keep_order(tmp_path, monkeypatch):
+    import gzip
+
+    old = tmp_path / "old.jsonl.gz"
+    with gzip.open(old, "wt", encoding="utf-8") as stream:
+        stream.write('{"index":0}\n')
+    middle = tmp_path / "middle.jsonl"
+    middle.write_text('{"index":1}\n{"index":2}\n')
+    current = tmp_path / "events.jsonl"
+    current.write_text('{"index":3}\n{"index":4}\n')
+    (tmp_path / "events.index.json").write_text(json.dumps({"segments": [
+        {"path": old.name}, {"path": middle.name},
+    ]}))
+    original = jobs._read_jsonl_file
+    reads = []
+
+    def read(path, **kwargs):
+        reads.append(path)
+        return original(path, **kwargs)
+
+    monkeypatch.setattr(jobs, "_read_jsonl_file", read)
+    assert jobs._run_store_events(tmp_path, limit=2) == [{"index": 3}, {"index": 4}]
+    assert reads == [current]
+    reads.clear()
+    assert jobs._run_store_events(tmp_path, limit=3) == [{"index": 2}, {"index": 3}, {"index": 4}]
+    assert reads == [current, middle]
+    assert jobs._run_store_events(tmp_path, limit=0) == [{"index": index} for index in range(5)]
+
+
 def test_run_workflow_progress_reads_execution_and_stable_definition(monkeypatch):
     calls = []
 
