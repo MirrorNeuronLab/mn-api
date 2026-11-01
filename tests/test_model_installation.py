@@ -28,7 +28,7 @@ def test_model_collection_defaults_to_catalog_and_marks_default_chain(client, mo
     assert {item["id"] for item in items} == {
         "gemma4:e2b", "bonsai2:ptq1_0", "nemotron3:q4_K_M",
         "nemotron-3.5-lightning:latest", "nemotron-3.5-super-vl:120b-a12b",
-        "docker.io/ai/embeddinggemma:latest",
+        "huggingface.co/mirrorneuronlab/embeddinggemma-2-gguf:Q4_K_M",
     }
     assert next(item for item in items if item["id"] == "bonsai2:ptq1_0")["source"] == "dmr"
     assert next(item for item in items if item["id"] == "bonsai2:ptq1_0")["preparation"]["kind"] == "dmr_native"
