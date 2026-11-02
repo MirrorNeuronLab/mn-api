@@ -122,7 +122,15 @@ def app_error_response(app_error: AppError, *, request: Request | None = None, c
         extra["details"] = preparation
     if app_error.details and "blockers" in app_error.details:
         extra["details"] = {"blockers": sanitize_context(app_error.details)["blockers"]}
+    headers = {}
+    if app_error.details and "accepted" in app_error.details:
+        details = {key: app_error.details[key] for key in ("accepted", "scope", "request_id", "command_id", "retry_after_ms") if key in app_error.details}
+        extra["details"] = details
+        retry_ms = details.get("retry_after_ms")
+        if isinstance(retry_ms, int) and retry_ms > 0:
+            headers["Retry-After"] = str(max(1, (retry_ms + 999) // 1000))
     return problem_response(
+        headers=headers,
         status_code=app_error.http_status,
         error=app_error.code,
         title=_title_from_code(app_error.code),

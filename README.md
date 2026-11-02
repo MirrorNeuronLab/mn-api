@@ -839,3 +839,12 @@ the existing internal Job session grant replace ingress credentials. External
 clients retain their restricted native-launch authority. Redirects and environment
 proxies are disabled, request bodies are bounded to 1 MiB, and peer streams close
 on completion or disconnect. Deploy this API revision on ingress and owner nodes.
+
+
+## Runtime delivery flows
+
+Deploy with matching Core v2 and SDK/native components. Authenticated run input
+submission and status endpoints preserve command receipts. Independent errors and
+responses SSE channels support durable replay through `Last-Event-ID`.
+
+See [SPEC.md](SPEC.md) for queue guarantees, correlation, replay, and compatibility details.

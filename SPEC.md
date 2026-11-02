@@ -844,3 +844,30 @@ with a safe conflict and instructions to update the owner catalog and reprepare.
 No model binding or secret is returned in the error. Explicit conditional Job
 preparation remains the way to change recipes; unchanged credential-free starts
 continue to use the prepared Job without catalog work.
+
+
+## Protected runtime signals and command receipts
+
+Deploy with matching Core v2 and SDK/native components. Authenticated endpoints:
+
+- `POST /api/v1/runs/{run_id}/inputs`: `input_id`, `payload`, `idempotency_key`;
+  returns command acceptance, not proof of application.
+- `GET /api/v1/runs/{run_id}/inputs/{command_id}`: persisted acceptance/execution/
+  completion receipt with revision and observation time; never resubmits work.
+- `GET /api/v1/runs/{run_id}/signals/stream?channel=errors|responses`: independent
+  pushed SSE, outside snapshot polling and bulk activity. `Last-Event-ID` is a
+  nonnegative durable per-channel sequence. `runtime.signal` data preserves the
+  Core event ID, channel, sequence, incident/command correlation and schema.
+
+Operation failures/recoveries keep observation open. `stream.unavailable` describes
+transport/infrastructure loss; it is not a failed run. `code: replay_required`
+explicitly requests resynchronization from cursor zero; ordinary transport loss
+resumes after the last delivered cursor. Disconnect closes the upstream RPC;
+there is no unbounded API subscriber queue. The legacy `/events/stream` continues
+to supply workflow snapshots and bulk activity.
+
+Explicit runtime saturation produces Problem Details HTTP 429 with acceptance,
+request/command identity, overload scope, retry delay and `Retry-After`. Unknown
+acceptance remains HTTP 503 with `accepted: null`; retrieve the original receipt.
+Do not turn either condition into successful fallback text. Public run snapshots
+carry Core's observation revision and time, separate from persisted update time.
