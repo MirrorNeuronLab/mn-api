@@ -741,7 +741,8 @@ class TestBlueprintServices(unittest.TestCase):
                 "model": "docker.io/ai/gemma4:E2B",
                 "api_model": "docker.io/ai/gemma4:E2B",
                 "provider": "docker_model_runner",
-                "aliases": ["nano", "gemma4"],
+                "aliases": ["vision", "gemma4"],
+                "route_aliases": ["vision", "gemma4:e2b"],
                 "backend": "llama.cpp",
                 "requirements": {"min_vram_gb": 8, "min_unified_memory_gb": 16},
             },
@@ -834,7 +835,7 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertEqual(summary["models"][0]["fallback"]["id"], "gemma4:e2b")
         self.assertEqual(
             json.loads(summary["env"]["MN_BLUEPRINT_CONFIG_JSON"])["llm"]["model"],
-            "nano",
+            "vision",
         )
         self.assertEqual(
             json.loads(summary["env"]["MN_BLUEPRINT_CONFIG_JSON"])["llm"]["api_base"],
@@ -842,7 +843,7 @@ class TestBlueprintServices(unittest.TestCase):
         )
         self.assertEqual(summary["env"]["MN_LLM_MODEL"], "default")
         self.assertEqual(
-            json.loads(summary["env"]["MN_MODEL_ENDPOINTS_JSON"])["nano"]["api_base"],
+            json.loads(summary["env"]["MN_MODEL_ENDPOINTS_JSON"])["vision"]["api_base"],
             "http://mn-litellm-proxy:4000/v1",
         )
         mock_client.prepare_runtime_model.assert_called_once()
