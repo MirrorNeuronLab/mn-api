@@ -8,6 +8,7 @@ from typing import Any, Callable
 import uuid
 
 from mn_sdk.errors import AppError
+from mn_sdk.blueprint_install import prepare_blueprint_install_skills, SkillInstallError
 
 from mn_api.blueprints import defer_blueprint_runtime_models, find_blueprint, validate_blueprint_bundle
 from mn_api.config import ApiConfig, config_value
@@ -162,6 +163,14 @@ def add_catalog_blueprint(
         raise BlueprintAddError() from exc
     if not model_summary.get("ok", True):
         raise BlueprintAddError(issues=_model_issues(model_summary))
+
+    report(percent=75, stage="prepare_skills", label="Prepare co-worker tools", detail="Installing this co-worker's required native tools.")
+    try:
+        model_summary["skills"] = prepare_blueprint_install_skills(bundle_root, config_overrides=config_overrides)
+    except SkillInstallError as exc:
+        raise BlueprintAddError(issues=[{"code": "skill_setup_failed", "message": str(exc), "severity": "error"}]) from exc
+    except Exception as exc:
+        raise BlueprintAddError() from exc
 
     report(percent=90, stage="record_addition", label="Record blueprint", detail="Recording the added blueprint locally.")
     _write_add_record(

@@ -871,3 +871,13 @@ request/command identity, overload scope, retry delay and `Retry-After`. Unknown
 acceptance remains HTTP 503 with `accepted: null`; retrieve the original receipt.
 Do not turn either condition into successful fallback text. Public run snapshots
 carry Core's observation revision and time, separate from persisted update time.
+
+
+## Native tools on co-worker addition
+
+`POST /api/v1/blueprints/{id}/additions` prepares explicitly declared
+`setup: on_install` skill dependencies through the matching SDK before writing the
+addition record. The operation reports a `prepare_skills` stage; a failed native
+setup returns a safe prerequisite issue and does not mark the co-worker added.
+Catalog reads and API/runtime startup never run these hooks. Computer Use uses
+this path to download its signed, notarized `mn computer use.app` from GAR.

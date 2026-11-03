@@ -848,3 +848,13 @@ submission and status endpoints preserve command receipts. Independent errors an
 responses SSE channels support durable replay through `Last-Event-ID`.
 
 See [SPEC.md](SPEC.md) for queue guarantees, correlation, replay, and compatibility details.
+
+
+## Native tools on co-worker addition
+
+`POST /api/v1/blueprints/{id}/additions` prepares explicitly declared
+`setup: on_install` skill dependencies through the matching SDK before writing the
+addition record. The operation reports a `prepare_skills` stage; a failed native
+setup returns a safe prerequisite issue and does not mark the co-worker added.
+Catalog reads and API/runtime startup never run these hooks. Computer Use uses
+this path to download its signed, notarized `mn computer use.app` from GAR.
