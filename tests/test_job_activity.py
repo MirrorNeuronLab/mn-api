@@ -16,15 +16,15 @@ class TestJobActivity(unittest.TestCase):
         event = {
             "type": "runtime_model_install_started",
             "payload": {
-                "model": "gemma4:e2b",
+                "model": "nemotron-3.5-bolt-e4b:q4_k_m",
                 "node": "mirror_neuron@local",
-                "message": "Installing gemma4:e2b on mirror_neuron@local.",
+                "message": "Installing nemotron-3.5-bolt-e4b:q4_k_m on mirror_neuron@local.",
             },
         }
 
         self.assertEqual(
             _activity_message(event),
-            "Installing gemma4:e2b on mirror_neuron@local.",
+            "Installing nemotron-3.5-bolt-e4b:q4_k_m on mirror_neuron@local.",
         )
         self.assertTrue(_progress_event_should_flush(event["type"]))
 

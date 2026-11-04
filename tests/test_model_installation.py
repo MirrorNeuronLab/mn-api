@@ -26,7 +26,7 @@ def test_model_collection_defaults_to_catalog_and_marks_default_chain(client, mo
     assert response.status_code == 200, response.text
     items = response.json()["items"]
     assert {item["id"] for item in items} == {
-        "gemma4:e2b", "nemotron-3.5-bolt-e4b:q4_k_m", "bonsai2:ptq1_0", "nemotron3:q4_K_M",
+        "nemotron-3.5-bolt-e4b:q4_k_m", "bonsai2:ptq1_0", "nemotron3:q4_K_M",
         "nemotron-3.5-lightning:latest", "nemotron-3.5-super-vl:120b-a12b",
         "huggingface.co/mirrorneuronlab/embeddinggemma-2-gguf:Q4_K_M",
     }
@@ -43,7 +43,7 @@ def test_default_installation_runs_background_work_and_replays_idempotently(clie
     def install(model_id, options, progress):
         calls.append((model_id, options))
         finished.set()
-        return {"status": "ready", "model": "gemma4:e2b"}
+        return {"status": "ready", "model": "nemotron-3.5-bolt-e4b:q4_k_m"}
 
     monkeypatch.setattr(infrastructure, "install_model", install)
     headers = {"Idempotency-Key": "install-default"}

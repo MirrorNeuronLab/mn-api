@@ -294,7 +294,7 @@ class TestBlueprintServices(unittest.TestCase):
                             "models": {
                                 "primary": {
                                     "provider": "docker_model_runner",
-                                    "model": "gemma4:e2b",
+                                    "model": "nemotron-3.5-bolt-e4b:q4_k_m",
                                     "backend": "llama.cpp",
                                     "context_size": 2048,
                                 }
@@ -308,7 +308,7 @@ class TestBlueprintServices(unittest.TestCase):
 
         self.assertTrue(summary["ok"])
         mock_install.assert_called_once()
-        self.assertEqual(mock_install.call_args.args[0]["id"], "gemma4:e2b")
+        self.assertEqual(mock_install.call_args.args[0]["id"], "nemotron-3.5-bolt-e4b:q4_k_m")
         self.assertEqual(mock_install.call_args.kwargs["backend"], "llama.cpp")
         self.assertEqual(mock_install.call_args.kwargs["context_size"], 2048)
         self.assertFalse(mock_install.call_args.kwargs["force"])
@@ -333,9 +333,9 @@ class TestBlueprintServices(unittest.TestCase):
         mock_installed.return_value = False
         mock_ledger.return_value = {"version": 2, "models": {}}
         mock_catalog.return_value = {
-            "gemma4:e2b": {
-                "id": "gemma4:e2b",
-                "model": "docker.io/ai/gemma4:E2B",
+            "nemotron-3.5-bolt-e4b:q4_k_m": {
+                "id": "nemotron-3.5-bolt-e4b:q4_k_m",
+                "model": "nemotron-3.5-bolt-e4b:q4_k_m",
                 "provider": "docker_model_runner",
                 "aliases": ["default"],
                 "backend": "llama.cpp",
@@ -354,7 +354,7 @@ class TestBlueprintServices(unittest.TestCase):
                             "configs": {
                                 "primary": {
                                     "provider": "docker_model_runner",
-                                    "model": "gemma4:e2b",
+                                    "model": "nemotron-3.5-bolt-e4b:q4_k_m",
                                 }
                             },
                             "default_config": "primary",
@@ -377,7 +377,7 @@ class TestBlueprintServices(unittest.TestCase):
                             "models": {
                                 "primary": {
                                     "provider": "docker_model_runner",
-                                    "model": "gemma4:e2b",
+                                    "model": "nemotron-3.5-bolt-e4b:q4_k_m",
                                     "backend": "llama.cpp",
                                 }
                             }
@@ -550,7 +550,7 @@ class TestBlueprintServices(unittest.TestCase):
                             "models": {
                                 "primary": {
                                     "provider": "docker_model_runner",
-                                    "model": "gemma4:e2b",
+                                    "model": "nemotron-3.5-bolt-e4b:q4_k_m",
                                 }
                             }
                         },
@@ -732,17 +732,17 @@ class TestBlueprintServices(unittest.TestCase):
     @patch("mn_api.blueprints.sync_litellm_gateway", return_value={"status": "running"})
     @patch("mn_api.blueprints.load_model_catalog")
     @patch("mn_api.blueprints.load_model_ownership")
-    def test_install_blueprint_runtime_models_prepares_gemma_fallback_on_single_node(
+    def test_install_blueprint_runtime_models_prepares_bolt_fallback_on_single_node(
         self, mock_ledger, mock_catalog, mock_sync
     ):
         mock_catalog.return_value = {
-            "gemma4:e2b": {
-                "id": "gemma4:e2b",
-                "model": "docker.io/ai/gemma4:E2B",
-                "api_model": "docker.io/ai/gemma4:E2B",
+            "nemotron-3.5-bolt-e4b:q4_k_m": {
+                "id": "nemotron-3.5-bolt-e4b:q4_k_m",
+                "model": "nemotron-3.5-bolt-e4b:q4_k_m",
+                "api_model": "nemotron-3.5-bolt-e4b:q4_k_m",
                 "provider": "docker_model_runner",
-                "aliases": ["vision", "gemma4"],
-                "route_aliases": ["vision", "gemma4:e2b"],
+                "aliases": ["nano", "nemotron-bolt"],
+                "route_aliases": ["nano", "nemotron-3.5-bolt-e4b:q4_k_m"],
                 "backend": "llama.cpp",
                 "requirements": {"min_vram_gb": 8, "min_unified_memory_gb": 16},
             },
@@ -754,7 +754,7 @@ class TestBlueprintServices(unittest.TestCase):
                 "provider": "docker_model_runner",
                 "aliases": ["medium", "nemotron-3.5-lightning:latest"],
                 "backend": "llama.cpp",
-                "fallback_model": "gemma4:e2b",
+                "fallback_model": "nemotron-3.5-bolt-e4b:q4_k_m",
                 "requirements": {"min_vram_gb": 48, "min_unified_memory_gb": 48},
             },
         }
@@ -783,10 +783,10 @@ class TestBlueprintServices(unittest.TestCase):
         }
         prepared = {
             "status": "installed",
-            "docker_model": "docker.io/ai/gemma4:E2B",
+            "docker_model": "nemotron-3.5-bolt-e4b:q4_k_m",
             "endpoint": {
-                "model": "docker.io/ai/gemma4:E2B",
-                "runtime_model": "docker.io/ai/gemma4:E2B",
+                "model": "nemotron-3.5-bolt-e4b:q4_k_m",
+                "runtime_model": "nemotron-3.5-bolt-e4b:q4_k_m",
             },
         }
         with (
@@ -832,10 +832,10 @@ class TestBlueprintServices(unittest.TestCase):
 
         self.assertTrue(summary["ok"])
         self.assertEqual(summary["models"][0]["status"], "fallback_model")
-        self.assertEqual(summary["models"][0]["fallback"]["id"], "gemma4:e2b")
+        self.assertEqual(summary["models"][0]["fallback"]["id"], "nemotron-3.5-bolt-e4b:q4_k_m")
         self.assertEqual(
             json.loads(summary["env"]["MN_BLUEPRINT_CONFIG_JSON"])["llm"]["model"],
-            "vision",
+            "nano",
         )
         self.assertEqual(
             json.loads(summary["env"]["MN_BLUEPRINT_CONFIG_JSON"])["llm"]["api_base"],
@@ -843,7 +843,7 @@ class TestBlueprintServices(unittest.TestCase):
         )
         self.assertEqual(summary["env"]["MN_LLM_MODEL"], "default")
         self.assertEqual(
-            json.loads(summary["env"]["MN_MODEL_ENDPOINTS_JSON"])["vision"]["api_base"],
+            json.loads(summary["env"]["MN_MODEL_ENDPOINTS_JSON"])["nano"]["api_base"],
             "http://mn-litellm-proxy:4000/v1",
         )
         mock_client.prepare_runtime_model.assert_called_once()
@@ -977,13 +977,13 @@ class TestBlueprintServices(unittest.TestCase):
         mock_summary.return_value = {
             "models": [
                 {
-                    "id": "gemma4:e2b",
-                    "model": "docker.io/ai/gemma4:E2B",
+                    "id": "nemotron-3.5-bolt-e4b:q4_k_m",
+                    "model": "nemotron-3.5-bolt-e4b:q4_k_m",
                     "provider": "docker_model_runner",
                     "status": "installed",
                 }
             ],
-            "endpoints": {"small": {"model": "docker.io/ai/gemma4:E2B"}},
+            "endpoints": {"small": {"model": "nemotron-3.5-bolt-e4b:q4_k_m"}},
             "errors": [],
         }
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1822,7 +1822,7 @@ class TestBlueprintServices(unittest.TestCase):
                             "configs": {
                                 "primary": {
                                     "provider": "docker_model_runner",
-                                    "runtime_model": "gemma4:e2b",
+                                    "runtime_model": "nemotron-3.5-bolt-e4b:q4_k_m",
                                     "api_base": "auto",
                                     "backend": "llama.cpp",
                                     "context_size": 4096,
@@ -1876,7 +1876,7 @@ class TestBlueprintServices(unittest.TestCase):
         manifest = json.loads(manifest_json)
         env = manifest["flow"]["nodes"][0]["config"]["environment"]
         self.assertEqual(env["MN_LLM_PROVIDER"], "docker_model_runner")
-        self.assertEqual(env["MN_LLM_MODEL"], "docker.io/ai/gemma4:E2B")
+        self.assertEqual(env["MN_LLM_MODEL"], "nemotron-3.5-bolt-e4b:q4_k_m")
         self.assertEqual(env["MN_LLM_API_BASE"], "auto")
         self.assertEqual(env["MN_RUNTIME_MODEL_MANAGED"], "1")
 

@@ -9,7 +9,7 @@ from mn_api.routes import models
 
 
 def test_parse_model_list_accepts_json_and_text_formats():
-    assert models._parse_model_list('[{"name": "ai/gemma4:e2b", "tags": ["latest"]}]') == {"ai/gemma4:e2b", "latest"}
+    assert models._parse_model_list('[{"name": "nemotron-3.5-bolt-e4b:q4_k_m", "tags": ["latest"]}]') == {"nemotron-3.5-bolt-e4b:q4_k_m", "latest"}
     assert models._parse_model_list('{"models": [{"model": "ai/qwen3"}]}') == {"ai/qwen3"}
     assert models._parse_model_list('NAME ID\nai/small abc\n') == {"ai/small"}
     assert models._parse_model_list('{"name": "single"}') == {"single"}
@@ -18,9 +18,9 @@ def test_parse_model_list_accepts_json_and_text_formats():
 
 def test_installed_model_names_uses_docker_json_then_api_fallback():
     def docker_success(args, timeout=60):
-        return subprocess.CompletedProcess(args, 0, '[{"name": "ai/gemma4"}]', "")
+        return subprocess.CompletedProcess(args, 0, '[{"name": "nemotron-3.5-bolt-e4b"}]', "")
 
-    assert models._installed_model_names(docker_runner=docker_success)["models"] == {"ai/gemma4"}
+    assert models._installed_model_names(docker_runner=docker_success)["models"] == {"nemotron-3.5-bolt-e4b"}
 
     def docker_failure(args, timeout=60):
         return subprocess.CompletedProcess(args, 127, "", "docker missing")
@@ -70,13 +70,13 @@ def test_resolve_entry_or_external_matches_installed_alias(monkeypatch):
     monkeypatch.setattr("mn_api.routes.models.resolve_model_entry", lambda model, catalog=None: (_ for _ in ()).throw(KeyError(model)))
     monkeypatch.setattr(
         "mn_api.routes.models.merge_catalog_and_installed_models",
-        lambda catalog=None, installed_models=None: [{"id": "gemma", "model": "ai/gemma4:e2b", "api_model": "gemma"}],
+        lambda catalog=None, installed_models=None: [{"id": "bolt", "model": "nemotron-3.5-bolt-e4b:q4_k_m", "api_model": "bolt"}],
     )
 
-    resolved = models._resolve_entry_or_external("gemma", catalog={}, installed_models={"ai/gemma4:e2b"})
+    resolved = models._resolve_entry_or_external("bolt", catalog={}, installed_models={"nemotron-3.5-bolt-e4b:q4_k_m"})
     external = models._resolve_entry_or_external("unknown", catalog={}, installed_models=set())
 
-    assert resolved["id"] == "gemma"
+    assert resolved["id"] == "bolt"
     assert external["external"] is True
 
 
