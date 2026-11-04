@@ -36,8 +36,8 @@ def test_stale_running_shared_record_is_unknown(tmp_path, monkeypatch):
 def test_api_run_list_keeps_mapped_runs_and_prefers_core_status(monkeypatch):
     monkeypatch.setattr(jobs, "list_local_runs", lambda: [
         {"run_id": "old", "status": "failed"},
-        {"run_id": "stale", "status": "running"},
-        {"run_id": "live", "status": "unknown"},
+        {"run_id": "stale", "status": "running", "placement": {"owner_node": "old"}},
+        {"run_id": "live", "status": "unknown", "placement": {"owner_node": "old"}},
     ])
 
     class Service:
@@ -54,6 +54,7 @@ def test_api_run_list_keeps_mapped_runs_and_prefers_core_status(monkeypatch):
     assert result["old"]["status"] == "failed"
     assert result["stale"]["status"] == "unknown"
     assert result["live"]["status"] == "running"
+    assert result["live"]["placement"] is None and result["stale"]["placement"] is None
 
 
 def test_all_runs_bounds_parallel_reads_and_preserves_partial_results(monkeypatch):
@@ -79,7 +80,7 @@ def test_all_runs_bounds_parallel_reads_and_preserves_partial_results(monkeypatc
             try:
                 barrier.wait()
                 if job_id == "0":
-                    raise RuntimeError("owner unavailable")
+                    raise ConnectionError("owner unavailable")
                 return {"items": [{"run_id": job_id, "status": "running"}]}
             finally:
                 with lock:

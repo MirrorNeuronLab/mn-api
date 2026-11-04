@@ -26,6 +26,9 @@ class CanonicalRuntime:
         self.calls: list[tuple] = []
         self.run_status = "completed"
 
+    def stream_events(self, *args, **kwargs):
+        return iter(())
+
     def create_job(self, _manifest, _payloads, **kwargs):
         self.calls.append(("create_job", kwargs))
         return json.dumps({"version": 2, "job_id": kwargs.get("job_id") or "job-1", "status": "active", "revision": 1})
@@ -2061,7 +2064,7 @@ def test_monitor_recovers_after_one_failed_core_read(monkeypatch):
 
     def unavailable(run_id):
         reads.append(run_id)
-        raise RuntimeError("unavailable")
+        raise ConnectionError("unavailable")
 
     monkeypatch.setattr(runtime, "get_run", unavailable)
     monkeypatch.setattr(jobs, "stored_run", lambda _: {"run_id": "run-1", "status": "completed"})

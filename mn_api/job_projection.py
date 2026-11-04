@@ -48,6 +48,7 @@ from mn_api.blueprints import (
     find_blueprint,
 )
 from mn_api.dependencies import require_auth
+from mn_sdk.integrations.run_reads import history_reason
 from mn_api.errors import handle_grpc_error
 from mn_api.job_activity import compact_event as _compact_event
 from mn_api.job_activity import compact_value as _compact_value
@@ -305,7 +306,9 @@ def _stream_job_events(job_id: str, *, limit: int = 200) -> tuple[list[dict[str,
             if isinstance(event, dict):
                 events.append(event)
     except Exception as exc:
-        return list(events), str(exc)
+        if history_reason(exc) is None:
+            raise
+        return list(events), "The runtime event stream is unavailable."
     return list(events), None
 
 
@@ -589,10 +592,10 @@ def _workflow_progress_snapshot_for_run(run_id: str) -> dict[str, Any]:
             candidate = stable_job.get("workflow_definition")
             if isinstance(candidate, dict):
                 definition = candidate
-        except Exception:
-            # A removed or replaced definition cannot invalidate its run's
-            # saved public manifest and execution ledger.
-            pass
+        except Exception as exc:
+            # A removed definition cannot invalidate its Run's saved manifest.
+            if history_reason(exc) is None:
+                raise
     # The stable definition can change between runs. It is only a fallback when
     # this execution has no saved public manifest or runtime workflow ledger.
     workflow_state = _workflow_state_from_job(run, {})

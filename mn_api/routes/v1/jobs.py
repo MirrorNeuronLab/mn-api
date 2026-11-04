@@ -14,7 +14,8 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, Request, status
 from fastapi.responses import StreamingResponse
 from mn_sdk import RuntimeConfig, RuntimeService, generate_job_definition_submission_id, generate_stable_job_id
-from mn_sdk.integrations.job_control import launch_run, transition_run
+from mn_sdk.integrations.run_reads import history_reason
+from mn_sdk.integrations.job_control import launch_run, _transition_observed, _TransitionConflict
 from mn_sdk.blueprint_support.shared_outputs import load_submission_storage
 from mn_sdk.blueprint_support.observability import list_runs as list_local_runs
 from mn_sdk.shared_run_store import shared_run_dir
@@ -155,16 +156,27 @@ def _upstream_page(
     return {"items": items, "next_page_token": next_page_token}
 
 
+def _history_reason(exc: Exception) -> str:
+    """Require a recoverable owner read before consulting replicated data."""
+    reason = history_reason(exc)
+    if isinstance(exc, HTTPException):
+        reason = {404: "missing", 503: "unavailable", 504: "unavailable"}.get(exc.status_code)
+    if reason is None:
+        raise exc
+    return reason
+
+
 def _runtime_output_id(run_id: str, *, run: dict[str, Any] | None = None) -> str:
-    if shared_run_dir(run_id) is not None:
-        return run_id
     if run is None:
         try:
             run = _service().get_run(run_id)
-        except Exception:
+        except Exception as exc:
+            _history_reason(exc)
             if stored_run(run_id) is None:
                 raise
             return run_id
+    if shared_run_dir(run_id) is not None:
+        return run_id
     for key in ("runtime_run_id", "runtime_job_id", "output_run_id"):
         value = run.get(key)
         if value:
@@ -175,13 +187,17 @@ def _runtime_output_id(run_id: str, *, run: dict[str, Any] | None = None) -> str
             value = reference.get("run_id") or reference.get("runtime_run_id")
             if value:
                 return str(value)
+    # Current Run records name their execution. Only a legacy record without
+    # that identity needs the progress projection to locate its output.
+    if run.get("run_id") == run_id:
+        return run_id
     try:
         snapshot = runtime_job_routes._workflow_progress_snapshot_for_run(run_id)
         value = snapshot.get("run_id") if isinstance(snapshot, dict) else None
         if value:
             return str(value)
-    except Exception:
-        pass
+    except Exception as exc:
+        _history_reason(exc)
     return run_id
 
 
@@ -192,7 +208,8 @@ def _runtime_output_location(
     if run is None:
         try:
             run = _service().get_run(run_id)
-        except Exception:
+        except Exception as exc:
+            _history_reason(exc)
             if stored_run(run_id) is None:
                 raise
             return run_id, {}
@@ -208,7 +225,8 @@ def _run_file_location(run_id: str, request: Request, resource: str):
     """Resolve one canonical Run read for owner routing and local file access."""
     try:
         run = _service().get_run(run_id)
-    except Exception:
+    except Exception as exc:
+        _history_reason(exc)
         if request.headers.get(RUN_FILE_HOP_HEADER) is not None:
             raise HTTPException(503, "The run-file owner could not verify its storage binding.")
         if stored_run(run_id) is None:
@@ -781,15 +799,16 @@ def create_job_run_operation(
 
 
 def _all_runs() -> list[dict[str, Any]]:
+    try:
+        jobs = records(_service().list_jobs(include_archived=True), "items", "jobs", "data")
+    except Exception as exc:
+        _history_reason(exc)
+        jobs = []
     runs: dict[str, dict[str, Any]] = {
         str(run["run_id"]): run
         for run in list_local_runs()
         if isinstance(run, dict) and run.get("run_id")
     }
-    try:
-        jobs = records(_service().list_jobs(include_archived=True), "items", "jobs", "data")
-    except Exception:
-        jobs = []
     core_ids: set[str] = set()
     def job_runs(job):
         job_id = str(job.get("job_id") or "")
@@ -797,7 +816,8 @@ def _all_runs() -> list[dict[str, Any]]:
             return []
         try:
             return records(_service().list_runs(job_id), "items", "runs", "data")
-        except Exception:
+        except Exception as exc:
+            _history_reason(exc)
             return []
 
     # Bound fan-out so one slow owner does not serialize every other Job.
@@ -809,9 +829,13 @@ def _all_runs() -> list[dict[str, Any]]:
                 if run_id:
                     core_ids.add(run_id)
                     runs[run_id] = {**runs.get(run_id, {}), **run}
+                    if "placement" in runs[run_id]:
+                        runs[run_id]["placement"] = run.get("placement")
     for run_id, run in runs.items():
         run["record_source"] = "runtime" if run_id in core_ids else "history"
         if run_id not in core_ids:
+            if "placement" in run:
+                run["placement"] = None
             run["retry"] = {"available": False, "reason": "Recovery is unverified. Check Core availability and plan a retry."}
         if run_id not in core_ids and str(run.get("status") or "").lower() not in _TERMINAL | {"unknown"}:
             run["status"] = "unknown"
@@ -908,10 +932,11 @@ def get_run(run_id: str, _principal=Depends(require_auth)):
         result = _service().get_run(run_id)
         return public_value({**result, "record_source": "runtime"})
     except Exception as exc:
+        reason = _history_reason(exc)
         recovered = stored_run(run_id)
         if recovered is None:
             raise
-        missing = isinstance(exc, grpc.RpcError) and exc.code() == grpc.StatusCode.NOT_FOUND
+        missing = reason == "missing"
         recovered["control_status"] = "missing" if missing else "unavailable"
         recovered["placement"] = None
         recovered["retry"] = {"available": False, "reason": (
@@ -922,18 +947,18 @@ def get_run(run_id: str, _principal=Depends(require_auth)):
 
 @router.patch("/runs/{run_id}", operation_id="update_run", tags=["runs"], response_model=ResourceModel)
 def update_run(run_id: str, request: RunUpdate, _principal=Depends(require_auth)):
-    run = _service().get_run(run_id)
+    owner = _service()
+    run = owner.get_run(run_id)
     current = str(run.get("status") or "").lower()
     desired = request.desired_state
     if request.queued_only:
         if desired != "cancelled" or current != "queued":
             raise HTTPException(status_code=409, detail="This queued start has already changed. Refresh its status.")
-        return public_value(_service().cancel_run(run_id, queued_only=True))
-    if current in _TERMINAL or (desired == "paused" and current not in {"pending", "running"}) or (
-        desired == "running" and current != "paused"
-    ):
-        raise HTTPException(status_code=409, detail=f"A {current or 'unknown'} run cannot transition to {desired}.")
-    result = transition_run(_service(), run["job_id"], run_id, desired)
+        return public_value(owner.cancel_run(run_id, queued_only=True))
+    try:
+        result = _transition_observed(owner, run, run["job_id"], run_id, desired)
+    except _TransitionConflict as exc:
+        raise HTTPException(status_code=409, detail=f"A {current or 'unknown'} run cannot transition to {desired}.") from exc
     return public_value(result)
 
 
@@ -1038,7 +1063,8 @@ def delete_schedule(schedule_id: str, owner_node: str = "",
 def get_run_monitor(run_id: str, _principal=Depends(require_auth)):
     try:
         canonical_run = _service().get_run(run_id)
-    except Exception:
+    except Exception as exc:
+        _history_reason(exc)
         canonical_run = stored_run(run_id)
         if canonical_run is None:
             raise
@@ -1077,7 +1103,8 @@ def get_run_workflow_progress(run_id: str, _principal=Depends(require_auth)):
     runtime_id = _runtime_output_id(run_id)
     try:
         snapshot = runtime_job_routes._workflow_progress_snapshot_for_run(run_id)
-    except Exception:
+    except Exception as exc:
+        _history_reason(exc)
         snapshot = stored_progress(run_id)
         if snapshot is None:
             raise
@@ -1155,7 +1182,8 @@ def list_run_events(
         missing = exc
     try:
         run = _service().get_run(run_id)
-    except Exception:
+    except Exception as exc:
+        _history_reason(exc)
         run = {}
     job = run.get("job") if isinstance(run.get("job"), dict) else {}
     job_id = str(run.get("job_id") or job.get("job_id") or "")
@@ -1206,7 +1234,8 @@ def stream_run_events(
         while True:
             try:
                 progress = runtime_job_routes._workflow_progress_snapshot_for_run(run_id)
-            except Exception:
+            except Exception as exc:
+                _history_reason(exc)
                 progress = stored_progress(run_id)
                 if progress is None:
                     raise
@@ -1245,7 +1274,8 @@ def stream_run_events(
                 )
             try:
                 snapshot = _service().get_run(run_id)
-            except Exception:
+            except Exception as exc:
+                _history_reason(exc)
                 snapshot = stored_run(run_id)
                 if snapshot is None:
                     raise

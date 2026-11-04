@@ -276,7 +276,7 @@ def test_invalid_membership_never_selects_a_peer(remote_run, monkeypatch, summar
 @pytest.mark.parametrize("fenced", [False, True])
 def test_documented_offline_replica_read_cannot_acknowledge_an_unverified_owner(remote_run, monkeypatch, tmp_path, fenced):
     def unavailable(_run_id):
-        raise OSError("Core unavailable")
+        raise ConnectionError("Core unavailable")
     monkeypatch.setattr(jobs, "_service", lambda: SimpleNamespace(get_run=unavailable))
     monkeypatch.setattr(jobs, "stored_run", lambda _id: {"run_id": "run-1"})
     directory = tmp_path / "runs/run-1"
@@ -338,7 +338,7 @@ def test_offline_missing_final_artifact_does_not_repeat_the_failed_core_read(rem
     reads = []
     def unavailable(run_id):
         reads.append(run_id)
-        raise OSError("Core unavailable")
+        raise ConnectionError("Core unavailable")
     monkeypatch.setattr(jobs, "_service", lambda: SimpleNamespace(get_run=unavailable))
     monkeypatch.setattr(jobs, "stored_run", lambda _id: {"run_id": "run-1"})
     (tmp_path / "runs/run-1").mkdir(parents=True)

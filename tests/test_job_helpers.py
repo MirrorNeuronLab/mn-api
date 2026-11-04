@@ -82,7 +82,7 @@ def test_stream_job_events_handles_bad_json_and_stream_errors(monkeypatch):
         def stream_events(self, *_args, **_kwargs):
             yield '{"type":"job_running"}'
             yield "{bad"
-            raise RuntimeError("stream down")
+            raise ConnectionError("stream down")
 
     monkeypatch.setattr(state, "client", FakeClient())
 
@@ -90,7 +90,7 @@ def test_stream_job_events_handles_bad_json_and_stream_errors(monkeypatch):
 
     assert events[0]["type"] == "job_running"
     assert events[1]["type"] == "unparseable_event"
-    assert error == "stream down"
+    assert error == "The runtime event stream is unavailable."
 
 
 def test_recent_run_events_read_newest_segments_only_and_keep_order(tmp_path, monkeypatch):
@@ -208,7 +208,8 @@ def test_run_progress_prefers_saved_run_manifest_and_replays_older_events(monkey
     assert requested_limits == [0]
 
     def missing_definition(_job_id, *, include_workflow_definition=False):
-        raise RuntimeError("stable definition has been removed")
+        from mn_sdk.errors import AppError
+        raise AppError("MN_NOT_FOUND", "The stable definition has been removed.", http_status=404)
 
     monkeypatch.setattr(state.client, "get_job", missing_definition)
     without_definition = jobs._workflow_progress_snapshot_for_run(run_id)
