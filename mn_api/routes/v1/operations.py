@@ -64,8 +64,10 @@ def stream_operation_events(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Last-Event-ID must be an integer.") from exc
 
+    local = is_local_operation(operation_id)
+
     def source():
-        if is_local_operation(operation_id):
+        if local:
             yield ": heartbeat\n\n"
             for event in stream_local_operation_events(operation_id, resume_after=resume_after):
                 yield encode_sse(

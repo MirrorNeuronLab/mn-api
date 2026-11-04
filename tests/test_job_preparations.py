@@ -118,10 +118,19 @@ def test_creation_claim_precedes_work_and_reconnect_never_creates_another_job(ap
     saved = json.loads(path.read_text())
     saved["operation"]["status"] = "running"
     path.write_text(json.dumps(saved))
+    cursor = saved["events"][-1]["sequence"]
     restart()
     assert client.get(f"/api/v1/operations/{operation_id}").json()["status"] == "interrupted"
+    stream_path = f"/api/v1/operations/{operation_id}/events/stream"
+    resumed = client.get(stream_path, headers={"Last-Event-ID": str(cursor)})
+    assert [line for line in resumed.text.splitlines() if line.startswith("id: ")] == [f"id: {cursor + 1}"]
+    assert "event: operation.interrupted" in resumed.text
     client.post("/api/v1/job-preparations", headers=headers, json=body)
     assert wait(client, operation_id)["result"]["job_id"] == calls[0]
+    resumed = client.get(stream_path, headers={"Last-Event-ID": str(cursor + 1)})
+    ids = [int(line[4:]) for line in resumed.text.splitlines() if line.startswith("id: ")]
+    assert ids == list(range(cursor + 2, ids[-1] + 1))
+    assert "event: operation.completed" in resumed.text
     assert len(calls) == 1
 
 
@@ -280,3 +289,123 @@ def test_durable_preparation_reports_nested_runtime_activity(api, monkeypatch):
     finally:
         release.set()
     assert wait(client, operation_id)["status"] == "completed"
+
+
+def test_acceptance_write_failure_starts_no_worker_and_same_request_recovers(api, monkeypatch):
+    client, records = api
+    calls = []
+    def create(request, *_):
+        calls.append(request.job_id)
+        records[request.job_id] = {"job_id": request.job_id}
+        return JSONResponse(records[request.job_id])
+    monkeypatch.setattr(jobs, "create_job", create)
+    body, headers = {"blueprint_id": "research"}, {"Idempotency-Key": "recover-first-write"}
+    with monkeypatch.context() as outage:
+        def fail(*_):
+            raise PermissionError("private-receipt-secret")
+        outage.setattr(operations.operation_journal.os, "replace", fail)
+        refused = client.post("/api/v1/job-preparations", json=body, headers=headers)
+        assert refused.status_code == 503 and "private-receipt-secret" not in refused.text
+        assert not calls
+    accepted = client.post("/api/v1/job-preparations", json=body, headers=headers)
+    assert accepted.status_code == 202
+    operation_id = accepted.json()["operation_id"]
+    assert wait(client, operation_id)["result"]["job_id"] == calls[0]
+    restart()
+    assert client.post("/api/v1/job-preparations", json=body, headers=headers).json()["operation_id"] == operation_id
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("fault,status", [("unreadable", 503), ("malformed", 500), ("invalid_events", 500)])
+def test_existing_receipt_failure_blocks_reads_and_resubmission(api, monkeypatch, fault, status):
+    client, _ = api
+    headers, body = {"Idempotency-Key": f"broken-receipt-{fault}"}, {"blueprint_id": "research"}
+    calls = []
+    def create(*_):
+        calls.append(True)
+        return JSONResponse({"job_id": "created"})
+    monkeypatch.setattr(jobs, "create_job", create)
+    operation_id = client.post("/api/v1/job-preparations", headers=headers, json=body).json()["operation_id"]
+    wait(client, operation_id)
+    path = operations._durable_operation_path(operation_id)
+    if fault == "unreadable":
+        # A directory in place of a file reliably yields an I/O error even when running as root.
+        path.unlink()
+        path.mkdir()
+    elif fault == "malformed":
+        path.write_text("private-corrupt-secret")
+    else:
+        record = json.loads(path.read_text())
+        record["events"][0]["sequence"] = -1
+        path.write_text(json.dumps(record))
+    for response in (client.get(f"/api/v1/operations/{operation_id}"),
+                     client.get(f"/api/v1/operations/{operation_id}/events/stream"),
+                     client.post("/api/v1/job-preparations", headers=headers, json=body)):
+        assert response.status_code == status
+        assert "private-corrupt-secret" not in response.text
+    assert calls == [True]
+
+
+def test_active_receipt_survives_completed_cache_eviction(api, monkeypatch):
+    client, _ = api
+    started, release = Event(), Event()
+    calls = []
+    def create(*_):
+        calls.append(True)
+        started.set()
+        assert release.wait(5)
+        return JSONResponse({"job_id": "finished"})
+    monkeypatch.setattr(operations, "_MAX_OPERATIONS", 1)
+    monkeypatch.setattr(jobs, "create_job", create)
+    headers, body = {"Idempotency-Key": "pinned-worker"}, {"blueprint_id": "research"}
+    accepted = client.post("/api/v1/job-preparations", headers=headers, json=body).json()
+    assert started.wait(2)
+    try:
+        for _ in range(4):
+            operations.complete_local_operation("other")
+        replay = client.post("/api/v1/job-preparations", headers=headers, json=body).json()
+        assert replay["operation_id"] == accepted["operation_id"]
+        assert replay["status"] == "running"
+    finally:
+        release.set()
+    assert wait(client, accepted["operation_id"])["status"] == "completed"
+    assert calls == [True]
+
+
+def test_retry_after_competing_acceptance_uses_first_reserved_job(api, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from mn_api.routes.v1 import job_preparations
+
+    client, _ = api
+    delayed, release = Event(), Event()
+    proposed, worked = [], []
+    def allocate(_):
+        if not proposed:
+            proposed.append("loser")
+            delayed.set()
+            assert release.wait(5)
+            return "loser"
+        return "winner"
+    def create(request, *_):
+        worked.append(request.job_id)
+        if len(worked) == 1:
+            raise HTTPException(503, "Temporary outage")
+        return JSONResponse({"job_id": request.job_id})
+
+    monkeypatch.setattr(job_preparations, "generate_stable_job_id", allocate)
+    monkeypatch.setattr(jobs, "create_job", create)
+    def submit():
+        return client.post("/api/v1/job-preparations", headers={"Idempotency-Key": "race-on-reservation"},
+                           json={"blueprint_id": "research"})
+    with ThreadPoolExecutor(1) as pool:
+        late = pool.submit(submit)
+        try:
+            assert delayed.wait(2)
+            first = submit().json()
+            assert wait(client, first["operation_id"])["status"] == "failed"
+        finally:
+            release.set()
+        replay = late.result(timeout=3).json()
+    assert replay["operation_id"] == first["operation_id"]
+    assert wait(client, replay["operation_id"])["result"]["job_id"] == "winner"
+    assert worked == ["winner", "winner"]

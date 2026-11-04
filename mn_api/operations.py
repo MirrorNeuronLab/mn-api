@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections import OrderedDict
 from datetime import datetime, timezone
 import json
-import os
 from pathlib import Path
 import threading
 from typing import Any
@@ -14,6 +13,7 @@ from fastapi import HTTPException
 from mn_api import state
 from mn_api.errors import http_exception_problem, public_validation_issues
 from mn_api.public import decode, first_identifier, public_value
+from mn_api import operation_journal
 from mn_api.path_utils import resolve_mn_home
 from mn_sdk.errors import AppError, normalize_exception
 from mn_sdk.openshell_errors import public_details as openshell_error_details
@@ -36,21 +36,20 @@ def _durable_operation_path(operation_id: str) -> Path:
 
 
 def _load_durable_operation_locked(operation_id: str) -> dict[str, Any] | None:
-    if operation_id in _operations:
-        return _operations[operation_id]
+    cached = _operations.get(operation_id)
+    if cached is not None and operation_id not in _durable_local_operation_ids:
+        return cached
     try:
-        record = json.loads(_durable_operation_path(operation_id).read_text(encoding="utf-8"))
-    except (FileNotFoundError, ValueError, OSError):
+        path = _durable_operation_path(operation_id)
+    except ValueError:
         return None
-    operation = record.get("operation")
-    events = record.get("events")
-    if not isinstance(operation, dict) or operation.get("operation_id") != operation_id or not isinstance(events, list):
+    record = operation_journal.read(path, operation_id)
+    if record is None:
+        if operation_id in _durable_local_operation_ids:
+            raise HTTPException(503, "The accepted operation receipt is unavailable.")
         return None
-    _operations[operation_id] = operation
-    _local_operation_ids.add(operation_id)
-    _durable_local_operation_ids.add(operation_id)
-    _local_operation_events[operation_id] = events[-200:]
-    if operation.get("status") in {"pending", "running"}:
+    operation, events = record
+    if operation.get("status") in {"pending", "running"} and operation_id not in _active_local_operation_ids:
         operation = dict(operation)
         operation["status"] = "interrupted"
         previous_progress = operation.get("progress") or {}
@@ -60,26 +59,13 @@ def _load_durable_operation_locked(operation_id: str) -> dict[str, Any] | None:
             "label": "Reconnect work",
             "detail": "The API restarted. Resubmit the same request to reconcile its result.",
         }
-        _operations[operation_id] = operation
-        _append_local_event_locked(operation_id, "operation.interrupted", operation)
-        _persist_durable_operation_locked(operation_id)
-    return operation
-
-
-def _persist_durable_operation_locked(operation_id: str) -> None:
-    if operation_id not in _durable_local_operation_ids:
-        return
-    destination = _durable_operation_path(operation_id)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_name(f"{destination.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        temporary.write_text(json.dumps({
-            "operation": _operations[operation_id],
-            "events": _local_operation_events.get(operation_id, []),
-        }, separators=(",", ":")), encoding="utf-8")
-        os.replace(temporary, destination)
-    finally:
-        temporary.unlink(missing_ok=True)
+        events = _next_events(events, "operation.interrupted", operation)
+        operation_journal.write(path, operation, events)
+        state.logger.info("Operation receipt recovered operation_id=%s status=interrupted", operation_id)
+    _local_operation_ids.add(operation_id)
+    _durable_local_operation_ids.add(operation_id)
+    _local_operation_events[operation_id] = events
+    return _store_operation_locked(operation)
 
 
 def _now() -> str:
@@ -119,29 +105,41 @@ def _operation_error(error: Exception) -> dict[str, Any]:
     return result
 
 
-def _append_local_event_locked(operation_id: str, event_type: str, resource: dict[str, Any]) -> None:
-    events = _local_operation_events.setdefault(operation_id, [])
+def _next_events(events: list[dict], event_type: str, resource: dict) -> list[dict]:
     sequence = int(events[-1]["sequence"]) + 1 if events else 1
-    events.append(
-        {
-            "sequence": sequence,
-            "type": event_type,
-            "data": public_value(resource),
-        }
-    )
-    if len(events) > 200:
-        del events[:-200]
+    return [*events[-199:], {"sequence": sequence, "type": event_type, "data": public_value(resource)}]
+
+
+def _publish_locked(resource: dict, event_type: str, *, durable: bool) -> dict:
+    operation_id = resource["operation_id"]
+    events = _next_events(_local_operation_events.get(operation_id, []), event_type, resource)
+    if durable:
+        operation_journal.write(_durable_operation_path(operation_id), resource, events)
+        _durable_local_operation_ids.add(operation_id)
+    _local_operation_ids.add(operation_id)
+    _local_operation_events[operation_id] = events
+    stored = _store_operation_locked(resource)
+    _condition.notify_all()
+    return stored
 
 
 def _store_operation_locked(resource: dict[str, Any]) -> dict[str, Any]:
     operation_id = str(resource["operation_id"])
     _operations[operation_id] = resource
     _operations.move_to_end(operation_id)
-    while len(_operations) > _MAX_OPERATIONS:
-        removed_id, _removed = _operations.popitem(last=False)
+    _trim_cache_locked()
+    return dict(resource)
+
+
+def _trim_cache_locked():
+    while len(_operations) - len(_active_local_operation_ids) > _MAX_OPERATIONS:
+        removed_id = next((key for key in _operations if key not in _active_local_operation_ids), None)
+        if removed_id is None:
+            break
+        del _operations[removed_id]
+        _durable_local_operation_ids.discard(removed_id)
         _local_operation_ids.discard(removed_id)
         _local_operation_events.pop(removed_id, None)
-    return dict(resource)
 
 
 def register_operation(value: Any) -> dict[str, Any]:
@@ -190,11 +188,7 @@ def complete_local_operation(
         "result": public_value(result),
     }
     with _condition:
-        _local_operation_ids.add(operation_id)
-        stored = _store_operation_locked(operation)
-        _append_local_event_locked(operation_id, "operation.completed", stored)
-        _condition.notify_all()
-        return stored
+        return _publish_locked(operation, "operation.completed", durable=False)
 
 
 def update_local_operation(
@@ -232,7 +226,6 @@ def update_local_operation(
         if error is not None:
             updated["error"] = public_value(error)
         updated["updated_at"] = _now()
-        stored = _store_operation_locked(updated)
         event_type = (
             "operation.completed"
             if updated.get("status") == "completed"
@@ -240,10 +233,7 @@ def update_local_operation(
             if updated.get("status") == "failed"
             else "operation.progress"
         )
-        _append_local_event_locked(operation_id, event_type, stored)
-        _persist_durable_operation_locked(operation_id)
-        _condition.notify_all()
-        return stored
+        return _publish_locked(updated, event_type, durable=operation_id in _durable_local_operation_ids)
 
 
 def start_local_operation(
@@ -289,14 +279,15 @@ def start_local_operation(
             ):
                 return dict(existing)
             operation["created_at"] = existing.get("created_at", now)
-        _local_operation_ids.add(operation_id)
-        if durable:
-            _durable_local_operation_ids.add(operation_id)
+            operation["options"] = existing.get("options", operation["options"])
+        # The condition serializes matching submissions. Pin during insertion,
+        # but never let an unsuccessful write leave a published or active claim.
         _active_local_operation_ids.add(operation_id)
-        stored = _store_operation_locked(operation)
-        _append_local_event_locked(operation_id, "operation.accepted", stored)
-        _persist_durable_operation_locked(operation_id)
-        _condition.notify_all()
+        try:
+            stored = _publish_locked(operation, "operation.accepted", durable=durable)
+        except BaseException:
+            _active_local_operation_ids.discard(operation_id)
+            raise
 
     def report_progress(**progress):
         update_local_operation(operation_id, status="running", **progress)
@@ -304,36 +295,32 @@ def start_local_operation(
     def run():
         try:
             update_local_operation(
-                operation_id,
-                status="running",
-                percent=1,
-                stage="starting",
-                label="Starting",
+                operation_id, status="running", percent=1, stage="starting", label="Starting",
                 detail="The local API host started the operation.",
             )
-            result = work(report_progress)
-        except Exception as exc:
-            update_local_operation(
-                operation_id,
-                status="failed",
-                error=_operation_error(exc),
-            )
-        else:
-            update_local_operation(
-                operation_id,
-                status="completed",
-                percent=100,
-                stage="completed",
-                label="Completed",
-                detail="The operation completed successfully.",
-                result=result,
-            )
+            try:
+                result = work(report_progress)
+            except Exception as exc:
+                update_local_operation(operation_id, status="failed", error=_operation_error(exc))
+            else:
+                update_local_operation(operation_id, status="completed", percent=100, stage="completed",
+                                       label="Completed", detail="The operation completed successfully.",
+                                       result=result)
+        except Exception:
+            state.logger.error("Local operation publication failed operation_id=%s kind=%s", operation_id, kind)
         finally:
             with _condition:
                 _active_local_operation_ids.discard(operation_id)
+                _trim_cache_locked()
                 _condition.notify_all()
 
-    threading.Thread(target=run, name=f"mn-api-{kind}-{operation_id[-8:]}", daemon=True).start()
+    try:
+        threading.Thread(target=run, name=f"mn-api-{kind}-{operation_id[-8:]}", daemon=True).start()
+    except RuntimeError as exc:
+        with _condition:
+            _active_local_operation_ids.discard(operation_id)
+            _condition.notify_all()
+        raise HTTPException(503, "The local operation worker could not start.") from exc
     return stored
 
 
@@ -347,14 +334,13 @@ def stream_local_operation_events(operation_id: str, *, resume_after: int = 0):
     next_sequence = max(0, resume_after) + 1
     while True:
         with _condition:
-            _load_durable_operation_locked(operation_id)
             while True:
+                operation = _load_durable_operation_locked(operation_id)
                 events = [
                     dict(event)
                     for event in _local_operation_events.get(operation_id, [])
                     if int(event.get("sequence") or 0) >= next_sequence
                 ]
-                operation = _operations.get(operation_id)
                 terminal = str((operation or {}).get("status") or "").lower() in {
                     "completed",
                     "failed",

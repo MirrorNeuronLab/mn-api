@@ -52,7 +52,12 @@ def _job_if_present(job_id: str) -> dict | None:
 
 
 def _accepted(kind, operation_id, options, fingerprint, work):
-    operation = start_local_operation(kind, options, work, operation_id=operation_id,
+    def run_claimed(progress):
+        # Concurrent submissions can propose different generated Job IDs
+        # before either accepts. The worker always uses the winning receipt.
+        return work(progress, get_operation(operation_id)["options"])
+
+    operation = start_local_operation(kind, options, run_claimed, operation_id=operation_id,
                                       request_fingerprint=fingerprint, durable=True, retry_failed=True)
     return resource_response(operation, status_code=202, location=f"{API_PREFIX}/operations/{operation_id}")
 
@@ -88,9 +93,10 @@ def prepare_job(
     job_id = (previous.get("options") or {}).get("job_id") or request.job_id or generate_stable_job_id(
         request.blueprint_id or "job"
     )
-    prepared_request = request.model_copy(update={"job_id": job_id})
 
-    def work(progress):
+    def work(progress, claim):
+        job_id = claim["job_id"]
+        prepared_request = request.model_copy(update={"job_id": job_id})
         progress(stage="prepare", label="Prepare co-worker", detail="Preparing the saved Job definition.")
         current = _job_if_present(job_id)
         if current is not None:
@@ -130,7 +136,8 @@ def prepare_job_update(
     previous = _previous(operation_id)
     expected_etag = (previous.get("options") or {}).get("expected_etag") or if_match
 
-    def work(progress):
+    def work(progress, claim):
+        expected_etag = claim["expected_etag"]
         progress(stage="prepare", label="Prepare changes", detail="Preparing the saved Job configuration.")
         current = jobs._service().get_job(job_id)
         # Reconcile a committed update after an interrupted HTTP/RPC response.
