@@ -232,22 +232,19 @@ def _http_problem_identity(status_code: int) -> tuple[str, str]:
 
 
 def _request_context(request: Request) -> dict[str, Any]:
-    return sanitize_context(
-        {
-            "method": request.method,
-            "path": request.url.path,
-            "query": str(request.url.query),
-            "request_id": _request_id(request),
-        }
-    )
+    return {"route": getattr(request.scope.get("route"), "path", ""),
+            "request_id": _request_id(request), "run_id": request.path_params.get("run_id")}
 
 
 def _log_exception(error: Exception, app_error: AppError, context: Mapping[str, Any] | None = None) -> None:
-    sanitized = sanitize_context(context)
-    exc_info = (type(error), error, error.__traceback__)
+    # Log the route template and a bounded correlation ID. Raw paths, queries,
+    # exception strings and tracebacks can all contain private blueprint input.
+    context = context or {}
+    def identifier(value):
+        return value if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", value) else ""
     state.logger.error(
-        "API request failed error_code=%s sanitized_context=%s",
-        app_error.code,
-        sanitized,
-        exc_info=exc_info,
+        "API request failed error_code=%s category=%s operation=%s run_id=%s request_id=%s",
+        identifier(app_error.code) or "unknown", app_error.category,
+        str(context.get("route") or context.get("handler") or "")[:160],
+        identifier(context.get("run_id")), identifier(context.get("request_id")),
     )

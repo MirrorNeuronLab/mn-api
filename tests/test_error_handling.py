@@ -1,3 +1,6 @@
+import io
+import logging
+
 import grpc
 import json
 import pytest
@@ -81,8 +84,14 @@ def test_unexpected_api_error_returns_safe_problem_response():
 
     client = TestClient(app, raise_server_exceptions=False)
 
-    with patch("mn_api.state.logger.error") as log:
-        response = client.get("/boom", headers={"x-request-id": "req-123"})
+    from mn_api import state
+    output = io.StringIO()
+    handler = logging.StreamHandler(output)
+    state.logger.addHandler(handler)
+    try:
+        response = client.get("/boom?token=query-secret", headers={"x-request-id": "req-123"})
+    finally:
+        state.logger.removeHandler(handler)
 
     assert response.status_code == 500
     payload = response.json()
@@ -93,9 +102,9 @@ def test_unexpected_api_error_returns_safe_problem_response():
     assert "backend unavailable" not in rendered
     assert "secret-token" not in rendered
     assert "/Users/homer" not in rendered
-    log.assert_called_once()
-    assert log.call_args.args[1] == "MN_EXECUTION_FAILED"
-    assert log.call_args.kwargs["exc_info"]
+    line = output.getvalue()
+    assert "MN_EXECUTION_FAILED" in line and "operation=/boom" in line and "req-123" in line
+    assert not any(secret in line for secret in ("Traceback", "backend unavailable", "secret-token", "query-secret", "/Users/homer"))
 
 
 def test_grpc_permission_error_uses_stable_code_without_detail_leak():
