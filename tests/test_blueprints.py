@@ -2024,7 +2024,8 @@ class TestBlueprintServices(unittest.TestCase):
                 calls.append(command)
                 return SimpleNamespace(returncode=int(command[1:3] == ["sandbox", "get"]), stdout="", stderr="")
 
-            with patch.dict(os.environ, {"MN_NODE_NAME": "test-runtime-node"}), \
+            with patch.dict(os.environ, {"MN_NODE_NAME": "test-runtime-node",
+                                         "OPENSHELL_GATEWAY_ENDPOINT": "http://127.0.0.1:58080"}), \
                     patch.object(state.client, "get_resource", return_value=_single_node_resource_report()), \
                     patch.object(state.client, "get_system_summary", return_value=_single_node_resource_report()), \
                     patch("mn_sdk.openshell_native.shutil.which", return_value="openshell"):

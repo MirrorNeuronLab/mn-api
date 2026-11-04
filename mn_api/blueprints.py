@@ -1502,13 +1502,7 @@ def load_blueprint_bundle(
         "The first launch can take several minutes while runtime dependencies are installed. Keep Docker running.",
         stage="runtime_resources",
     ):
-        from mn_sdk.openshell_preparation import prepare_openshell_workers
-
         submission_id = submission_id or generate_job_definition_submission_id(stable_job_id or run_id)
-        prepare_openshell_workers(
-            manifest, payloads, submission_id=submission_id, job_id=stable_job_id,
-            cluster_client=state.client, env=submission_environment,
-        )
         prepared = prepare_job_submission(
             manifest,
             payloads,

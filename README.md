@@ -1,5 +1,7 @@
 # MirrorNeuron API
 
+API submission and CLI submission now share the SDK runner preparation step. Use matching SDK and Core builds on execution nodes when testing a blueprint that declares the v1 payload API.
+
 ## Output observer upgrades
 
 Use the matching SDK and installer. Output observers require the private
