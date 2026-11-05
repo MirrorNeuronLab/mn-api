@@ -13,9 +13,7 @@ def job_data_dir_from_id(job_id: str | None, *, must_exist: bool = True) -> Path
     return sdk_job_data_dir_from_id(job_id, must_exist=must_exist)
 
 
-def shared_job_ui_dir_from_id(
-    job_id: str | None, *, must_exist: bool = True
-) -> Path | None:
+def shared_job_ui_dir_from_id(job_id: str | None, *, must_exist: bool = True) -> Path | None:
     """Resolve one job UI handle synchronized through runtime shared storage."""
 
     if not job_id or not SAFE_JOB_ID.fullmatch(job_id):

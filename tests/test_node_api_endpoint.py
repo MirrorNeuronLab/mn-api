@@ -5,23 +5,41 @@ from mn_api.job_ui_routing import node_api_base_url
 
 
 def node(**endpoint):
-    return {"address": "10.0.4.32", "hardware": {"http_api": {
-        "schema_version": "mn.http_api.endpoint.v1", "enabled": True, "scheme": "http", "port": 54007,
-        **endpoint,
-    }}}
+    return {
+        "address": "10.0.4.32",
+        "hardware": {
+            "http_api": {
+                "schema_version": "mn.http_api.endpoint.v1",
+                "enabled": True,
+                "scheme": "http",
+                "port": 54007,
+                **endpoint,
+            }
+        },
+    }
 
 
-@pytest.mark.parametrize("host,authority", [("10.0.4.32", "10.0.4.32"), ("spark.local", "spark.local"), ("::1", "[::1]")])
+@pytest.mark.parametrize(
+    "host,authority", [("10.0.4.32", "10.0.4.32"), ("spark.local", "spark.local"), ("::1", "[::1]")]
+)
 def test_registered_peer_api_endpoint_uses_its_own_port(host, authority):
     value = node(scheme="https")
     value["address"] = host
     assert node_api_base_url(value) == f"https://{authority}:54007/api/v1"
 
 
-@pytest.mark.parametrize("change", [
-    {"enabled": False}, {"scheme": "file"}, {"schema_version": "other"},
-    {"port": True}, {"port": "54007"}, {"port": 0}, {"port": 65536},
-])
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"enabled": False},
+        {"scheme": "file"},
+        {"schema_version": "other"},
+        {"port": True},
+        {"port": "54007"},
+        {"port": 0},
+        {"port": 65536},
+    ],
+)
 def test_invalid_peer_api_advertisement_fails_closed(change):
     with pytest.raises(HTTPException) as error:
         node_api_base_url(node(**change))

@@ -123,9 +123,7 @@ def test_job_ui_proxy_uses_the_registered_spark_host_and_injects_local_proxy_con
     monkeypatch.setattr("mn_api.web_ui_server._load_job_web_ui", lambda *_args, **_kwargs: handle)
     monkeypatch.setattr("mn_api.web_ui_server._open_job_ui", open_remote)
 
-    response = TestClient(create_app(dist_dir=dist, api_url="http://api.local/api/v1")).get(
-        "/job-ui-proxy/job-1/8088/"
-    )
+    response = TestClient(create_app(dist_dir=dist, api_url="http://api.local/api/v1")).get("/job-ui-proxy/job-1/8088/")
 
     assert response.status_code == 200
     assert captured["url"] == "http://10.0.4.26:8088/"
@@ -225,16 +223,17 @@ def test_job_ui_target_allows_only_declared_http_and_websocket_ports():
         port=8080,
         path="stream",
         query="topic=%2Fcamera%2Fcolor%2Fimage_raw&type=mjpeg&quality=80&empty=&tag=one&tag=two",
-    ) == (
-        "https://10.0.4.26:8080/stream?topic=/camera/color/image_raw&type=mjpeg&quality=80&empty=&tag=one&tag=two"
+    ) == ("https://10.0.4.26:8080/stream?topic=/camera/color/image_raw&type=mjpeg&quality=80&empty=&tag=one&tag=two")
+    assert (
+        _job_ui_target_url(
+            handle,
+            port=9090,
+            path="ws",
+            query="topic=%2Fcamera%2Fcolor%2Fimage_raw&empty=",
+            websocket=True,
+        )
+        == "wss://10.0.4.26:9090/ws?topic=/camera/color/image_raw&empty="
     )
-    assert _job_ui_target_url(
-        handle,
-        port=9090,
-        path="ws",
-        query="topic=%2Fcamera%2Fcolor%2Fimage_raw&empty=",
-        websocket=True,
-    ) == "wss://10.0.4.26:9090/ws?topic=/camera/color/image_raw&empty="
     assert _job_ui_target_url(handle, port=9090, path="", query="", websocket=True) == "wss://10.0.4.26:9090/"
     with pytest.raises(JobUiProxyError, match="not declared"):
         _job_ui_target_url(handle, port=8090, path="mcp", query="")
@@ -253,8 +252,7 @@ def test_job_ui_target_rejects_an_inactive_service(status):
 
 
 def test_job_ui_proxy_rejects_a_failed_readiness_receipt():
-    handle = {"status": "running", "url": "http://worker:8080/",
-              "metadata": {"readiness": {"ready": False}}}
+    handle = {"status": "running", "url": "http://worker:8080/", "metadata": {"readiness": {"ready": False}}}
     with pytest.raises(JobUiProxyError, match="not running"):
         _job_ui_target_url(handle, port=8080, path="", query="")
 
@@ -263,8 +261,7 @@ def test_job_ui_proxy_rejects_a_failed_readiness_receipt():
 def test_only_authenticated_probe_can_load_an_unchecked_descriptor(monkeypatch, tmp_path, token, expected_check):
     from mn_api.web_ui_server import proxy_job_ui_request
 
-    handle = {"status": "running", "url": "http://private-worker:8080/",
-              "metadata": {"readiness": {"ready": False}}}
+    handle = {"status": "running", "url": "http://private-worker:8080/", "metadata": {"readiness": {"ready": False}}}
     checks = []
 
     def load(_job_id, **kwargs):
@@ -291,9 +288,16 @@ def test_only_authenticated_probe_can_load_an_unchecked_descriptor(monkeypatch, 
 
     monkeypatch.setattr("mn_api.web_ui_server._load_job_web_ui", load)
     monkeypatch.setattr("mn_api.web_ui_server._open_job_ui", open_remote)
-    response = proxy_job_ui_request(job_id="job-1", port=8080, path="", query="", method="GET",
-                                    request_headers=[("X-MN-Job-UI-Probe", "1"), ("Authorization", f"Bearer {token}")],
-                                    upstream_api="http://api/api/v1", api_token="test-token")
+    response = proxy_job_ui_request(
+        job_id="job-1",
+        port=8080,
+        path="",
+        query="",
+        method="GET",
+        request_headers=[("X-MN-Job-UI-Probe", "1"), ("Authorization", f"Bearer {token}")],
+        upstream_api="http://api/api/v1",
+        api_token="test-token",
+    )
     assert checks == [expected_check]
     assert response.status_code == (409 if expected_check else 200)
 

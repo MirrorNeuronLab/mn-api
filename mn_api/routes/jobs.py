@@ -1,4 +1,5 @@
 """Retained Python imports; canonical HTTP routes use mn_api.job_projection."""
+
 from mn_api.job_projection import (
     _decode_manifest as _decode_manifest,
     _nested_get as _nested_get,

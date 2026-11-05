@@ -120,7 +120,9 @@ def export_run(
     run_data_ref: dict[str, Any] | None = None,
 ):
     try:
-        record = load_run(run_id, runs_root=_ensure_run_exists(run_id, run_data_ref=run_data_ref).parent, include_observability=True)
+        record = load_run(
+            run_id, runs_root=_ensure_run_exists(run_id, run_data_ref=run_data_ref).parent, include_observability=True
+        )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     normalized_format = format.lower().strip()
@@ -148,7 +150,9 @@ def reveal_run_artifact(run_id: str, artifact_path: str, _auth=Depends(require_a
     return {"ok": True, "path": str(path), "folder": str(path.parent)}
 
 
-def get_run_artifact(run_id: str, artifact_path: str, _auth=Depends(require_auth), *, run_data_ref: dict[str, Any] | None = None):
+def get_run_artifact(
+    run_id: str, artifact_path: str, _auth=Depends(require_auth), *, run_data_ref: dict[str, Any] | None = None
+):
     run_dir = _ensure_run_exists(run_id, run_data_ref=run_data_ref)
     path = _artifact_file_path(run_dir, artifact_path)
     return FileResponse(path, media_type=artifact_content_type(path))
@@ -171,7 +175,9 @@ def reveal_run_output(run_id: str, output_index: int, _auth=Depends(require_auth
     return {"ok": True, "path": str(path), "folder": str(path.parent)}
 
 
-def get_run_output(run_id: str, output_index: int, _auth=Depends(require_auth), *, run_data_ref: dict[str, Any] | None = None):
+def get_run_output(
+    run_id: str, output_index: int, _auth=Depends(require_auth), *, run_data_ref: dict[str, Any] | None = None
+):
     run_dir = _ensure_run_exists(run_id, run_data_ref=run_data_ref)
     path = output_path_by_index(run_dir, output_index)
     if path is None or not path.is_file():
@@ -240,7 +246,9 @@ def get_run_timeline(
     }
 
 
-def get_run_observability_summary(run_id: str, _auth=Depends(require_auth), *, run_data_ref: dict[str, Any] | None = None):
+def get_run_observability_summary(
+    run_id: str, _auth=Depends(require_auth), *, run_data_ref: dict[str, Any] | None = None
+):
     run_dir = _ensure_run_exists(run_id, run_data_ref=run_data_ref)
     tools = _observability_tools()
     summary = tools["read_run_observability_summary"](run_id, runs_root=run_dir.parent)

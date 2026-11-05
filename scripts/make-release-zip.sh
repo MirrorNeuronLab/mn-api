@@ -32,21 +32,21 @@ mkdir -p "$archive_root"
 
 while IFS= read -r -d '' file; do
   case "$file" in
-    .git/*|.venv/*|venv/*|env/*|.tox/*|node_modules/*|*/node_modules/*)
-      continue
-      ;;
-    __pycache__/*|*/__pycache__/*|.pytest_cache/*|*/.pytest_cache/*)
-      continue
-      ;;
-    .mypy_cache/*|*/.mypy_cache/*|.ruff_cache/*|*/.ruff_cache/*)
-      continue
-      ;;
-    build/*|*/build/*|dist/*|*/dist/*|htmlcov/*|*/htmlcov/*)
-      continue
-      ;;
-    *.egg-info/*|*/*.egg-info/*|*.pyc|*.pyo|*.tmp|*.swp|.DS_Store|*/.DS_Store)
-      continue
-      ;;
+  .git/* | .venv/* | venv/* | env/* | .tox/* | node_modules/* | */node_modules/*)
+    continue
+    ;;
+  __pycache__/* | */__pycache__/* | .pytest_cache/* | */.pytest_cache/*)
+    continue
+    ;;
+  .mypy_cache/* | */.mypy_cache/* | .ruff_cache/* | */.ruff_cache/*)
+    continue
+    ;;
+  build/* | */build/* | dist/* | */dist/* | htmlcov/* | */htmlcov/*)
+    continue
+    ;;
+  *.egg-info/* | *.pyc | *.pyo | *.tmp | *.swp | .DS_Store | */.DS_Store)
+    continue
+    ;;
   esac
 
   destination="$archive_root/$file"

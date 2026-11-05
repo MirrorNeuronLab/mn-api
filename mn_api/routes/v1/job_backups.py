@@ -1,4 +1,5 @@
 """HTTP file adaptation for SDK-owned job capsules."""
+
 from __future__ import annotations
 
 import shutil
@@ -41,7 +42,12 @@ async def create_backup(job_id: str, _auth=Depends(require_auth)):
     output = temporary / "job-backup.zip"
     try:
         await run_in_threadpool(backup_job, state.client, job_id, output, air_gapped=True)
-        return FileResponse(output, media_type="application/zip", filename="job-backup.zip", background=BackgroundTask(shutil.rmtree, temporary))
+        return FileResponse(
+            output,
+            media_type="application/zip",
+            filename="job-backup.zip",
+            background=BackgroundTask(shutil.rmtree, temporary),
+        )
     except BaseException as exc:
         shutil.rmtree(temporary, ignore_errors=True)
         if isinstance(exc, BackupRestoreError):

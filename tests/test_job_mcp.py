@@ -175,6 +175,7 @@ class MCPRuntime:
             }
         )
 
+
 def _blueprint(_config, blueprint_id):
     enabled = blueprint_id != "disabled-blueprint"
     blueprint = {
@@ -210,11 +211,20 @@ def _blueprint(_config, blueprint_id):
 def _configure(monkeypatch, runtime: MCPRuntime, *, token: str = "") -> None:
     for job in runtime.jobs.values():
         if job.get("blueprint_id") != "disabled-blueprint":
-            job["mcp"] = {"profile": SUPERVISION_PROFILE, "manual": "@/knowledge/user_manual.md", "tools": {},
-                          "manual_content": "# Test co-worker\nReview published evidence.", "manual_sha256": "test"}
+            job["mcp"] = {
+                "profile": SUPERVISION_PROFILE,
+                "manual": "@/knowledge/user_manual.md",
+                "tools": {},
+                "manual_content": "# Test co-worker\nReview published evidence.",
+                "manual_sha256": "test",
+            }
             if job.get("blueprint_id") == "agent-blueprint":
                 job["mcp"]["activity"] = {"tool": "watch_job_activity"}
-                job["mcp"]["service"] = {"name": "cctv-operator-mcp", "path": "/mcp", "required_tags": ["mcp", "cctv-operator"]}
+                job["mcp"]["service"] = {
+                    "name": "cctv-operator-mcp",
+                    "path": "/mcp",
+                    "required_tags": ["mcp", "cctv-operator"],
+                }
     monkeypatch.setattr(state, "client", runtime)
     monkeypatch.setattr(interaction_sdk, "InteractionClient", lambda _client: runtime.interactions)
     monkeypatch.setattr(
@@ -223,7 +233,9 @@ def _configure(monkeypatch, runtime: MCPRuntime, *, token: str = "") -> None:
         SimpleNamespace(api_token=token, request_size_limit_bytes=1024 * 1024, cors_allow_origins=[]),
     )
     monkeypatch.setattr(job_mcp, "find_blueprint", _blueprint)
-    monkeypatch.setattr(job_mcp.runtime_job_routes, "_workflow_progress_snapshot_for_run", lambda _run_id: {"steps": []})
+    monkeypatch.setattr(
+        job_mcp.runtime_job_routes, "_workflow_progress_snapshot_for_run", lambda _run_id: {"steps": []}
+    )
     monkeypatch.setattr(
         job_mcp.runtime_run_routes,
         "get_run_final_artifact",
@@ -242,6 +254,7 @@ def _mcp_request(client: TestClient, job_id: str, body: dict, *, token: str = ""
         headers["Authorization"] = f"Bearer {token}"
     if (body.get("params", {}).get("_meta") or {}).get("io.modelcontextprotocol/protocolVersion"):
         from mcp.shared.inbound import NAME_BEARING_METHODS
+
         headers["MCP-Protocol-Version"] = body["params"]["_meta"]["io.modelcontextprotocol/protocolVersion"]
         headers["MCP-Method"] = body["method"]
         name_key = NAME_BEARING_METHODS.get(body["method"])
@@ -308,12 +321,18 @@ def test_job_context_uses_mrtr_for_pending_runtime_input(monkeypatch):
 
     runtime = MCPRuntime()
     _configure(monkeypatch, runtime)
-    runtime.interactions.items = [{
-        "id": "review-loading-bay", "kind": "choice", "state": "pending", "revision": 1,
-        "scope": {"job_id": "job-agent", "execution_id": "run-agent"}, "created_at": 1,
-        "presentation": {"title": "Which area should I inspect next?"},
-        "options": [{"id": "loading-bay", "label": "Loading bay", "action": "choose"}],
-    }]
+    runtime.interactions.items = [
+        {
+            "id": "review-loading-bay",
+            "kind": "choice",
+            "state": "pending",
+            "revision": 1,
+            "scope": {"job_id": "job-agent", "execution_id": "run-agent"},
+            "created_at": 1,
+            "presentation": {"title": "Which area should I inspect next?"},
+            "options": [{"id": "loading-bay", "label": "Loading bay", "action": "choose"}],
+        }
+    ]
 
     async def scenario():
         servers, _app = job_mcp.create_job_mcp(JobContextProvider())
@@ -338,10 +357,17 @@ def test_job_context_uses_mrtr_for_pending_runtime_input(monkeypatch):
     prompts, result = asyncio.run(scenario())
 
     assert prompts == ["Which area should I inspect next?"]
-    assert result.structured_content["data"][ "identity"]["job_id"] == "job-agent"
-    assert runtime.interactions.commands == [("review-loading-bay", {
-        "expected_revision": 1, "command_id": "mcp-review-loading-bay", "answer": {"option_id": "loading-bay"},
-    })]
+    assert result.structured_content["data"]["identity"]["job_id"] == "job-agent"
+    assert runtime.interactions.commands == [
+        (
+            "review-loading-bay",
+            {
+                "expected_revision": 1,
+                "command_id": "mcp-review-loading-bay",
+                "answer": {"option_id": "loading-bay"},
+            },
+        )
+    ]
 
 
 def test_job_activity_watch_relays_worker_mcp_activity_through_mrtr(monkeypatch):
@@ -419,8 +445,8 @@ def test_job_activity_watch_relays_worker_mcp_activity_through_mrtr(monkeypatch)
             "requires_review": True,
         }
     ]
-    assert result.structured_content["data"][ "delivered"] is True
-    assert result.structured_content["data"][ "cursor"] == "cctv-target-camera-1-42"
+    assert result.structured_content["data"]["delivered"] is True
+    assert result.structured_content["data"]["cursor"] == "cctv-target-camera-1-42"
     assert len(relay_calls) == 1
     assert relay_calls[0]["job_id"] == "job-agent"
     assert relay_calls[0]["conversation_id"] == ""
@@ -576,7 +602,9 @@ def test_job_projection_is_authoritative_when_catalog_now_enables_responses(monk
 
     with TestClient(create_app()) as client:
         assert _initialize(client, "job-response-disabled").status_code == 200
-        response = _mcp_request(client, "job-response-disabled", {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}).json()
+        response = _mcp_request(
+            client, "job-response-disabled", {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}
+        ).json()
         assert {tool["name"] for tool in response["result"]["tools"]} == COMMON_TOOLS
 
 
@@ -631,9 +659,7 @@ def test_context_states_latest_result_partial_warning_and_bounds(monkeypatch):
             "completed_at": "2026-08-13T12:05:00Z",
         }
     ]
-    runtime.jobs["job-1"]["schedules"] = [
-        {"schedule_id": "schedule-1", "job_id": "job-1", "status": "running"}
-    ]
+    runtime.jobs["job-1"]["schedules"] = [{"schedule_id": "schedule-1", "job_id": "job-1", "status": "running"}]
     runtime.jobs["job-1"]["resolved_configuration"] = {f"field_{index}": "x" * 10_000 for index in range(200)}
     _configure(monkeypatch, runtime)
     monkeypatch.setattr(
@@ -641,10 +667,7 @@ def test_context_states_latest_result_partial_warning_and_bounds(monkeypatch):
         "_workflow_progress_snapshot_for_run",
         lambda _run_id: {
             "status": "completed",
-            "steps": [
-                {"id": f"step-{index}", "name": f"Step {index}", "status": "completed"}
-                for index in range(80)
-            ],
+            "steps": [{"id": f"step-{index}", "name": f"Step {index}", "status": "completed"} for index in range(80)],
         },
     )
     monkeypatch.setattr(
@@ -696,8 +719,9 @@ def test_context_resolves_final_result_from_staged_runtime_output_identity(monke
     monkeypatch.setattr(
         job_mcp.runtime_run_routes,
         "get_run_final_artifact",
-        lambda run_id, _principal: projected_ids.append(run_id) or (_ for _ in ()).throw(
-            HTTPException(status_code=404, detail="runtime final file not copied")
+        lambda run_id, _principal: (
+            projected_ids.append(run_id)
+            or (_ for _ in ()).throw(HTTPException(status_code=404, detail="runtime final file not copied"))
         ),
     )
     monkeypatch.setattr(
@@ -713,8 +737,7 @@ def test_context_resolves_final_result_from_staged_runtime_output_identity(monke
     assert context["latest_run"]["run_id"] == "public-run-1"
     assert context["latest_run"]["result"] == {"summary": "Published result"}
     assert any(
-        item["record_id"] == "final-result" and item["publication_state"] == "final"
-        for item in context["evidence"]
+        item["record_id"] == "final-result" and item["publication_state"] == "final" for item in context["evidence"]
     )
 
 
@@ -759,12 +782,19 @@ def test_ask_job_reuses_one_job_and_run_snapshot(monkeypatch):
     assert runtime.queries[0]["context"]["_active_service_run_id"] == "run-agent"
 
 
-@pytest.mark.parametrize("output_binding", [
-    {"runtime_run_id": "output-run-agent"},
-    {"run_data_ref": {
-        "storage": "syncthing", "submission_id": "definition-agent", "run_id": "output-run-agent",
-    }},
-])
+@pytest.mark.parametrize(
+    "output_binding",
+    [
+        {"runtime_run_id": "output-run-agent"},
+        {
+            "run_data_ref": {
+                "storage": "syncthing",
+                "submission_id": "definition-agent",
+                "run_id": "output-run-agent",
+            }
+        },
+    ],
+)
 def test_agent_service_lookup_uses_execution_id_while_artifacts_use_output_id(monkeypatch, output_binding):
     runtime = MCPRuntime()
     run = runtime.runs["job-agent"][0]
@@ -909,6 +939,7 @@ def test_opt_in_stream_uses_progress_and_preserves_final_answer(monkeypatch):
     _configure(monkeypatch, runtime)
     original = runtime.query_job_response
     controls = []
+
     def query(job_id, question, *, context, conversation_id="", request_id=""):
         control = context.get("_mn_response_stream")
         if not control:
@@ -916,23 +947,48 @@ def test_opt_in_stream_uses_progress_and_preserves_final_answer(monkeypatch):
         controls.append(control["action"])
         done = control["action"] == "read"
         delta = "answer." if done else "Visible "
-        result = json.loads(original(job_id, question, context={"state": "never_run"}, conversation_id=conversation_id, request_id=request_id))
+        result = json.loads(
+            original(
+                job_id, question, context={"state": "never_run"}, conversation_id=conversation_id, request_id=request_id
+            )
+        )
         result["answer"] = "Visible answer."
-        return json.dumps({"schema_version": "mn.mcp.job_answer_stream.v1", "request_id": request_id,
-                           "cursor": control["cursor"] + len(delta), "delta": delta, "done": done,
-                           "failed": False, "cancelled": False, "response": result if done else None})
+        return json.dumps(
+            {
+                "schema_version": "mn.mcp.job_answer_stream.v1",
+                "request_id": request_id,
+                "cursor": control["cursor"] + len(delta),
+                "delta": delta,
+                "done": done,
+                "failed": False,
+                "cancelled": False,
+                "response": result if done else None,
+            }
+        )
+
     runtime.query_job_response = query
     with TestClient(create_app(), base_url="http://localhost:54019") as client:
         assert _initialize(client, "job-response").status_code == 200
-        response = _mcp_request(client, "job-response", {
-            "jsonrpc": "2.0", "id": 3, "method": "tools/call",
-            "params": {"name": "ask_job", "arguments": {"question": "What can you do?", "request_id": "stream-1", "stream": True},
-                       "_meta": {"progressToken": "progress-1"}},
-        })
+        response = _mcp_request(
+            client,
+            "job-response",
+            {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {
+                    "name": "ask_job",
+                    "arguments": {"question": "What can you do?", "request_id": "stream-1", "stream": True},
+                    "_meta": {"progressToken": "progress-1"},
+                },
+            },
+        )
     assert response.status_code == 200
     assert "text/event-stream" in response.headers["content-type"]
     events = [json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: ")]
-    updates = [json.loads(event["params"]["message"]) for event in events if event.get("method") == "notifications/progress"]
+    updates = [
+        json.loads(event["params"]["message"]) for event in events if event.get("method") == "notifications/progress"
+    ]
     assert [event["delta"] for event in updates] == ["Visible ", "answer."]
     result = next(event["result"] for event in events if event.get("id") == 3)
     assert result["structuredContent"]["data"]["answer"] == "Visible answer."
@@ -942,16 +998,26 @@ def test_opt_in_stream_uses_progress_and_preserves_final_answer(monkeypatch):
 
 def test_stream_relay_cancels_runtime_on_delivery_failure():
     from mn_api.job_reply_stream import stream_job_reply
+
     calls = []
+
     class Provider:
         def response_stream_command(self, job, question, **kwargs):
             calls.append(kwargs["control"]["action"])
-            return {"schema_version": "mn.mcp.job_answer_stream.v1", "request_id": "stream-1",
-                    "cursor": 5, "delta": "hello", "done": False}
+            return {
+                "schema_version": "mn.mcp.job_answer_stream.v1",
+                "request_id": "stream-1",
+                "cursor": 5,
+                "delta": "hello",
+                "done": False,
+            }
+
     class Context:
         async def report_progress(self, *args, **kwargs):
             raise RuntimeError("disconnected")
+
     import pytest
+
     with pytest.raises(RuntimeError, match="disconnected"):
         asyncio.run(stream_job_reply(Provider(), "job", "question", None, "stream-1", Context()))
     assert calls == ["start", "cancel"]
@@ -959,44 +1025,70 @@ def test_stream_relay_cancels_runtime_on_delivery_failure():
 
 def test_stream_control_rejects_invalid_identity_and_action_agent(monkeypatch):
     import pytest
+
     runtime = MCPRuntime()
     _configure(monkeypatch, runtime)
     provider = JobContextProvider()
     for values in [
-        {"question": ""}, {"question": "x" * 8001},
-        {"request_id": ""}, {"request_id": "x" * 129},
+        {"question": ""},
+        {"question": "x" * 8001},
+        {"request_id": ""},
+        {"request_id": "x" * 129},
         {"conversation_id": "not-a-uuid"},
     ]:
         arguments = {"question": "What can you do?", "request_id": "r", "conversation_id": None, **values}
         with pytest.raises(ValueError):
             provider.response_stream_command("job-response", control={"action": "start", "cursor": 0}, **arguments)
     with pytest.raises(job_mcp.JobMCPNotFoundError):
-        provider.response_stream_command("job-agent", "What can you do?", request_id="r", conversation_id=None, control={"action": "start", "cursor": 0})
+        provider.response_stream_command(
+            "job-agent",
+            "What can you do?",
+            request_id="r",
+            conversation_id=None,
+            control={"action": "start", "cursor": 0},
+        )
     assert runtime.queries == []
 
 
 def test_stream_endpoint_retains_authentication_and_host_protection(monkeypatch):
     runtime = MCPRuntime()
     _configure(monkeypatch, runtime, token="top-secret")
-    request = {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
-        "name": "ask_job", "arguments": {"question": "What can you do?", "stream": True},
-    }}
+    request = {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {
+            "name": "ask_job",
+            "arguments": {"question": "What can you do?", "stream": True},
+        },
+    }
     with TestClient(create_app(), base_url="http://localhost:54019") as client:
         assert _mcp_request(client, "job-response", request).status_code == 401
-        response = client.post("/api/v1/jobs/job-response/mcp", json=request, headers={
-            "Accept": "application/json, text/event-stream", "Authorization": "Bearer top-secret", "Host": "untrusted.example:54019",
-        })
+        response = client.post(
+            "/api/v1/jobs/job-response/mcp",
+            json=request,
+            headers={
+                "Accept": "application/json, text/event-stream",
+                "Authorization": "Bearer top-secret",
+                "Host": "untrusted.example:54019",
+            },
+        )
         assert response.status_code == 421
     assert runtime.queries == []
 
 
 def test_accepted_assistance_survives_job_answers_without_authorizing_actions(monkeypatch):
     import pytest
+
     runtime = MCPRuntime()
     _configure(monkeypatch, runtime)
     provider = JobContextProvider()
-    task = {"goal": "diagnose", "state": "review", "execution_id": "run-agent",
-            "next_question": "The corrected input was saved. Review the separate retry confirmation."}
+    task = {
+        "goal": "diagnose",
+        "state": "review",
+        "execution_id": "run-agent",
+        "next_question": "The corrected input was saved. Review the separate retry confirmation.",
+    }
     provider.ask_job("job-agent", "What next?", assistance_task=task)
     assert runtime.queries[-1]["context"]["assistance_task"] == task
     with pytest.raises(ValueError, match="different execution"):
@@ -1013,8 +1105,14 @@ def test_streamed_answers_keep_the_accepted_task_on_start_only(monkeypatch):
     _configure(monkeypatch, runtime)
     task = {"goal": "schedule", "state": "collecting", "execution_id": "", "next_question": "Which days?"}
     provider = JobContextProvider()
-    provider.response_stream_command("job-response", "Weekdays", conversation_id=None, request_id="r",
-                                     control={"action": "start", "cursor": 0}, assistance_task=task)
+    provider.response_stream_command(
+        "job-response",
+        "Weekdays",
+        conversation_id=None,
+        request_id="r",
+        control={"action": "start", "cursor": 0},
+        assistance_task=task,
+    )
     assert runtime.queries[-1]["context"]["assistance_task"] == task
 
 
@@ -1045,9 +1143,14 @@ def test_context_reads_canonical_output_without_legacy_mapping(monkeypatch, tmp_
     runtime = MCPRuntime()
     reference = {"storage": "syncthing", "submission_id": "definition-current", "run_id": "output-current"}
     runtime.jobs["job-1"]["latest_run_id"] = "public-current"
-    runtime.runs["job-1"] = [{
-        "job_id": "job-1", "run_id": "public-current", "status": "running", "run_data_ref": reference,
-    }]
+    runtime.runs["job-1"] = [
+        {
+            "job_id": "job-1",
+            "run_id": "public-current",
+            "status": "running",
+            "run_data_ref": reference,
+        }
+    ]
     shared = tmp_path / "shared"
     directory = shared / "submissions" / "definition-current" / "outputs" / "runs" / "output-current"
     (directory / "workflow_state").mkdir(parents=True)
@@ -1060,8 +1163,11 @@ def test_context_reads_canonical_output_without_legacy_mapping(monkeypatch, tmp_
     _configure(monkeypatch, runtime)
     monkeypatch.setattr(job_mcp.runtime_run_routes, "get_run_final_artifact", read_final)
     workflow_ids = []
-    monkeypatch.setattr(job_mcp.runtime_job_routes, "_workflow_progress_snapshot_for_run",
-                        lambda run_id: workflow_ids.append(run_id) or {"status": "running", "steps": []})
+    monkeypatch.setattr(
+        job_mcp.runtime_job_routes,
+        "_workflow_progress_snapshot_for_run",
+        lambda run_id: workflow_ids.append(run_id) or {"status": "running", "steps": []},
+    )
 
     provider = JobContextProvider()
     context = provider.get_context("job-1")
@@ -1070,10 +1176,16 @@ def test_context_reads_canonical_output_without_legacy_mapping(monkeypatch, tmp_
     assert context["latest_run"].get("result") == {"summary": "Published review"}
     assert workflow_ids == ["public-current"]
 
-    append_human_event("output-current", "human_notice", {
-        "notice_id": "review-ready", "message": "The review is ready.",
-        "chat_delivery": "otterdesk_worker_chat",
-    }, runs_root=directory.parent)
+    append_human_event(
+        "output-current",
+        "human_notice",
+        {
+            "notice_id": "review-ready",
+            "message": "The review is ready.",
+            "chat_delivery": "otterdesk_worker_chat",
+        },
+        runs_root=directory.parent,
+    )
     activity = provider.get_next_activity("job-1")
     assert activity["event_id"] == "review-ready"
     assert activity["message"] == "The review is ready."
@@ -1092,42 +1204,58 @@ def test_context_reads_canonical_output_without_legacy_mapping(monkeypatch, tmp_
 def test_public_lifecycle_uses_runtime_receipts_and_job_scoped_operations(monkeypatch, tmp_path):
     runtime = MCPRuntime()
     _configure(monkeypatch, runtime)
-    monkeypatch.setenv('MN_HOME', str(tmp_path))
-    runtime.jobs['job-1']['latest_run_id'] = 'execution'
-    runtime.runs['job-1'] = [{'job_id': 'job-1', 'run_id': 'execution', 'runtime_run_id': 'output', 'status': 'running'}]
+    monkeypatch.setenv("MN_HOME", str(tmp_path))
+    runtime.jobs["job-1"]["latest_run_id"] = "execution"
+    runtime.runs["job-1"] = [
+        {"job_id": "job-1", "run_id": "execution", "runtime_run_id": "output", "status": "running"}
+    ]
     transitions = []
+
     def pause(run_id):
-        transitions.append(('pause', run_id))
-        runtime.runs['job-1'][0]['status'] = 'paused'
-        return json.dumps(runtime.runs['job-1'][0])
+        transitions.append(("pause", run_id))
+        runtime.runs["job-1"][0]["status"] = "paused"
+        return json.dumps(runtime.runs["job-1"][0])
+
     def resume(run_id):
-        transitions.append(('resume', run_id))
-        runtime.runs['job-1'][0]['status'] = 'running'
-        return json.dumps(runtime.runs['job-1'][0])
+        transitions.append(("resume", run_id))
+        runtime.runs["job-1"][0]["status"] = "running"
+        return json.dumps(runtime.runs["job-1"][0])
+
     def cancel(run_id):
-        transitions.append(('stop', run_id))
-        runtime.runs['job-1'][0]['status'] = 'cancelled'
-        return json.dumps(runtime.runs['job-1'][0])
+        transitions.append(("stop", run_id))
+        runtime.runs["job-1"][0]["status"] = "cancelled"
+        return json.dumps(runtime.runs["job-1"][0])
+
     runtime.pause_run, runtime.resume_run, runtime.cancel_run = pause, resume, cancel
-    runtime.jobs['job-1']['response_service'] = {'state': 'disabled'}
+    runtime.jobs["job-1"]["response_service"] = {"state": "disabled"}
     with TestClient(create_app()) as client:
+
         def call(job_id, name, **arguments):
-            response = _mcp_request(client, job_id, {'jsonrpc': '2.0', 'id': 91, 'method': 'tools/call',
-                'params': {'name': name, 'arguments': arguments}})
+            response = _mcp_request(
+                client,
+                job_id,
+                {"jsonrpc": "2.0", "id": 91, "method": "tools/call", "params": {"name": name, "arguments": arguments}},
+            )
             assert response.status_code == 200, response.text
-            return response.json()['result']['structuredContent']
+            return response.json()["result"]["structuredContent"]
+
         assert _initialize(client).status_code == 200
-        receipt = call('job-1', 'pause_run', request_id='pause', run_id='execution')
-        assert receipt['data']['status'] == 'paused'
-        assert receipt['run_id'] == 'execution'
-        assert call('job-1', 'pause_run', request_id='pause', run_id='execution') == receipt
-        assert call('job-1', 'get_operation_status', operation_id=receipt['operation_id'])['status'] == 'completed'
-        assert call('job-2', 'get_operation_status', operation_id=receipt['operation_id'])['error']['code'] == 'not_found'
-        assert call('job-2', 'resume_run', request_id='foreign', run_id='execution')['error']['code'] == 'invalid_request'
-        assert call('job-1', 'resume_run', request_id='resume', run_id='execution')['data']['status'] == 'running'
-        assert call('job-1', 'stop_run', request_id='stop', run_id='execution')['data']['status'] == 'cancelled'
-        assert transitions == [('pause', 'execution'), ('resume', 'execution'), ('stop', 'execution')]
+        receipt = call("job-1", "pause_run", request_id="pause", run_id="execution")
+        assert receipt["data"]["status"] == "paused"
+        assert receipt["run_id"] == "execution"
+        assert call("job-1", "pause_run", request_id="pause", run_id="execution") == receipt
+        assert call("job-1", "get_operation_status", operation_id=receipt["operation_id"])["status"] == "completed"
+        assert (
+            call("job-2", "get_operation_status", operation_id=receipt["operation_id"])["error"]["code"] == "not_found"
+        )
+        assert (
+            call("job-2", "resume_run", request_id="foreign", run_id="execution")["error"]["code"] == "invalid_request"
+        )
+        assert call("job-1", "resume_run", request_id="resume", run_id="execution")["data"]["status"] == "running"
+        assert call("job-1", "stop_run", request_id="stop", run_id="execution")["data"]["status"] == "cancelled"
+        assert transitions == [("pause", "execution"), ("resume", "execution"), ("stop", "execution")]
         assert runtime.queries == []
+
 
 @pytest.mark.parametrize("job_id", ["job-response", "job-agent"])
 def test_async_reply_commands_return_owner_claim_and_preserve_poll_intent(monkeypatch, job_id):
@@ -1137,20 +1265,35 @@ def test_async_reply_commands_return_owner_claim_and_preserve_poll_intent(monkey
 
     def query(job, question, **kwargs):
         if kwargs["context"].get("_mn_activity_watch"):
-            return {"schema_version": "mn.mcp.job_reply_capabilities.v1", "operation_schema": "mn.mcp.job_reply_operation.v1"}
+            return {
+                "schema_version": "mn.mcp.job_reply_capabilities.v1",
+                "operation_schema": "mn.mcp.job_reply_operation.v1",
+            }
         captured.append((job, question, kwargs))
-        return {"schema_version": "mn.mcp.job_reply_operation.v1", "status": "running",
-                "request_id": kwargs["request_id"], "operation_id": "reply-" + "a" * 64,
-                "conversation_id": "763ea7ae-2d52-4ad6-99bd-23cccf10921e", "job_id": job,
-                "blueprint_id": runtime.jobs[job]["blueprint_id"], "text": "", "response": None}
+        return {
+            "schema_version": "mn.mcp.job_reply_operation.v1",
+            "status": "running",
+            "request_id": kwargs["request_id"],
+            "operation_id": "reply-" + "a" * 64,
+            "conversation_id": "763ea7ae-2d52-4ad6-99bd-23cccf10921e",
+            "job_id": job,
+            "blueprint_id": runtime.jobs[job]["blueprint_id"],
+            "text": "",
+            "response": None,
+        }
 
     provider = JobContextProvider()
     service = provider._service()
     monkeypatch.setattr(service, "query_job_response", query)
     monkeypatch.setattr(provider, "_service", lambda: service)
-    task = {"goal": "diagnose", "state": "review", "execution_id": "run-agent" if job_id == "job-agent" else "",
-            "next_question": "Review current work."}
+    task = {
+        "goal": "diagnose",
+        "state": "review",
+        "execution_id": "run-agent" if job_id == "job-agent" else "",
+        "next_question": "Review current work.",
+    }
     import mn_api.app as app_module
+
     monkeypatch.setattr(app_module, "create_job_mcp", lambda: job_mcp.create_job_mcp(provider))
     with TestClient(create_app()) as client:
         assert _initialize(client, job_id).status_code == 200
@@ -1158,9 +1301,25 @@ def test_async_reply_commands_return_owner_claim_and_preserve_poll_intent(monkey
         ask = next(tool for tool in listed["result"]["tools"] if tool["name"] == "ask_job")
         assert {"background", "reply_action"} <= ask["inputSchema"]["properties"].keys()
         for index, action in enumerate(["start", "read"], 3):
-            response = _mcp_request(client, job_id, {"jsonrpc": "2.0", "id": index, "method": "tools/call",
-                "params": {"name": "ask_job", "arguments": {"question": "What next?", "request_id": "same-reply",
-                    "background": True, "reply_action": action, "assistance_task": task}}}).json()
+            response = _mcp_request(
+                client,
+                job_id,
+                {
+                    "jsonrpc": "2.0",
+                    "id": index,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "ask_job",
+                        "arguments": {
+                            "question": "What next?",
+                            "request_id": "same-reply",
+                            "background": True,
+                            "reply_action": action,
+                            "assistance_task": task,
+                        },
+                    },
+                },
+            ).json()
             assert response["result"]["structuredContent"]["data"]["status"] == "running"
     assert [call[2]["context"]["_mn_response_work"]["action"] for call in captured] == ["start", "read"]
     assert captured[0][2]["context"]["assistance_task"] == captured[1][2]["context"]["assistance_task"]
@@ -1172,13 +1331,17 @@ def test_async_reply_rejects_an_older_owner_before_forwarding_the_question(monke
     _configure(monkeypatch, runtime)
     provider = JobContextProvider()
     calls = []
+
     def query(job_id, question, **kwargs):
         calls.append(kwargs["context"])
         return {"schema_version": "mn.mcp.job_activity_watch.v1", "delivered": False}
+
     service = provider._service()
     monkeypatch.setattr(service, "query_job_response", query)
     monkeypatch.setattr(provider, "_service", lambda: service)
-    receipt = provider.response_work_command("job-agent", "Move to Zone A", request_id="claim", conversation_id=None, action="start")
+    receipt = provider.response_work_command(
+        "job-agent", "Move to Zone A", request_id="claim", conversation_id=None, action="start"
+    )
     assert receipt == {"schema_version": "mn.mcp.job_reply_capabilities.v1", "operation_schema": None}
     assert calls == [{"_mn_activity_watch": {"reply_work_capability": True, "wait_seconds": 0}}]
 
@@ -1186,14 +1349,19 @@ def test_async_reply_rejects_an_older_owner_before_forwarding_the_question(monke
 @pytest.mark.parametrize("code", ["UNAVAILABLE", "DEADLINE_EXCEEDED"])
 def test_async_reply_relay_loss_is_observation_unavailability(monkeypatch, code):
     import grpc
+
     runtime = MCPRuntime()
     _configure(monkeypatch, runtime)
+
     class RelayError(grpc.RpcError):
         def code(self):
             return getattr(grpc.StatusCode, code)
+
     provider = JobContextProvider()
     service = provider._service()
     monkeypatch.setattr(service, "query_job_response", lambda *_args, **_kwargs: (_ for _ in ()).throw(RelayError()))
     monkeypatch.setattr(provider, "_service", lambda: service)
-    result = provider.response_work_command("job-response", "What next?", conversation_id=None, request_id="same", action="read")
+    result = provider.response_work_command(
+        "job-response", "What next?", conversation_id=None, request_id="same", action="read"
+    )
     assert result == {"schema_version": "mn.mcp.job_reply_observation.v1", "state": "unavailable"}

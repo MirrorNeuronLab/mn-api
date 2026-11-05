@@ -9,9 +9,12 @@ from mn_api.routes import models
 
 
 def test_parse_model_list_accepts_json_and_text_formats():
-    assert models._parse_model_list('[{"name": "nemotron-3.5-bolt-e4b:q4_k_m", "tags": ["latest"]}]') == {"nemotron-3.5-bolt-e4b:q4_k_m", "latest"}
+    assert models._parse_model_list('[{"name": "nemotron-3.5-bolt-e4b:q4_k_m", "tags": ["latest"]}]') == {
+        "nemotron-3.5-bolt-e4b:q4_k_m",
+        "latest",
+    }
     assert models._parse_model_list('{"models": [{"model": "ai/qwen3"}]}') == {"ai/qwen3"}
-    assert models._parse_model_list('NAME ID\nai/small abc\n') == {"ai/small"}
+    assert models._parse_model_list("NAME ID\nai/small abc\n") == {"ai/small"}
     assert models._parse_model_list('{"name": "single"}') == {"single"}
     assert models._parse_model_list("") == set()
 
@@ -55,22 +58,32 @@ def test_local_node_name_prefers_self_then_named_node(monkeypatch):
     monkeypatch.setattr(
         state,
         "client",
-        SimpleNamespace(get_system_summary=lambda: json.dumps({"nodes": [{"name": "n1"}, {"name": "self", "self": True}]})),
+        SimpleNamespace(
+            get_system_summary=lambda: json.dumps({"nodes": [{"name": "n1"}, {"name": "self", "self": True}]})
+        ),
     )
     assert models._local_node_name() == "self"
 
-    monkeypatch.setattr(state, "client", SimpleNamespace(get_system_summary=lambda: json.dumps({"nodes": [{"name": "n1"}]})))
+    monkeypatch.setattr(
+        state, "client", SimpleNamespace(get_system_summary=lambda: json.dumps({"nodes": [{"name": "n1"}]}))
+    )
     assert models._local_node_name() == "n1"
 
-    monkeypatch.setattr(state, "client", SimpleNamespace(get_system_summary=lambda: (_ for _ in ()).throw(RuntimeError("down"))))
+    monkeypatch.setattr(
+        state, "client", SimpleNamespace(get_system_summary=lambda: (_ for _ in ()).throw(RuntimeError("down")))
+    )
     assert models._local_node_name() == "local"
 
 
 def test_resolve_entry_or_external_matches_installed_alias(monkeypatch):
-    monkeypatch.setattr("mn_api.routes.models.resolve_model_entry", lambda model, catalog=None: (_ for _ in ()).throw(KeyError(model)))
+    monkeypatch.setattr(
+        "mn_api.routes.models.resolve_model_entry", lambda model, catalog=None: (_ for _ in ()).throw(KeyError(model))
+    )
     monkeypatch.setattr(
         "mn_api.routes.models.merge_catalog_and_installed_models",
-        lambda catalog=None, installed_models=None: [{"id": "bolt", "model": "nemotron-3.5-bolt-e4b:q4_k_m", "api_model": "bolt"}],
+        lambda catalog=None, installed_models=None: [
+            {"id": "bolt", "model": "nemotron-3.5-bolt-e4b:q4_k_m", "api_model": "bolt"}
+        ],
     )
 
     resolved = models._resolve_entry_or_external("bolt", catalog={}, installed_models={"nemotron-3.5-bolt-e4b:q4_k_m"})

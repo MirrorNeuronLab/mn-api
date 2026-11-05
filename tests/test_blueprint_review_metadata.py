@@ -13,18 +13,33 @@ from mn_api.routes.v1 import blueprints
 
 
 @pytest.mark.parametrize("air_gapped", [True, False])
-@pytest.mark.parametrize("skills", [[], [{"name": "mirrorneuron-video-analysis", "version": ">=1.3,<2", "source": "gar"}]])
+@pytest.mark.parametrize(
+    "skills", [[], [{"name": "mirrorneuron-video-analysis", "version": ">=1.3,<2", "source": "gar"}]]
+)
 def test_blueprint_list_and_detail_expose_review_metadata(monkeypatch, tmp_path, skills, air_gapped):
-    write_blueprint_definition(tmp_path / "watch", {
-        "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "watch",
-        "name": "Watch", "description": "Watch for changes.",
-        "workflow": {"steps": [{"id": "finish"}]}, "agents": {}, "runtime": {}, "contract": {},
-        "skill_dependencies": skills, "air-gapped": air_gapped,
-    })
+    write_blueprint_definition(
+        tmp_path / "watch",
+        {
+            "apiVersion": "mn.workflow/v1",
+            "kind": "Workflow",
+            "id": "watch",
+            "name": "Watch",
+            "description": "Watch for changes.",
+            "workflow": {"steps": [{"id": "finish"}]},
+            "agents": {},
+            "runtime": {},
+            "contract": {},
+            "skill_dependencies": skills,
+            "air-gapped": air_gapped,
+        },
+    )
     (tmp_path / "index.json").write_text(json.dumps(["watch"]))
     config = SimpleNamespace(
-        api_token="", request_size_limit_bytes=1024 * 1024, cors_allow_origins=[],
-        blueprint_source="local", blueprint_local=str(tmp_path),
+        api_token="",
+        request_size_limit_bytes=1024 * 1024,
+        cors_allow_origins=[],
+        blueprint_source="local",
+        blueprint_local=str(tmp_path),
     )
     monkeypatch.setattr(state, "config", config)
     monkeypatch.setattr(blueprints, "_config", lambda: config)

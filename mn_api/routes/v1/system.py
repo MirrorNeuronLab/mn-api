@@ -47,7 +47,9 @@ def runtime_health(timeout: float = 3.0, _principal=Depends(require_auth)):
     return public_value(legacy_system.runtime_health(timeout=timeout, _auth=_principal))
 
 
-@router.get("/runtime/diagnostics", operation_id="get_runtime_diagnostics", tags=["runtime"], response_model=ResourceModel)
+@router.get(
+    "/runtime/diagnostics", operation_id="get_runtime_diagnostics", tags=["runtime"], response_model=ResourceModel
+)
 def runtime_diagnostics(timeout: float = 3.0, _principal=Depends(require_auth)):
     return public_value(legacy_system.runtime_doctor(timeout=timeout, _auth=_principal))
 
@@ -57,7 +59,9 @@ def runtime_resources(_principal=Depends(require_auth)):
     return public_value(legacy_system.get_resource(_auth=_principal))
 
 
-@router.put("/runtime/resources", operation_id="replace_runtime_resources", tags=["runtime"], response_model=ResourceModel)
+@router.put(
+    "/runtime/resources", operation_id="replace_runtime_resources", tags=["runtime"], response_model=ResourceModel
+)
 def replace_runtime_resources(request: RuntimeResources, _principal=Depends(require_auth)):
     return public_value(RuntimeService(state.client).set_resource(request.model_dump(exclude_none=True)))
 
@@ -96,7 +100,13 @@ def nodes(
     )
 
 
-@router.post("/nodes", status_code=status.HTTP_201_CREATED, operation_id="create_node", tags=["nodes"], response_model=ResourceModel)
+@router.post(
+    "/nodes",
+    status_code=status.HTTP_201_CREATED,
+    operation_id="create_node",
+    tags=["nodes"],
+    response_model=ResourceModel,
+)
 def create_node(request: NodeCreate, response: Response, _principal=Depends(require_auth)):
     result = legacy_system.add_cluster_node(ClusterNodeAddRequest(**request.model_dump()), _auth=_principal)
     node_id = str(result.get("node_name") or "") if isinstance(result, dict) else ""
@@ -110,7 +120,9 @@ def delete_node(node_id: str, _principal=Depends(require_auth)):
     return {"node_name": node_id, "status": state.client.remove_federated_peer(node_id)}
 
 
-@router.put("/nodes/{node_id}/drain", status_code=status.HTTP_202_ACCEPTED, operation_id="create_node_drain", tags=["nodes"])
+@router.put(
+    "/nodes/{node_id}/drain", status_code=status.HTTP_202_ACCEPTED, operation_id="create_node_drain", tags=["nodes"]
+)
 def create_node_drain(node_id: str, request: NodeDrain, _principal=Depends(require_auth)):
     operation = start_operation("drain_node", {"node": node_id, **request.model_dump()})
     return resource_response(
@@ -120,7 +132,9 @@ def create_node_drain(node_id: str, request: NodeDrain, _principal=Depends(requi
     )
 
 
-@router.delete("/nodes/{node_id}/drain", status_code=status.HTTP_204_NO_CONTENT, operation_id="delete_node_drain", tags=["nodes"])
+@router.delete(
+    "/nodes/{node_id}/drain", status_code=status.HTTP_204_NO_CONTENT, operation_id="delete_node_drain", tags=["nodes"]
+)
 def delete_node_drain(node_id: str, _principal=Depends(require_auth)):
     RuntimeService(state.client).undrain_node(node_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

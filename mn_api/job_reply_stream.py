@@ -1,4 +1,5 @@
 """Opt-in visible answer streaming; final tool response remains unchanged."""
+
 import json
 import time
 import uuid
@@ -13,11 +14,17 @@ async def stream_job_reply(provider, job_id, question, conversation_id, request_
     deadline = time.monotonic() + 90
 
     async def command(action):
-        return await anyio.to_thread.run_sync(lambda: provider.response_stream_command(
-            job_id, question, conversation_id=conversation_id, request_id=request_id,
-            control={"action": action, "cursor": cursor},
-            **({"assistance_task": assistance_task} if assistance_task is not None else {}),
-        ), abandon_on_cancel=True)
+        return await anyio.to_thread.run_sync(
+            lambda: provider.response_stream_command(
+                job_id,
+                question,
+                conversation_id=conversation_id,
+                request_id=request_id,
+                control={"action": action, "cursor": cursor},
+                **({"assistance_task": assistance_task} if assistance_task is not None else {}),
+            ),
+            abandon_on_cancel=True,
+        )
 
     try:
         part = await command("start")
@@ -30,16 +37,28 @@ async def stream_job_reply(provider, job_id, question, conversation_id, request_
                 raise ValueError("Response stream interrupted")
             delta = part.get("delta")
             next_cursor = part.get("cursor")
-            if (not isinstance(delta, str) or len(delta.encode("utf-8")) > 4000
-                    or not isinstance(next_cursor, int) or next_cursor != cursor + len(delta)
-                    or next_cursor > 12000):
+            if (
+                not isinstance(delta, str)
+                or len(delta.encode("utf-8")) > 4000
+                or not isinstance(next_cursor, int)
+                or next_cursor != cursor + len(delta)
+                or next_cursor > 12000
+            ):
                 raise ValueError("Invalid response stream event")
             if delta:
                 sequence += 1
-                await ctx.report_progress(sequence, message=json.dumps({
-                    "schema_version": "mn.mcp.job_answer_delta.v1",
-                    "request_id": request_id, "sequence": sequence, "delta": delta,
-                }, separators=(",", ":")))
+                await ctx.report_progress(
+                    sequence,
+                    message=json.dumps(
+                        {
+                            "schema_version": "mn.mcp.job_answer_delta.v1",
+                            "request_id": request_id,
+                            "sequence": sequence,
+                            "delta": delta,
+                        },
+                        separators=(",", ":"),
+                    ),
+                )
             cursor = next_cursor
             if part.get("done"):
                 result = part.get("response")

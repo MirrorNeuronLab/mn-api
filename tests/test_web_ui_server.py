@@ -13,7 +13,7 @@ from mn_api.web_ui_server import create_app
 def test_health_reports_dist_dir(tmp_path: Path):
     dist = tmp_path / "dist"
     dist.mkdir()
-    (dist / "index.html").write_text("<div id=\"root\"></div>", encoding="utf-8")
+    (dist / "index.html").write_text('<div id="root"></div>', encoding="utf-8")
 
     client = TestClient(create_app(dist_dir=dist, api_url="http://api.local/api/v1"))
 

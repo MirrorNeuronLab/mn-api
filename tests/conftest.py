@@ -73,12 +73,14 @@ class FakeRuntimeClient:
 
     def deploy_job(self, manifest_json, payloads, deployment_key="", policy=None, update_policy=None, wait=False):
         self.calls.append(("deploy_job", manifest_json, payloads, deployment_key, policy or update_policy, wait))
-        return json.dumps({
-            "deployment_id": "dep-1",
-            "deployment_key": deployment_key,
-            "job_id": "job-1",
-            "status": "running",
-        })
+        return json.dumps(
+            {
+                "deployment_id": "dep-1",
+                "deployment_key": deployment_key,
+                "job_id": "job-1",
+                "status": "running",
+            }
+        )
 
     def list_deployments(self, **query):
         self.calls.append(("list_deployments", query))
@@ -94,7 +96,9 @@ class FakeRuntimeClient:
 
     def rollback_deployment(self, id_or_key, version="", tag="", reason=""):
         self.calls.append(("rollback_deployment", id_or_key, version, tag, reason))
-        return json.dumps({"deployment_id": id_or_key, "status": "rolled_back", "version": version, "tag": tag, "reason": reason})
+        return json.dumps(
+            {"deployment_id": id_or_key, "status": "rolled_back", "version": version, "tag": tag, "reason": reason}
+        )
 
     def pause_deployment(self, id_or_key, reason=""):
         self.calls.append(("pause_deployment", id_or_key, reason))
@@ -122,10 +126,10 @@ class FakeRuntimeClient:
         ignore_system_jobs=True,
         wait=False,
     ):
-        self.calls.append(
-            ("drain_node", node_name, reason, deadline, deadline_ms, dry_run, ignore_system_jobs, wait)
+        self.calls.append(("drain_node", node_name, reason, deadline, deadline_ms, dry_run, ignore_system_jobs, wait))
+        return json.dumps(
+            {"node": node_name, "status": "dry_run" if dry_run else "started", "deadline_ms": deadline_ms}
         )
-        return json.dumps({"node": node_name, "status": "dry_run" if dry_run else "started", "deadline_ms": deadline_ms})
 
     def undrain_node(self, node_name, reason="", mark_eligible=False):
         self.calls.append(("undrain_node", node_name, reason, mark_eligible))
@@ -148,9 +152,7 @@ class FakeRuntimeClient:
         return json.dumps({"ok": True, "resource": payload})
 
     def list_jobs(self, *, include_archived=False, page_size=50, page_token=""):
-        self.calls.append(
-            ("list_jobs", include_archived, page_size, page_token)
-        )
+        self.calls.append(("list_jobs", include_archived, page_size, page_token))
         return json.dumps(self.jobs_payload)
 
 

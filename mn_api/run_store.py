@@ -45,7 +45,11 @@ def shared_result_events(job_id: str, run_id: str, *, limit: int = 5000) -> list
             continue
         for event in read_jsonl_file(events_path, limit=limit):
             payload = event.get("payload") if isinstance(event, dict) else None
-            if event.get("type") == "run_result_available" and isinstance(payload, dict) and payload.get("run_id") == run_id:
+            if (
+                event.get("type") == "run_result_available"
+                and isinstance(payload, dict)
+                and payload.get("run_id") == run_id
+            ):
                 results.append(event)
     return results[-limit:]
 

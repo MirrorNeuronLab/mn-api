@@ -33,14 +33,20 @@ def public_validation_issues(validation: dict) -> list[dict]:
             issue = {"code": "validation_failed", "message": issue}
         if not isinstance(issue, dict):
             continue
-        public = {key: _public_text(issue[key]) for key in ("code", "message", "help", "field", "severity")
-                  if isinstance(issue.get(key), str)}
+        public = {
+            key: _public_text(issue[key])
+            for key in ("code", "message", "help", "field", "severity")
+            if isinstance(issue.get(key), str)
+        }
         if issue.get("code") == "validator.command_failed":
             public["message"] = "The input validator failed. Check its dependencies and input configuration."
         for key, fields in (("location", ("source", "path")), ("rule", ("name", "type"))):
             if isinstance(issue.get(key), dict):
-                public[key] = {field: _public_text(issue[key][field], 120) for field in fields
-                               if isinstance(issue[key].get(field), str)}
+                public[key] = {
+                    field: _public_text(issue[key][field], 120)
+                    for field in fields
+                    if isinstance(issue[key].get(field), str)
+                }
         result.append(public)
     return result
 
@@ -57,7 +63,6 @@ def http_exception_problem(exc: HTTPException) -> dict:
         "retryable": exc.status_code in {408, 425, 429} or exc.status_code >= 500,
         **({"errors": public_validation_issues(validation)} if validation is not None else {}),
     }
-
 
 
 def problem_response(
@@ -112,7 +117,9 @@ def validation_problem_response(
     )
 
 
-def app_error_response(app_error: AppError, *, request: Request | None = None, context: Mapping[str, Any] | None = None):
+def app_error_response(
+    app_error: AppError, *, request: Request | None = None, context: Mapping[str, Any] | None = None
+):
     request_id = _request_id(request)
     extra = {"problem_code": app_error.problem_code, "category": app_error.category, "retryable": app_error.retryable}
     if app_error.hint:
@@ -124,7 +131,11 @@ def app_error_response(app_error: AppError, *, request: Request | None = None, c
         extra["details"] = {"blockers": sanitize_context(app_error.details)["blockers"]}
     headers = {}
     if app_error.details and "accepted" in app_error.details:
-        details = {key: app_error.details[key] for key in ("accepted", "scope", "request_id", "command_id", "retry_after_ms") if key in app_error.details}
+        details = {
+            key: app_error.details[key]
+            for key in ("accepted", "scope", "request_id", "command_id", "retry_after_ms")
+            if key in app_error.details
+        }
         extra["details"] = details
         retry_ms = details.get("retry_after_ms")
         if isinstance(retry_ms, int) and retry_ms > 0:
@@ -232,19 +243,26 @@ def _http_problem_identity(status_code: int) -> tuple[str, str]:
 
 
 def _request_context(request: Request) -> dict[str, Any]:
-    return {"route": getattr(request.scope.get("route"), "path", ""),
-            "request_id": _request_id(request), "run_id": request.path_params.get("run_id")}
+    return {
+        "route": getattr(request.scope.get("route"), "path", ""),
+        "request_id": _request_id(request),
+        "run_id": request.path_params.get("run_id"),
+    }
 
 
 def _log_exception(error: Exception, app_error: AppError, context: Mapping[str, Any] | None = None) -> None:
     # Log the route template and a bounded correlation ID. Raw paths, queries,
     # exception strings and tracebacks can all contain private blueprint input.
     context = context or {}
+
     def identifier(value):
         return value if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", value) else ""
+
     state.logger.error(
         "API request failed error_code=%s category=%s operation=%s run_id=%s request_id=%s",
-        identifier(app_error.code) or "unknown", app_error.category,
+        identifier(app_error.code) or "unknown",
+        app_error.category,
         str(context.get("route") or context.get("handler") or "")[:160],
-        identifier(context.get("run_id")), identifier(context.get("request_id")),
+        identifier(context.get("run_id")),
+        identifier(context.get("request_id")),
     )

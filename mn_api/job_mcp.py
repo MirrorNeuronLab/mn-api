@@ -66,6 +66,7 @@ LOGGER = logging.getLogger(__name__)
 
 class AssistanceTask(BaseModel):
     """Desktop-owned intent; operational facts and authorization stay runtime-owned."""
+
     model_config = ConfigDict(extra="forbid", strict=True)
     goal: Literal["setup", "respond", "diagnose", "review", "schedule", "use_own_data"]
     state: Literal["guiding", "collecting", "review", "saving", "completed", "failed"]
@@ -151,11 +152,7 @@ def safe_context_value(value: Any, *, depth: int = 0) -> Any:
 
 
 def _response_descriptor(blueprint: Mapping[str, Any]) -> dict[str, Any]:
-    descriptor = (
-        blueprint.get("response_service")
-        if isinstance(blueprint.get("response_service"), Mapping)
-        else {}
-    )
+    descriptor = blueprint.get("response_service") if isinstance(blueprint.get("response_service"), Mapping) else {}
     return {
         "goal_id": _first_text(descriptor.get("goal_id")) or None,
         "activity_mcp": bool((blueprint.get("mcp") or {}).get("activity")),
@@ -273,11 +270,7 @@ def _recent_run_records(service: RuntimeService, job: Mapping[str, Any], job_id:
     listed = decode(service.list_runs(job_id, page_size=MAX_RECENT_RUNS, page_token=""))
     listed_record = listed if isinstance(listed, Mapping) else {}
     raw_items = next(
-        (
-            listed_record.get(key)
-            for key in ("items", "runs", "data")
-            if isinstance(listed_record.get(key), list)
-        ),
+        (listed_record.get(key) for key in ("items", "runs", "data") if isinstance(listed_record.get(key), list)),
         listed if isinstance(listed, list) else [],
     )
     run_items = [dict(item) for item in raw_items if isinstance(item, Mapping)][:MAX_RECENT_RUNS]
@@ -285,12 +278,15 @@ def _recent_run_records(service: RuntimeService, job: Mapping[str, Any], job_id:
     if latest_run_id:
         # Core's collection is oldest first. The Job owns current-run identity;
         # reusing a listed record avoids an additional GetRun request.
-        latest = next((item for item in run_items
-                       if _first_text(item.get("run_id"), item.get("id")) == latest_run_id), None)
+        latest = next(
+            (item for item in run_items if _first_text(item.get("run_id"), item.get("id")) == latest_run_id), None
+        )
         if latest is None:
             latest = _as_record(service.get_run(latest_run_id))
-        run_items = [latest, *[item for item in run_items
-                              if _first_text(item.get("run_id"), item.get("id")) != latest_run_id]]
+        run_items = [
+            latest,
+            *[item for item in run_items if _first_text(item.get("run_id"), item.get("id")) != latest_run_id],
+        ]
     return [item for item in run_items if item][:MAX_RECENT_RUNS]
 
 
@@ -345,7 +341,9 @@ def _evidence_from_workflow(workflow: Mapping[str, Any], limit: int) -> list[dic
 
 
 def _active_schedule(schedules: list[dict[str, Any]]) -> bool:
-    return any(_first_text(item.get("status"), item.get("state")).lower() in _ACTIVE_SCHEDULE_STATUSES for item in schedules)
+    return any(
+        _first_text(item.get("status"), item.get("state")).lower() in _ACTIVE_SCHEDULE_STATUSES for item in schedules
+    )
 
 
 def context_state(job: Mapping[str, Any], latest_run: Mapping[str, Any] | None, schedules: list[dict[str, Any]]) -> str:
@@ -452,7 +450,11 @@ class JobContextProvider:
                 _repo_root, blueprint = find_blueprint(state.refresh_config_from_env(), blueprint_id)
             except Exception as error:
                 if job.get("mcp"):
-                    blueprint = {"id": blueprint_id, "name": job.get("display_name") or blueprint_id, "response_service": {"enabled": False}}
+                    blueprint = {
+                        "id": blueprint_id,
+                        "name": job.get("display_name") or blueprint_id,
+                        "response_service": {"enabled": False},
+                    }
                 elif _is_not_found_error(error):
                     raise JobMCPNotFoundError("The requested job MCP is unavailable.") from error
                 else:
@@ -519,12 +521,11 @@ class JobContextProvider:
             fingerprint = json.dumps(
                 {
                     "job": _job_context_fingerprint(job),
-                    "blueprint_id": blueprint.get("id") or _first_text(
-                        (
-                            blueprint.get("metadata")
-                            if isinstance(blueprint.get("metadata"), Mapping)
-                            else {}
-                        ).get("blueprint_id")
+                    "blueprint_id": blueprint.get("id")
+                    or _first_text(
+                        (blueprint.get("metadata") if isinstance(blueprint.get("metadata"), Mapping) else {}).get(
+                            "blueprint_id"
+                        )
                     ),
                     "blueprint_version": blueprint.get("version"),
                     "response_service": blueprint.get("response_service"),
@@ -551,28 +552,32 @@ class JobContextProvider:
         identity = _identity(job_id, blueprint_id, descriptor)
         return {
             "identity": identity,
-            "name": _safe_text(_first_text(
-                job.get("display_name"),
-                _blueprint_field(blueprint, "name"),
-                job.get("job_name"),
-                blueprint_id,
-            )),
-            "mission": _safe_text(_first_text(
-                _blueprint_field(
-                    blueprint,
-                    "mission",
-                    "business_goal",
-                    "businessGoal",
-                    "description",
-                    "summary",
-                    "tagline",
+            "name": _safe_text(
+                _first_text(
+                    job.get("display_name"),
+                    _blueprint_field(blueprint, "name"),
+                    job.get("job_name"),
+                    blueprint_id,
                 )
-            )),
+            ),
+            "mission": _safe_text(
+                _first_text(
+                    _blueprint_field(
+                        blueprint,
+                        "mission",
+                        "business_goal",
+                        "businessGoal",
+                        "description",
+                        "summary",
+                        "tagline",
+                    )
+                )
+            ),
             "type": _safe_text(_blueprint_field(blueprint, "type"), limit=40),
             "capabilities": safe_context_value(_blueprint_field(blueprint, "capabilities") or []),
-            "expected_output": _safe_text(_first_text(
-                _blueprint_field(blueprint, "output", "expected_output", "expectedOutput")
-            )),
+            "expected_output": _safe_text(
+                _first_text(_blueprint_field(blueprint, "output", "expected_output", "expectedOutput"))
+            ),
             "configuration": safe_context_value(
                 job.get("resolved_configuration") or job.get("resolvedConfiguration") or {}
             ),
@@ -727,7 +732,10 @@ class JobContextProvider:
                         "record_id": "final-result",
                         "summary": "The latest run produced a final result.",
                         "publication_state": "final",
-                        "published_at": _first_text(latest.get("completed_at"), latest.get("finished_at"), latest.get("updated_at")) or None,
+                        "published_at": _first_text(
+                            latest.get("completed_at"), latest.get("finished_at"), latest.get("updated_at")
+                        )
+                        or None,
                     }
                 )
             except Exception as error:
@@ -856,14 +864,39 @@ class JobContextProvider:
         context = self.get_context(job_id, evidence_limit=1)
         return {
             key: context[key]
-            for key in ("schema_version", "fetched_at", "freshness", "identity", "state", "read_only", "response_service", "profile", "schedules", "warnings", "truncation")
+            for key in (
+                "schema_version",
+                "fetched_at",
+                "freshness",
+                "identity",
+                "state",
+                "read_only",
+                "response_service",
+                "profile",
+                "schedules",
+                "warnings",
+                "truncation",
+            )
         }
 
     def get_latest_run(self, job_id: str) -> dict[str, Any]:
         context = self.get_context(job_id)
         return {
             key: context[key]
-            for key in ("schema_version", "fetched_at", "freshness", "identity", "state", "read_only", "response_service", "latest_run", "recent_runs", "evidence", "warnings", "truncation")
+            for key in (
+                "schema_version",
+                "fetched_at",
+                "freshness",
+                "identity",
+                "state",
+                "read_only",
+                "response_service",
+                "latest_run",
+                "recent_runs",
+                "evidence",
+                "warnings",
+                "truncation",
+            )
         }
 
     def get_run_results(self, job_id: str, run_id: str) -> dict[str, Any]:
@@ -886,15 +919,24 @@ class JobContextProvider:
         """The durable interaction ID is also the MCP elicitation identity."""
         from mn_sdk.interactions import InteractionClient
         from mn_api import state
-        pending = [record for record in InteractionClient(state.get_client()).snapshot()["items"]
-                   if record["scope"].get("job_id") == job_id and record["state"] == "pending"
-                   and record["kind"] in {"approval", "choice", "input"}]
+
+        pending = [
+            record
+            for record in InteractionClient(state.get_client()).snapshot()["items"]
+            if record["scope"].get("job_id") == job_id
+            and record["state"] == "pending"
+            and record["kind"] in {"approval", "choice", "input"}
+        ]
         if not pending:
             return None
         record = min(pending, key=lambda value: value["created_at"])
-        return {"request_id": record["id"], "prompt": record["presentation"]["title"],
-                "options": [option["id"] for option in record["options"]],
-                "decision_type": record["kind"], "runtime_run_id": record["scope"].get("execution_id")}
+        return {
+            "request_id": record["id"],
+            "prompt": record["presentation"]["title"],
+            "options": [option["id"] for option in record["options"]],
+            "decision_type": record["kind"],
+            "runtime_run_id": record["scope"].get("execution_id"),
+        }
 
     def get_next_activity(
         self,
@@ -945,9 +987,12 @@ class JobContextProvider:
                 payload.get("observed_at") or raw_event.get("ts") or raw_event.get("timestamp"),
                 limit=80,
             )
-            event_id = notice_id or hashlib.sha256(
-                f"{snapshot.output_run_id}\0{occurred_at}\0{message}".encode("utf-8")
-            ).hexdigest()[:32]
+            event_id = (
+                notice_id
+                or hashlib.sha256(f"{snapshot.output_run_id}\0{occurred_at}\0{message}".encode("utf-8")).hexdigest()[
+                    :32
+                ]
+            )
             activities.append(
                 {
                     "event_id": event_id,
@@ -983,9 +1028,7 @@ class JobContextProvider:
         relay_context["_active_service_run_id"] = active_service_run_id
         relay_context["_mn_activity_watch"] = {
             "after_event_id": _safe_text(after_event_id, limit=256),
-            "wait_seconds": min(
-                max(float(wait_seconds or 0), 0.0), _ACTIVITY_MAX_WAIT_SECONDS
-            ),
+            "wait_seconds": min(max(float(wait_seconds or 0), 0.0), _ACTIVITY_MAX_WAIT_SECONDS),
         }
         try:
             response = self._service().query_job_response(
@@ -1009,6 +1052,7 @@ class JobContextProvider:
     def record_pending_human_response(self, job_id: str, request_id: str, response: str) -> dict[str, Any]:
         from mn_sdk.interactions import InteractionClient
         from mn_api import state
+
         interactions = InteractionClient(state.get_client())
         record = interactions.get(request_id)
         if record["scope"].get("job_id") != job_id:
@@ -1020,8 +1064,9 @@ class JobContextProvider:
             if any(receipt.get(key) != value for key, value in answer.items()):
                 raise ValueError("The request already received a different decision.")
             return record
-        return interactions.respond(request_id, expected_revision=record["revision"],
-                                    command_id="mcp-" + request_id, answer=answer)
+        return interactions.respond(
+            request_id, expected_revision=record["revision"], command_id="mcp-" + request_id, answer=answer
+        )
 
     def ask_job(
         self,
@@ -1103,10 +1148,17 @@ class JobContextProvider:
         base = self._base_snapshot(job_id)
         if not base.descriptor.get("response_enabled") or base.descriptor.get("response_agent_enabled"):
             raise JobMCPNotFoundError("Streaming requires a read-only response service.")
-        context = _attach_assistance(self._context_for_request(job_id)[0], assistance_task) if control["action"] == "start" else {}
+        context = (
+            _attach_assistance(self._context_for_request(job_id)[0], assistance_task)
+            if control["action"] == "start"
+            else {}
+        )
         return self._service().query_job_response(
-            job_id, question, context={**context, "_mn_response_stream": control},
-            conversation_id=conversation_id or "", request_id=request_id,
+            job_id,
+            question,
+            context={**context, "_mn_response_stream": control},
+            conversation_id=conversation_id or "",
+            request_id=request_id,
         )
 
     def get_job_turn(self, job_id: str, turn_id: str) -> dict[str, Any]:
@@ -1132,9 +1184,15 @@ class JobContextProvider:
         # The existing activity-watch control is read-only, including on an
         # older owner. Probe it before sending a new control that an older
         # engine could otherwise ignore and treat as an ordinary question.
-        capabilities = _reply_rpc(lambda: service.query_job_response(job_id, "Reply operation capabilities",
-            context={"_mn_activity_watch": {"reply_work_capability": True, "wait_seconds": 0}},
-            conversation_id="", request_id=""))
+        capabilities = _reply_rpc(
+            lambda: service.query_job_response(
+                job_id,
+                "Reply operation capabilities",
+                context={"_mn_activity_watch": {"reply_work_capability": True, "wait_seconds": 0}},
+                conversation_id="",
+                request_id="",
+            )
+        )
         if capabilities.get("schema_version") == "mn.mcp.job_reply_observation.v1":
             return capabilities
         if capabilities.get("operation_schema") != "mn.mcp.job_reply_operation.v1":
@@ -1145,14 +1203,22 @@ class JobContextProvider:
         else:
             # Poll the original claim even if its run has since changed. The
             # owner checks this intent against the saved request fingerprint.
-            task = normalize_assistance_task(assistance_task.model_dump() if isinstance(assistance_task, AssistanceTask) else assistance_task)
+            task = normalize_assistance_task(
+                assistance_task.model_dump() if isinstance(assistance_task, AssistanceTask) else assistance_task
+            )
             if task is not None:
                 context["assistance_task"] = task
         if base.descriptor.get("response_agent_enabled") and snapshot is not None and snapshot.active_service_run_id:
             context["_active_service_run_id"] = snapshot.active_service_run_id
-        result = _reply_rpc(lambda: service.query_job_response(job_id, question,
-            context={**context, "_mn_response_work": {"action": action}},
-            conversation_id=conversation_id or "", request_id=request_id))
+        result = _reply_rpc(
+            lambda: service.query_job_response(
+                job_id,
+                question,
+                context={**context, "_mn_response_work": {"action": action}},
+                conversation_id=conversation_id or "",
+                request_id=request_id,
+            )
+        )
         if result.get("schema_version") == "mn.mcp.job_reply_observation.v1":
             return result
         if result.get("schema_version") != "mn.mcp.job_reply_operation.v1":
@@ -1178,10 +1244,15 @@ class JobMCPGuard:
         scheme, _, bearer = authorization.partition(" ")
         expected = str(state.config.api_token or "")
         owner = scheme.lower() == "bearer" and bool(expected) and hmac.compare_digest(bearer, expected)
-        authority = 'internal' if owner else None
+        authority = "internal" if owner else None
         if not owner:
             from mn_api.mcp_access import ConnectionStore
-            authority = await anyio.to_thread.run_sync(lambda: ConnectionStore().authority(job_id, bearer)) if scheme.lower() == 'bearer' else None
+
+            authority = (
+                await anyio.to_thread.run_sync(lambda: ConnectionStore().authority(job_id, bearer))
+                if scheme.lower() == "bearer"
+                else None
+            )
             if authority is None:
                 response = problem_response(
                     status_code=401,
@@ -1192,10 +1263,13 @@ class JobMCPGuard:
                     request_id=str(getattr(request.state, "request_id", "")),
                 )
                 from mn_api.mcp_oauth import issuer
+
                 policy = await anyio.to_thread.run_sync(lambda: ConnectionStore().policy(job_id))
                 server_url = policy["server_url"] or str(request.base_url).rstrip("/") + f"/api/v1/jobs/{job_id}/mcp"
                 origin = issuer(server_url).removesuffix("/api/v1/mcp/oauth")
-                response.headers["WWW-Authenticate"] = f'Bearer resource_metadata="{origin}/.well-known/oauth-protected-resource/api/v1/jobs/{job_id}/mcp"'
+                response.headers["WWW-Authenticate"] = (
+                    f'Bearer resource_metadata="{origin}/.well-known/oauth-protected-resource/api/v1/jobs/{job_id}/mcp"'
+                )
                 await response(scope, receive, send)
                 return
 
@@ -1225,27 +1299,40 @@ class JobMCPGuard:
             return
 
         from mn_api.job_mcp_routing import BINDING_HEADER, EXTERNAL_HEADER, owner_mcp_response
+
         try:
             peer_response, binding = await owner_mcp_response(job_id, request, authority)
         except HTTPException as error:
-            await problem_response(status_code=error.status_code, error="job_mcp_unavailable",
-                title="Co-worker connection unavailable", detail=str(error.detail),
-                instance=request.url.path, request_id=str(getattr(request.state, "request_id", "")))(scope, receive, send)
+            await problem_response(
+                status_code=error.status_code,
+                error="job_mcp_unavailable",
+                title="Co-worker connection unavailable",
+                detail=str(error.detail),
+                instance=request.url.path,
+                request_id=str(getattr(request.state, "request_id", "")),
+            )(scope, receive, send)
             return
         if peer_response is not None:
             await peer_response(scope, receive, send)
             return
         if binding:
             original_send = send
+
             async def confirm_binding(message):
                 if message["type"] == "http.response.start":
-                    message = {**message, "headers": [*message.get("headers", []),
-                        (BINDING_HEADER.lower().encode(), binding.encode())]}
+                    message = {
+                        **message,
+                        "headers": [*message.get("headers", []), (BINDING_HEADER.lower().encode(), binding.encode())],
+                    }
                 await original_send(message)
+
             send = confirm_binding
         token = _current_job_id.set(job_id)
         from mn_api.job_supervision import native_launch_authority
-        authority_token = native_launch_authority.set(authority == 'internal' and request.headers.get(EXTERNAL_HEADER) != '1')
+
+        authority_token = native_launch_authority.set(
+            authority == "internal" and request.headers.get(EXTERNAL_HEADER) != "1"
+        )
         try:
             selected_app = {
                 "agent": self.agent_app,
@@ -1256,21 +1343,25 @@ class JobMCPGuard:
                 try:
                     message = json.loads(body)
                     params = message.get("params", {})
-                    wants_stream = (message.get("method") == "tools/call"
-                                    and params.get("name") == "ask_job"
-                                    and params.get("arguments", {}).get("stream") is True)
+                    wants_stream = (
+                        message.get("method") == "tools/call"
+                        and params.get("name") == "ask_job"
+                        and params.get("arguments", {}).get("stream") is True
+                    )
                 except (ValueError, AttributeError, TypeError):
                     wants_stream = False
                 if wants_stream:
                     selected_app = self.stream_app
                 original_receive = receive
                 delivered = False
+
                 async def replay_body():
                     nonlocal delivered
                     if not delivered:
                         delivered = True
                         return {"type": "http.request", "body": body, "more_body": False}
                     return await original_receive()
+
                 receive = replay_body
             await selected_app(scope, receive, send)
         finally:
@@ -1393,17 +1484,35 @@ def create_job_mcp(provider: JobContextProvider | None = None) -> tuple[list[MCP
                 return pending
         job_id = bound_job_id()
         if background:
-            return await anyio.to_thread.run_sync(lambda: _reply_rpc(lambda: context_provider.response_work_command(
-                job_id, question, conversation_id=conversation_id, request_id=request_id,
-                action=reply_action, assistance_task=assistance_task)))
+            return await anyio.to_thread.run_sync(
+                lambda: _reply_rpc(
+                    lambda: context_provider.response_work_command(
+                        job_id,
+                        question,
+                        conversation_id=conversation_id,
+                        request_id=request_id,
+                        action=reply_action,
+                        assistance_task=assistance_task,
+                    )
+                )
+            )
         if stream:
             if ctx is None:
                 raise ValueError("Streaming requires an MCP request context")
             from mn_api.job_reply_stream import stream_job_reply
-            return await stream_job_reply(context_provider, job_id, question, conversation_id, request_id, ctx, assistance_task=assistance_task)
-        return await anyio.to_thread.run_sync(lambda: context_provider.ask_job(
-            job_id, question, conversation_id=conversation_id, request_id=request_id, assistance_task=assistance_task,
-        ))
+
+            return await stream_job_reply(
+                context_provider, job_id, question, conversation_id, request_id, ctx, assistance_task=assistance_task
+            )
+        return await anyio.to_thread.run_sync(
+            lambda: context_provider.ask_job(
+                job_id,
+                question,
+                conversation_id=conversation_id,
+                request_id=request_id,
+                assistance_task=assistance_task,
+            )
+        )
 
     @agent_server.tool(
         name="ask_job",
@@ -1427,9 +1536,16 @@ def create_job_mcp(provider: JobContextProvider | None = None) -> tuple[list[MCP
             if pending is not None:
                 return pending
         if background:
-            return _reply_rpc(lambda: context_provider.response_work_command(bound_job_id(), question,
-                conversation_id=conversation_id, request_id=request_id, action=reply_action,
-                assistance_task=assistance_task))
+            return _reply_rpc(
+                lambda: context_provider.response_work_command(
+                    bound_job_id(),
+                    question,
+                    conversation_id=conversation_id,
+                    request_id=request_id,
+                    action=reply_action,
+                    assistance_task=assistance_task,
+                )
+            )
         return context_provider.ask_job(
             bound_job_id(),
             question,
@@ -1469,7 +1585,9 @@ def create_job_mcp(provider: JobContextProvider | None = None) -> tuple[list[MCP
         ),
         context_provider,
         stream_app=stream_server.streamable_http_app(
-            streamable_http_path="/mcp", json_response=False, stateless_http=True,
+            streamable_http_path="/mcp",
+            json_response=False,
+            stateless_http=True,
         ),
     )
 

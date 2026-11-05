@@ -14,7 +14,10 @@ def test_add_catalog_blueprint_records_addition_and_public_state(monkeypatch, tm
     repo_root = tmp_path / "catalog"
     bundle_root = repo_root / "worker-one"
     bundle_root.mkdir(parents=True)
-    (bundle_root / "manifest.json").write_text('{"apiVersion":"mn.workflow/v1","kind":"Workflow","id":"worker","contract":{},"agents":{},"runtime":{}}', encoding="utf-8")
+    (bundle_root / "manifest.json").write_text(
+        '{"apiVersion":"mn.workflow/v1","kind":"Workflow","id":"worker","contract":{},"agents":{},"runtime":{}}',
+        encoding="utf-8",
+    )
     blueprint = {
         "id": "worker-one",
         "name": "Worker One",
@@ -119,11 +122,15 @@ def test_addition_passes_invocation_mode_to_runtime_preparation(monkeypatch, tmp
     monkeypatch.setenv("MN_BLUEPRINT_INSTALLS_DIR", str(tmp_path / "additions"))
     monkeypatch.setattr(blueprint_additions, "find_blueprint", lambda *_a: (tmp_path, blueprint))
     monkeypatch.setattr(blueprint_additions, "validate_blueprint_bundle", lambda *_a: tmp_path)
-    (tmp_path / "manifest.json").write_text('{"apiVersion":"mn.workflow/v1","kind":"Workflow","id":"worker","contract":{},"agents":{},"runtime":{}}')
+    (tmp_path / "manifest.json").write_text(
+        '{"apiVersion":"mn.workflow/v1","kind":"Workflow","id":"worker","contract":{},"agents":{},"runtime":{}}'
+    )
     seen = []
+
     def prepare(*_a, **kwargs):
         seen.append(kwargs)
         return {"ok": True, "models": [], "services": []}
+
     monkeypatch.setattr(blueprint_additions, "defer_blueprint_runtime_models", prepare)
     overrides = {"llm": {"mode": "fake"}, "execution": {"fake_skills": True}}
     result = blueprint_additions.add_catalog_blueprint(config, "worker", config_overrides=overrides)
@@ -136,24 +143,38 @@ def test_addition_passes_invocation_mode_to_runtime_preparation(monkeypatch, tmp
 @pytest.mark.parametrize("fail", [False, True])
 def test_native_skill_setup_finishes_before_addition_is_recorded(monkeypatch, tmp_path, fail):
     from mn_sdk import blueprint_install
+
     config = SimpleNamespace(active_blueprint_location=str(tmp_path))
     blueprint = {"id": "worker", "path": "worker"}
     monkeypatch.setenv("MN_BLUEPRINT_INSTALLS_DIR", str(tmp_path / "additions"))
     monkeypatch.setattr(blueprint_additions, "find_blueprint", lambda *_: (tmp_path, blueprint))
     monkeypatch.setattr(blueprint_additions, "validate_blueprint_bundle", lambda *_: tmp_path)
     monkeypatch.setattr(blueprint_additions, "defer_blueprint_runtime_models", lambda *_a, **_k: {"ok": True})
-    (tmp_path / "manifest.json").write_text(json.dumps({
-        "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "worker", "contract": {}, "agents": {}, "runtime": {},
-        "skill_dependencies": [{"name": "native-skill", "type": "pip", "source": "gar", "version": "1", "setup": "on_install"}],
-    }))
+    (tmp_path / "manifest.json").write_text(
+        json.dumps(
+            {
+                "apiVersion": "mn.workflow/v1",
+                "kind": "Workflow",
+                "id": "worker",
+                "contract": {},
+                "agents": {},
+                "runtime": {},
+                "skill_dependencies": [
+                    {"name": "native-skill", "type": "pip", "source": "gar", "version": "1", "setup": "on_install"}
+                ],
+            }
+        )
+    )
     record = tmp_path / "additions/worker.json"
     calls = []
+
     def invoke(*args):
         assert not record.exists()
         calls.append("setup")
         if fail:
             raise RuntimeError("secret credential in private diagnostic")
         return "ready"
+
     monkeypatch.setattr(blueprint_install, "_resolve", lambda *_: ("native:setup", tmp_path))
     monkeypatch.setattr(blueprint_install, "_invoke", invoke)
     if fail:

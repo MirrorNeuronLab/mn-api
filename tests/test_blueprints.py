@@ -415,9 +415,7 @@ class TestBlueprintServices(unittest.TestCase):
                     {"text_memory": {"enabled": False, "enabled_env": "MN_CONTEXT_MEMORY_ENABLED"}},
                 )
             )
-            self.assertFalse(blueprint_requires_context_engine(
-                {"metadata": {"memory_layer": {"enabled": True}}}, None
-            ))
+            self.assertFalse(blueprint_requires_context_engine({"metadata": {"memory_layer": {"enabled": True}}}, None))
 
     @patch("mn_api.blueprints.ensure_context_engine_runtime_direct")
     def test_install_blueprint_runtime_models_ensures_context_engine_when_required(self, mock_ensure):
@@ -1254,9 +1252,7 @@ class TestBlueprintServices(unittest.TestCase):
                         "contract": {},
                         "runtime": {"placement": {"mode": "distributed"}},
                         "agents": {"nodes": []},
-                        "skill_dependencies": [
-                            {"name": "mirrorneuron-live-video-analysis-skill", "source": "gar"}
-                        ],
+                        "skill_dependencies": [{"name": "mirrorneuron-live-video-analysis-skill", "source": "gar"}],
                         "input_validation": {
                             "rules": [
                                 {
@@ -1336,9 +1332,7 @@ class TestBlueprintServices(unittest.TestCase):
             {
                 "status": "passed",
                 "validator": "mn-api",
-                "prevalidated_command_rules": [
-                    {"name": "video_source_validate", "type": "command", "index": 0}
-                ],
+                "prevalidated_command_rules": [{"name": "video_source_validate", "type": "command", "index": 0}],
             },
         )
 
@@ -2024,11 +2018,15 @@ class TestBlueprintServices(unittest.TestCase):
                 calls.append(command)
                 return SimpleNamespace(returncode=int(command[1:3] == ["sandbox", "get"]), stdout="", stderr="")
 
-            with patch.dict(os.environ, {"MN_NODE_NAME": "test-runtime-node",
-                                         "OPENSHELL_GATEWAY_ENDPOINT": "http://127.0.0.1:58080"}), \
-                    patch.object(state.client, "get_resource", return_value=_single_node_resource_report()), \
-                    patch.object(state.client, "get_system_summary", return_value=_single_node_resource_report()), \
-                    patch("mn_sdk.openshell_native.shutil.which", return_value="openshell"):
+            with (
+                patch.dict(
+                    os.environ,
+                    {"MN_NODE_NAME": "test-runtime-node", "OPENSHELL_GATEWAY_ENDPOINT": "http://127.0.0.1:58080"},
+                ),
+                patch.object(state.client, "get_resource", return_value=_single_node_resource_report()),
+                patch.object(state.client, "get_system_summary", return_value=_single_node_resource_report()),
+                patch("mn_sdk.openshell_native.shutil.which", return_value="openshell"),
+            ):
                 with patch("mn_api.blueprints.subprocess.run", side_effect=fake_run):
                     manifest_json, _payloads = load_blueprint_bundle(
                         repo.resolve(),
@@ -2674,7 +2672,6 @@ def test_run_blueprint_record_rejects_missing_input_before_runtime_preflight(
     assert response.status_code == 422
     assert json.loads(response.body)["errors"][0]["code"] == "config.required"
     preflight.assert_not_called()
-
 
 
 def test_default_llm_alias_requires_the_active_profile_to_be_default():

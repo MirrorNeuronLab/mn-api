@@ -1,4 +1,5 @@
 """Human responses follow the authoritative mapped run ledger."""
+
 import json
 
 import pytest
@@ -63,10 +64,17 @@ def test_active_human_response_uses_verified_canonical_submission(tmp_path, monk
     monkeypatch.setenv("MN_SHARED_STORAGE_ROOT", str(shared))
     monkeypatch.setenv("MN_HOST_SHARED_STORAGE_ROOT", str(shared))
     monkeypatch.setattr(runs, "shared_run_dir", lambda _id: pytest.fail("canonical read must not scan legacy mappings"))
-    append_human_event("output-current", "human_input_requested", {"request_id": "review-1", "prompt": "What next?"}, runs_root=directory.parent)
+    append_human_event(
+        "output-current",
+        "human_input_requested",
+        {"request_id": "review-1", "prompt": "What next?"},
+        runs_root=directory.parent,
+    )
 
     pending = runs.get_run_human_events("output-current", status="pending", run_data_ref=reference)
     assert pending["data"][0]["payload"]["request_id"] == "review-1"
-    response = runs.post_run_human_response("output-current", "review-1", {"response": {"action": "Defer"}}, run_data_ref=reference)
+    response = runs.post_run_human_response(
+        "output-current", "review-1", {"response": {"action": "Defer"}}, run_data_ref=reference
+    )
     assert response["payload"]["response"]["action"] == "Defer"
     assert list_pending_human_requests("output-current", runs_root=directory.parent) == []

@@ -8,10 +8,17 @@ from mn_api.routes.v1 import jobs
 
 
 def test_relocation_uses_a_durable_idempotent_operation(monkeypatch):
-    monkeypatch.setattr(state, "config", SimpleNamespace(api_token="", request_size_limit_bytes=1024 * 1024, cors_allow_origins=[]))
+    monkeypatch.setattr(
+        state, "config", SimpleNamespace(api_token="", request_size_limit_bytes=1024 * 1024, cors_allow_origins=[])
+    )
     calls = []
-    monkeypatch.setattr(jobs, "start_local_operation", lambda kind, options, work, **kwargs:
-        calls.append((kind, options, work, kwargs)) or {"operation_id": "move-1", "status": "pending"})
+    monkeypatch.setattr(
+        jobs,
+        "start_local_operation",
+        lambda kind, options, work, **kwargs: (
+            calls.append((kind, options, work, kwargs)) or {"operation_id": "move-1", "status": "pending"}
+        ),
+    )
     api = TestClient(create_app())
     body = {"target_node": "spark@pc", "transfer_id": "a" * 32}
     result = api.post("/api/v1/jobs/job-1/relocations", json=body)

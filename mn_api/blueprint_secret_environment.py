@@ -58,8 +58,6 @@ def validate_blueprint_secret_environment(manifest: Mapping[str, Any], environme
         )
 
 
-
-
 def inject_declared_secret_environment(manifest_json: str, environment: Mapping[str, str]) -> str:
     try:
         return _inject_secret_environment(manifest_json, environment)

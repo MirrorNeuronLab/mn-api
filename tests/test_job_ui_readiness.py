@@ -40,7 +40,9 @@ def test_readiness_probes_private_worker_page_and_assets_through_iframe(monkeypa
         assert request.full_url == base + "/dashboard/app.js"
         return Reply("text/javascript" if asset_available else "text/html", b"code")
 
-    monkeypatch.setattr(readiness.RuntimeConfig, "from_env", lambda: SimpleNamespace(web_ui_url="http://localhost:55173"))
+    monkeypatch.setattr(
+        readiness.RuntimeConfig, "from_env", lambda: SimpleNamespace(web_ui_url="http://localhost:55173")
+    )
     monkeypatch.setattr(readiness.WebUiConfig, "from_env", lambda: SimpleNamespace(api_token="test-token"))
     monkeypatch.setattr(readiness.urllib.request, "build_opener", lambda *_args: SimpleNamespace(open=open_url))
     result = readiness.probe_job_web_ui("job-1", "http://docker-only-worker:8080/dashboard/?control=1")
@@ -51,7 +53,9 @@ def test_readiness_probes_private_worker_page_and_assets_through_iframe(monkeypa
     assert all(request.get_header("X-mn-job-ui-probe") == "1" for request in calls)
 
 
-@pytest.mark.parametrize("url", ["http://[invalid", "http://worker:99999/", "http://user:secret@worker/", "file:///tmp/page"])
+@pytest.mark.parametrize(
+    "url", ["http://[invalid", "http://worker:99999/", "http://user:secret@worker/", "file:///tmp/page"]
+)
 def test_readiness_rejects_invalid_worker_urls(monkeypatch, url):
     monkeypatch.setattr(readiness.RuntimeConfig, "from_env", lambda: pytest.fail("invalid URL must not be requested"))
     assert readiness.probe_job_web_ui("job-1", url)["reason"] == "invalid_url"

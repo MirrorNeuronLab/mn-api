@@ -16,9 +16,16 @@ class TestRunOutputs(unittest.TestCase):
             run_dir = Path(tmp)
             report = run_dir / "result.json"
             report.write_text('{"status":"completed"}')
-            record_delivered_outputs(run_dir, {"result.json": {
-                "kind": "result", "size_bytes": report.stat().st_size, "sha256": file_sha256(report),
-            }})
+            record_delivered_outputs(
+                run_dir,
+                {
+                    "result.json": {
+                        "kind": "result",
+                        "size_bytes": report.stat().st_size,
+                        "sha256": file_sha256(report),
+                    }
+                },
+            )
             refs = output_refs("run-publication", run_dir)
             self.assertEqual(len(refs), 1)
             self.assertEqual(refs[0]["url"], "/api/v1/runs/run-publication/outputs/0")
@@ -60,15 +67,7 @@ class TestRunOutputs(unittest.TestCase):
                 encoding="utf-8",
             )
             (run_dir / "result.json").write_text(
-                json.dumps(
-                    {
-                        "final_artifact": {
-                            "output_files": [
-                                {"kind": "summary_json", "file_path": str(summary)}
-                            ]
-                        }
-                    }
-                ),
+                json.dumps({"final_artifact": {"output_files": [{"kind": "summary_json", "file_path": str(summary)}]}}),
                 encoding="utf-8",
             )
             (run_dir / "final_artifact.json").write_text(

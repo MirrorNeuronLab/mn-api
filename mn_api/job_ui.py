@@ -29,7 +29,9 @@ def get_job_ui(job_id: str, _auth=Depends(require_auth), check_readiness: bool =
         # claimed presentation policy only when it describes that same page.
         for candidate in (shared_dir, job_dir):
             claimed = _job_ui_handle_from_directory(candidate, job_id)
-            if claimed is not None and str(claimed["web_ui"].get("url") or "").rstrip("/") == live_handle["web_ui"]["url"].rstrip("/"):
+            if claimed is not None and str(claimed["web_ui"].get("url") or "").rstrip("/") == live_handle["web_ui"][
+                "url"
+            ].rstrip("/"):
                 policy = claimed["web_ui"].get("metadata")
                 if isinstance(policy, dict) and "load_event" in policy:
                     live_handle["web_ui"]["metadata"]["load_event"] = policy["load_event"]
@@ -66,8 +68,7 @@ def _checked_job_ui_handle(handle: dict[str, Any]) -> dict[str, Any]:
         readiness = probe_job_web_ui(str(handle["job_id"]), str(web_ui.get("url") or ""))
         web_ui["status"] = "running" if readiness["ready"] else "starting"
     else:
-        readiness = {"schema_version": "mn.web_ui.readiness.v1", "ready": False,
-                     "reason": "service_not_running"}
+        readiness = {"schema_version": "mn.web_ui.readiness.v1", "ready": False, "reason": "service_not_running"}
     metadata["readiness"] = readiness
     web_ui["metadata"] = metadata
     return {**handle, "web_ui": web_ui}
@@ -85,9 +86,14 @@ def _job_ui_handle_from_services(job_id: str) -> dict[str, Any] | None:
             return None
         # An unscoped registry query fans out to every federation peer. UI
         # descriptor reads must not wait on peers unrelated to this Job.
-        listing = _json_object(state.client.list_services(
-            job_id=run_id, node=owner_node, passing_only=True, page_size=200,
-        ))
+        listing = _json_object(
+            state.client.list_services(
+                job_id=run_id,
+                node=owner_node,
+                passing_only=True,
+                page_size=200,
+            )
+        )
         items = listing.get("items") or listing.get("services") or []
         if not isinstance(items, list):
             return None
@@ -96,11 +102,16 @@ def _job_ui_handle_from_services(job_id: str) -> dict[str, Any] | None:
         return None
     nodes = {
         str(node.get("name") or ""): str(node.get("address") or node.get("grpc_host") or "").strip()
-        for node in summary.get("nodes", []) if isinstance(node, dict)
+        for node in summary.get("nodes", [])
+        if isinstance(node, dict)
     }
-    services = [service for service in items if isinstance(service, dict) and
-                service.get("job_id") in (None, run_id) and
-                str(service.get("status") or "").lower() == "passing"]
+    services = [
+        service
+        for service in items
+        if isinstance(service, dict)
+        and service.get("job_id") in (None, run_id)
+        and str(service.get("status") or "").lower() == "passing"
+    ]
     web = [service for service in services if "web_ui" in service.get("tags", [])]
     if len(web) != 1:
         return None
@@ -130,18 +141,39 @@ def _job_ui_handle_from_services(job_id: str) -> dict[str, Any] | None:
         if "websocket" in tags:
             websocket_ports.add(candidate_port)
     title = str((service.get("meta") or {}).get("title") or service.get("name") or "Job Web UI")[:200]
-    metadata = {"job_id": job_id, "execution_id": run_id, "service_name": service.get("name"), "node_id": node,
-                "proxy": {"schema_version": "mn.web_ui.proxy.v1", "http_ports": sorted(http_ports),
-                          "websocket_ports": sorted(websocket_ports)}}
+    metadata = {
+        "job_id": job_id,
+        "execution_id": run_id,
+        "service_name": service.get("name"),
+        "node_id": node,
+        "proxy": {
+            "schema_version": "mn.web_ui.proxy.v1",
+            "http_ports": sorted(http_ports),
+            "websocket_ports": sorted(websocket_ports),
+        },
+    }
     service_meta = service.get("meta")
     if isinstance(service_meta, dict) and "load_event" in service_meta:
         metadata["load_event"] = service_meta["load_event"]
-    return {"job_id": job_id,
-            "ui": {"schema_version": "mn.web_ui.external.v1", "renderer": "external-url",
-                   "job_id": job_id, "title": title, "metadata": metadata},
-            "web_ui": {"kind": "service", "adapter": "external-url", "status": "running",
-                       "title": title, "url": f"http://{host}:{port}", "job_id": job_id,
-                       "metadata": metadata}}
+    return {
+        "job_id": job_id,
+        "ui": {
+            "schema_version": "mn.web_ui.external.v1",
+            "renderer": "external-url",
+            "job_id": job_id,
+            "title": title,
+            "metadata": metadata,
+        },
+        "web_ui": {
+            "kind": "service",
+            "adapter": "external-url",
+            "status": "running",
+            "title": title,
+            "url": f"http://{host}:{port}",
+            "job_id": job_id,
+            "metadata": metadata,
+        },
+    }
 
 
 def _job_ui_handle_from_directory(candidate: Path | None, job_id: str) -> dict[str, Any] | None:
@@ -189,6 +221,7 @@ def _owner_node_job_ui_handle(job_id: str) -> dict[str, Any] | None:
             return None
         config = state.refresh_config_from_env()
         from mn_api.job_ui_routing import node_api_base_url
+
         base_url = node_api_base_url(owner)
         headers = {}
         token = str(getattr(config, "api_token", "") or "").strip()
@@ -238,5 +271,3 @@ def _valid_owner_api_host(value: str) -> bool:
     if not host or "/" in host or "@" in host or any(char.isspace() for char in host):
         return False
     return bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]*", host))
-
-

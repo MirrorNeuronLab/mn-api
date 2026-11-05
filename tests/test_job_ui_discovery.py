@@ -11,9 +11,7 @@ from mn_api import job_ui as jobs
 
 @pytest.mark.parametrize("owner_is_local", [True, False], ids=["local-owner", "federated-owner"])
 @pytest.mark.parametrize("check_readiness", [True, False], ids=["discovery", "proxy-descriptor"])
-def test_job_ui_ignores_unavailable_unrelated_peers(
-    api_client, monkeypatch, tmp_path, owner_is_local, check_readiness
-):
+def test_job_ui_ignores_unavailable_unrelated_peers(api_client, monkeypatch, tmp_path, owner_is_local, check_readiness):
     owner = "mirror_neuron@10.0.4.27" if owner_is_local else "mirror_neuron@10.0.4.32"
     host = owner.split("@", 1)[1]
     queries = []
@@ -27,28 +25,55 @@ def test_job_ui_ignores_unavailable_unrelated_peers(
             queries.append(query)
             if query.get("node") != owner:
                 raise RuntimeError("an unrelated federation peer timed out")
-            return json.dumps({"items": [{
-                "job_id": "execution-1", "node": owner, "name": "controller-ui",
-                "port": 8088, "status": "passing", "tags": ["web_ui"],
-            }]})
+            return json.dumps(
+                {
+                    "items": [
+                        {
+                            "job_id": "execution-1",
+                            "node": owner,
+                            "name": "controller-ui",
+                            "port": 8088,
+                            "status": "passing",
+                            "tags": ["web_ui"],
+                        }
+                    ]
+                }
+            )
 
         def get_system_summary(self):
-            return json.dumps({"nodes": [
-                {"name": owner, "address": host, "self?": owner_is_local,
-                 "hardware": {"http_api": {"schema_version": "mn.http_api.endpoint.v1", "enabled": True, "scheme": "http", "port": 54001}}},
-                {"name": "mirror_neuron@unavailable", "address": "unavailable", "self?": False},
-            ]})
+            return json.dumps(
+                {
+                    "nodes": [
+                        {
+                            "name": owner,
+                            "address": host,
+                            "self?": owner_is_local,
+                            "hardware": {
+                                "http_api": {
+                                    "schema_version": "mn.http_api.endpoint.v1",
+                                    "enabled": True,
+                                    "scheme": "http",
+                                    "port": 54001,
+                                }
+                            },
+                        },
+                        {"name": "mirror_neuron@unavailable", "address": "unavailable", "self?": False},
+                    ]
+                }
+            )
 
     probes = []
     monkeypatch.setattr(
-        state, "config",
+        state,
+        "config",
         SimpleNamespace(api_token="test-token", request_size_limit_bytes=100_000, port=54001),
     )
     monkeypatch.setattr(state, "client", FakeClient())
     monkeypatch.setattr(jobs, "job_data_dir_from_id", lambda *_args, **_kwargs: tmp_path / "missing")
     monkeypatch.setattr(jobs, "shared_job_ui_dir_from_id", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
-        jobs, "probe_job_web_ui",
+        jobs,
+        "probe_job_web_ui",
         lambda job_id, url: probes.append((job_id, url)) or {"ready": True, "reason": "ready"},
     )
     # Keep this HTTP boundary test independent of remote handle retrieval.
@@ -62,9 +87,14 @@ def test_job_ui_ignores_unavailable_unrelated_peers(
     assert response.status_code == 200
     assert response.json()["web_ui"]["url"] == f"http://{host}:8088"
     assert response.json()["web_ui"]["status"] == "running"
-    assert queries == [{
-        "job_id": "execution-1", "node": owner, "passing_only": True, "page_size": 200,
-    }]
+    assert queries == [
+        {
+            "job_id": "execution-1",
+            "node": owner,
+            "passing_only": True,
+            "page_size": 200,
+        }
+    ]
     assert probes == ([("job-1", f"http://{host}:8088")] if check_readiness else [])
 
 
@@ -91,14 +121,20 @@ def test_remote_ui_without_a_registered_api_endpoint_returns_safe_problem(api_cl
     config = SimpleNamespace(api_token="test-token", request_size_limit_bytes=100_000, port=61407)
     monkeypatch.setattr(state, "config", config)
     monkeypatch.setattr(state, "refresh_config_from_env", lambda: config)
-    monkeypatch.setattr(state, "client", SimpleNamespace(
-        get_job=lambda _: json.dumps({"latest_run_id": "execution", "owner_node": "core@spark"}),
-        list_services=lambda **_: '{"items":[]}',
-        get_system_summary=lambda: json.dumps({"nodes": [{"name": "core@spark", "address": "10.0.4.32", "self?": False}]}),
-    ))
+    monkeypatch.setattr(
+        state,
+        "client",
+        SimpleNamespace(
+            get_job=lambda _: json.dumps({"latest_run_id": "execution", "owner_node": "core@spark"}),
+            list_services=lambda **_: '{"items":[]}',
+            get_system_summary=lambda: json.dumps(
+                {"nodes": [{"name": "core@spark", "address": "10.0.4.32", "self?": False}]}
+            ),
+        ),
+    )
     monkeypatch.setattr(jobs, "job_data_dir_from_id", lambda *_a, **_k: tmp_path / "missing")
     monkeypatch.setattr(jobs, "shared_job_ui_dir_from_id", lambda *_a, **_k: None)
-    response = api_client.get('/api/v1/jobs/job/ui', headers={"Authorization": "Bearer test-token"})
+    response = api_client.get("/api/v1/jobs/job/ui", headers={"Authorization": "Bearer test-token"})
     assert response.status_code == 503
     assert response.headers["content-type"].startswith("application/problem+json")
     assert response.json()["code"] == "service_unavailable"

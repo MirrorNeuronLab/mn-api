@@ -294,7 +294,8 @@ def resolve_async_blueprint_run_request(blueprint_id: str, req: BlueprintRunRequ
     run_id = req.run_id or create_blueprint_run_id(blueprint_id)
     validate_run_id(run_id)
     progress_id = validate_progress_id(req.progress_id) or create_blueprint_progress_id(run_id)
-    return BlueprintRunRequest(admission_policy=req.admission_policy,
+    return BlueprintRunRequest(
+        admission_policy=req.admission_policy,
         job_id=req.job_id,
         run_id=run_id,
         config_overwrite=req.config_overwrite,

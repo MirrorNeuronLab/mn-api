@@ -8,19 +8,41 @@ from mn_api.routes.v1 import assistance
 
 
 def configure(monkeypatch, *, status="completed", worker_type="batch", freshness="fresh"):
-    monkeypatch.setattr(state, "config", SimpleNamespace(api_token="secret-test", request_size_limit_bytes=1024 * 1024, cors_allow_origins=[]))
+    monkeypatch.setattr(
+        state,
+        "config",
+        SimpleNamespace(api_token="secret-test", request_size_limit_bytes=1024 * 1024, cors_allow_origins=[]),
+    )
     monkeypatch.setattr(state, "refresh_config_from_env", lambda: state.config)
-    monkeypatch.setattr(assistance, "find_blueprint", lambda config, identity: ("root", {"id": identity, "type": worker_type}))
+    monkeypatch.setattr(
+        assistance, "find_blueprint", lambda config, identity: ("root", {"id": identity, "type": worker_type})
+    )
     monkeypatch.setattr(assistance.provider, "get_pending_human_request", lambda identity: None)
-    monkeypatch.setattr(assistance.provider, "get_context", lambda *args, **kwargs: {
-        "identity": {"job_id": "job-1", "blueprint_id": "blueprint-1"}, "freshness": {"state": freshness},
-        "profile": {"type": worker_type}, "latest_run": {"run_id": "run-1", "status": status}})
+    monkeypatch.setattr(
+        assistance.provider,
+        "get_context",
+        lambda *args, **kwargs: {
+            "identity": {"job_id": "job-1", "blueprint_id": "blueprint-1"},
+            "freshness": {"state": freshness},
+            "profile": {"type": worker_type},
+            "latest_run": {"run_id": "run-1", "status": status},
+        },
+    )
     return TestClient(create_app())
 
 
 def post(client, **extra):
-    return client.post("/api/v1/assistance/evaluations", headers={"Authorization": "Bearer secret-test"},
-                       json={"blueprint_id": "blueprint-1", "job_id": "job-1", "execution_id": "run-1", "setup": {"ready": True, "mode": "real"}, **extra})
+    return client.post(
+        "/api/v1/assistance/evaluations",
+        headers={"Authorization": "Bearer secret-test"},
+        json={
+            "blueprint_id": "blueprint-1",
+            "job_id": "job-1",
+            "execution_id": "run-1",
+            "setup": {"ready": True, "mode": "real"},
+            **extra,
+        },
+    )
 
 
 def test_authentication_and_untrusted_operational_input(monkeypatch):
@@ -55,10 +77,17 @@ def test_local_setup_can_be_helped_before_job_creation(monkeypatch):
 
 def test_context_only_provider_does_not_enable_job_responses(monkeypatch):
     class Runtime:
-        def get_job(self, identity): return {"job_id": identity, "blueprint_id": "plain", "status": "active"}
+        def get_job(self, identity):
+            return {"job_id": identity, "blueprint_id": "plain", "status": "active"}
+
     from mn_api import job_mcp
+
     monkeypatch.setattr(JobContextProvider, "_service", lambda self: Runtime())
-    monkeypatch.setattr(job_mcp, "find_blueprint", lambda config, identity: ("root", {"id": identity, "response_service": {"enabled": False}}))
+    monkeypatch.setattr(
+        job_mcp,
+        "find_blueprint",
+        lambda config, identity: ("root", {"id": identity, "response_service": {"enabled": False}}),
+    )
     provider = JobContextProvider(require_response=False)
     job, blueprint, descriptor = provider._job_and_blueprint("job-plain")
     assert job["job_id"] == "job-plain"

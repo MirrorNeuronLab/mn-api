@@ -19,13 +19,16 @@ from mn_api.routes.v1 import jobs
 @pytest.fixture
 def api(monkeypatch, tmp_path):
     monkeypatch.setattr(operations, "resolve_mn_home", lambda: tmp_path)
-    monkeypatch.setattr(state, "config", SimpleNamespace(api_token="", request_size_limit_bytes=1024*1024,
-                                                       cors_allow_origins=[]))
+    monkeypatch.setattr(
+        state, "config", SimpleNamespace(api_token="", request_size_limit_bytes=1024 * 1024, cors_allow_origins=[])
+    )
     records = {}
+
     def read(job_id):
         if job_id not in records:
             raise HTTPException(404, "Missing")
         return records[job_id]
+
     monkeypatch.setattr(jobs, "_service", lambda: SimpleNamespace(get_job=read))
     return TestClient(create_app()), records
 
@@ -36,7 +39,7 @@ def wait(client, operation_id):
         operation = client.get(f"/api/v1/operations/{operation_id}").json()
         if operation["status"] in {"completed", "failed"}:
             return operation
-        time.sleep(.01)
+        time.sleep(0.01)
     raise AssertionError("Work did not finish")
 
 
@@ -58,16 +61,23 @@ def test_openshell_errors_survive_http_durable_operation_and_sse(api, monkeypatc
     client, _ = api
     original = OpenShellPreparationError(stage, "mirror_neuron@spark")
     original.details["stderr"] = "private-token"
+
     class RpcFailure(grpc.RpcError):
         def code(self):
             return grpc.StatusCode.FAILED_PRECONDITION
+
         def details(self):
             return encode_error(original)
+
     def create(*_args):
         raise RpcFailure()
+
     monkeypatch.setattr(jobs, "create_job", create)
-    accepted = client.post("/api/v1/job-preparations", headers={"Idempotency-Key": f"sandbox-{stage}"},
-                           json={"blueprint_id": "architecture"}).json()
+    accepted = client.post(
+        "/api/v1/job-preparations",
+        headers={"Idempotency-Key": f"sandbox-{stage}"},
+        json={"blueprint_id": "architecture"},
+    ).json()
     operation = wait(client, accepted["operation_id"])
     assert operation["status"] == "failed"
     expected = {"stage": stage, "node": "mirror_neuron@spark"}
@@ -88,14 +98,19 @@ def test_creation_claim_precedes_work_and_reconnect_never_creates_another_job(ap
     client, records = api
     started, release = Event(), Event()
     calls = []
+
     def create(request, key, principal, progress_id):
         calls.append(request.job_id)
         started.set()
         assert release.wait(2)
-        result = {"job_id": request.job_id, "blueprint_id": request.blueprint_id,
-                  "resolved_configuration": request.resolved_configuration}
+        result = {
+            "job_id": request.job_id,
+            "blueprint_id": request.blueprint_id,
+            "resolved_configuration": request.resolved_configuration,
+        }
         records[request.job_id] = result
         return JSONResponse(result)
+
     monkeypatch.setattr(jobs, "create_job", create)
     headers = {"Idempotency-Key": "one-hire"}
     body = {"blueprint_id": "research", "resolved_configuration": {"mode": "sample"}}
@@ -104,8 +119,9 @@ def test_creation_claim_precedes_work_and_reconnect_never_creates_another_job(ap
     operation_id = accepted.json()["operation_id"]
     assert started.wait(1)
     assert client.post("/api/v1/job-preparations", headers=headers, json=body).json()["operation_id"] == operation_id
-    changed = client.post("/api/v1/job-preparations", headers=headers,
-                          json={**body, "resolved_configuration": {"mode": "own"}})
+    changed = client.post(
+        "/api/v1/job-preparations", headers=headers, json={**body, "resolved_configuration": {"mode": "own"}}
+    )
     assert changed.status_code == 409
     assert changed.headers["location"].endswith(operation_id)
     release.set()
@@ -140,12 +156,14 @@ def test_conditional_update_is_short_and_reconciles_a_committed_revision(api, mo
     headers = {"Idempotency-Key": "settings-revision", "If-Match": strong_etag(records["stable"])}
     started, release = Event(), Event()
     calls = []
+
     def update(job_id, request, etag, principal):
         calls.append(etag)
         started.set()
         assert release.wait(2)
         records[job_id] = {"job_id": job_id, "revision": 2, "resolved_configuration": request.resolved_configuration}
         return JSONResponse(records[job_id])
+
     monkeypatch.setattr(jobs, "update_job", update)
     body = {"resolved_configuration": {"mode": "new"}}
     accepted = client.post("/api/v1/jobs/stable/preparations", headers=headers, json=body)
@@ -167,29 +185,52 @@ def test_conditional_update_is_short_and_reconciles_a_committed_revision(api, mo
 def test_async_preparation_validates_claim_and_conditional_headers_before_work(api):
     client, _ = api
     assert client.post("/api/v1/job-preparations", json={"blueprint_id": "research"}).status_code == 400
-    assert client.post("/api/v1/jobs/stable/preparations", headers={"Idempotency-Key": "update"},
-                       json={"resolved_configuration": {}}).status_code == 428
-    assert client.post("/api/v1/jobs/stable/preparations", headers={"Idempotency-Key": "update", "If-Match": '"one"'},
-                       json={"status": "archived"}).status_code == 422
+    assert (
+        client.post(
+            "/api/v1/jobs/stable/preparations",
+            headers={"Idempotency-Key": "update"},
+            json={"resolved_configuration": {}},
+        ).status_code
+        == 428
+    )
+    assert (
+        client.post(
+            "/api/v1/jobs/stable/preparations",
+            headers={"Idempotency-Key": "update", "If-Match": '"one"'},
+            json={"status": "archived"},
+        ).status_code
+        == 422
+    )
 
 
 def test_corrected_failed_preparation_keeps_the_reserved_job_identity(api, monkeypatch):
     client, records = api
     calls = []
+
     def create(request, *_):
         calls.append(request.job_id)
         if request.resolved_configuration.get("mode") == "invalid":
             raise HTTPException(422, "Invalid setup")
-        records[request.job_id] = {"job_id": request.job_id, "blueprint_id": request.blueprint_id,
-                                   "resolved_configuration": request.resolved_configuration}
+        records[request.job_id] = {
+            "job_id": request.job_id,
+            "blueprint_id": request.blueprint_id,
+            "resolved_configuration": request.resolved_configuration,
+        }
         return JSONResponse(records[request.job_id])
+
     monkeypatch.setattr(jobs, "create_job", create)
     headers = {"Idempotency-Key": "one-hire"}
-    first = client.post("/api/v1/job-preparations", headers=headers,
-                        json={"blueprint_id": "research", "resolved_configuration": {"mode": "invalid"}}).json()
+    first = client.post(
+        "/api/v1/job-preparations",
+        headers=headers,
+        json={"blueprint_id": "research", "resolved_configuration": {"mode": "invalid"}},
+    ).json()
     assert wait(client, first["operation_id"])["status"] == "failed"
-    second = client.post("/api/v1/job-preparations", headers=headers,
-                         json={"blueprint_id": "research", "resolved_configuration": {"mode": "sample"}}).json()
+    second = client.post(
+        "/api/v1/job-preparations",
+        headers=headers,
+        json={"blueprint_id": "research", "resolved_configuration": {"mode": "sample"}},
+    ).json()
     assert second["operation_id"] != first["operation_id"]
     assert wait(client, second["operation_id"])["status"] == "completed"
     assert len(set(calls)) == 1
@@ -199,18 +240,24 @@ def test_first_update_keeps_the_original_conditional_write_fence(api, monkeypatc
     client, records = api
     records["stable"] = {"job_id": "stable", "revision": 2, "resolved_configuration": {"mode": "new"}}
     calls = []
+
     def update(job_id, request, etag, principal):
         calls.append(etag)
         raise HTTPException(412, "Revision changed")
+
     monkeypatch.setattr(jobs, "update_job", update)
-    accepted = client.post("/api/v1/jobs/stable/preparations",
+    accepted = client.post(
+        "/api/v1/jobs/stable/preparations",
         headers={"Idempotency-Key": "stale-write", "If-Match": '"old"'},
-        json={"resolved_configuration": {"mode": "new"}})
+        json={"resolved_configuration": {"mode": "new"}},
+    )
     assert wait(client, accepted.json()["operation_id"])["status"] == "failed"
     assert calls == ['"old"']
-    repeated = client.post("/api/v1/jobs/stable/preparations",
+    repeated = client.post(
+        "/api/v1/jobs/stable/preparations",
         headers={"Idempotency-Key": "stale-write", "If-Match": '"old"'},
-        json={"resolved_configuration": {"mode": "new"}})
+        json={"resolved_configuration": {"mode": "new"}},
+    )
     assert wait(client, repeated.json()["operation_id"])["status"] == "failed"
     assert calls == ['"old"', '"old"']
 
@@ -218,13 +265,18 @@ def test_first_update_keeps_the_original_conditional_write_fence(api, monkeypatc
 def test_explicit_retry_of_failed_preparation_reconciles_the_same_job(api, monkeypatch):
     client, records = api
     calls = []
+
     def create(request, *_):
         calls.append(request.job_id)
         if len(calls) == 1:
             raise HTTPException(409, "Resources are not ready")
-        records[request.job_id] = {"job_id": request.job_id, "blueprint_id": request.blueprint_id,
-                                   "resolved_configuration": request.resolved_configuration}
+        records[request.job_id] = {
+            "job_id": request.job_id,
+            "blueprint_id": request.blueprint_id,
+            "resolved_configuration": request.resolved_configuration,
+        }
         return JSONResponse(records[request.job_id])
+
     monkeypatch.setattr(jobs, "create_job", create)
     headers, body = {"Idempotency-Key": "same-hire"}, {"blueprint_id": "research"}
     first = client.post("/api/v1/job-preparations", headers=headers, json=body).json()
@@ -242,15 +294,27 @@ def test_failed_preparation_preserves_validation_in_poll_stream_and_durable_rece
     client, _ = api
 
     def create(*_):
-        raise HTTPException(422, {"ok": False, "issues": [{
-            "code": "stream.unreachable", "message": "401 Unauthorized rtsp://camera/live?token=private-token",
-            "rule": {"name": "video_source_validate"}, "location": {"path": "video_source.uri"},
-            "actual": "private input", "debug": {"stdout": "private content"},
-        }]})
+        raise HTTPException(
+            422,
+            {
+                "ok": False,
+                "issues": [
+                    {
+                        "code": "stream.unreachable",
+                        "message": "401 Unauthorized rtsp://camera/live?token=private-token",
+                        "rule": {"name": "video_source_validate"},
+                        "location": {"path": "video_source.uri"},
+                        "actual": "private input",
+                        "debug": {"stdout": "private content"},
+                    }
+                ],
+            },
+        )
 
     monkeypatch.setattr(jobs, "create_job", create)
-    initial = client.post("/api/v1/job-preparations", headers={"Idempotency-Key": "invalid-camera"},
-                          json={"blueprint_id": "camera"}).json()
+    initial = client.post(
+        "/api/v1/job-preparations", headers={"Idempotency-Key": "invalid-camera"}, json={"blueprint_id": "camera"}
+    ).json()
     operation_id = initial["operation_id"]
     failed = wait(client, operation_id)
     assert failed["error"]["code"] == "validation_failed"
@@ -269,16 +333,20 @@ def test_failed_preparation_preserves_validation_in_poll_stream_and_durable_rece
 
 def test_durable_preparation_reports_nested_runtime_activity(api, monkeypatch):
     from mn_api.launch_progress import progress_reporter
+
     client, _records = api
     entered, release = Event(), Event()
+
     def create(request, key, principal, progress_id):
         progress_reporter(progress_id)("Prepare Python environments", "Resolving declared dependencies", "")
         entered.set()
         assert release.wait(2)
         return JSONResponse({"job_id": request.job_id, "blueprint_id": request.blueprint_id})
+
     monkeypatch.setattr(jobs, "create_job", create)
-    response = client.post("/api/v1/job-preparations", headers={"Idempotency-Key": "visible-progress"},
-                           json={"blueprint_id": "sample"})
+    response = client.post(
+        "/api/v1/job-preparations", headers={"Idempotency-Key": "visible-progress"}, json={"blueprint_id": "sample"}
+    )
     operation_id = response.json()["operation_id"]
     try:
         assert entered.wait(1)
@@ -294,15 +362,19 @@ def test_durable_preparation_reports_nested_runtime_activity(api, monkeypatch):
 def test_acceptance_write_failure_starts_no_worker_and_same_request_recovers(api, monkeypatch):
     client, records = api
     calls = []
+
     def create(request, *_):
         calls.append(request.job_id)
         records[request.job_id] = {"job_id": request.job_id}
         return JSONResponse(records[request.job_id])
+
     monkeypatch.setattr(jobs, "create_job", create)
     body, headers = {"blueprint_id": "research"}, {"Idempotency-Key": "recover-first-write"}
     with monkeypatch.context() as outage:
+
         def fail(*_):
             raise PermissionError("private-receipt-secret")
+
         outage.setattr(operations.operation_journal.os, "replace", fail)
         refused = client.post("/api/v1/job-preparations", json=body, headers=headers)
         assert refused.status_code == 503 and "private-receipt-secret" not in refused.text
@@ -321,9 +393,11 @@ def test_existing_receipt_failure_blocks_reads_and_resubmission(api, monkeypatch
     client, _ = api
     headers, body = {"Idempotency-Key": f"broken-receipt-{fault}"}, {"blueprint_id": "research"}
     calls = []
+
     def create(*_):
         calls.append(True)
         return JSONResponse({"job_id": "created"})
+
     monkeypatch.setattr(jobs, "create_job", create)
     operation_id = client.post("/api/v1/job-preparations", headers=headers, json=body).json()["operation_id"]
     wait(client, operation_id)
@@ -338,9 +412,11 @@ def test_existing_receipt_failure_blocks_reads_and_resubmission(api, monkeypatch
         record = json.loads(path.read_text())
         record["events"][0]["sequence"] = -1
         path.write_text(json.dumps(record))
-    for response in (client.get(f"/api/v1/operations/{operation_id}"),
-                     client.get(f"/api/v1/operations/{operation_id}/events/stream"),
-                     client.post("/api/v1/job-preparations", headers=headers, json=body)):
+    for response in (
+        client.get(f"/api/v1/operations/{operation_id}"),
+        client.get(f"/api/v1/operations/{operation_id}/events/stream"),
+        client.post("/api/v1/job-preparations", headers=headers, json=body),
+    ):
         assert response.status_code == status
         assert "private-corrupt-secret" not in response.text
     assert calls == [True]
@@ -350,11 +426,13 @@ def test_active_receipt_survives_completed_cache_eviction(api, monkeypatch):
     client, _ = api
     started, release = Event(), Event()
     calls = []
+
     def create(*_):
         calls.append(True)
         started.set()
         assert release.wait(5)
         return JSONResponse({"job_id": "finished"})
+
     monkeypatch.setattr(operations, "_MAX_OPERATIONS", 1)
     monkeypatch.setattr(jobs, "create_job", create)
     headers, body = {"Idempotency-Key": "pinned-worker"}, {"blueprint_id": "research"}
@@ -379,6 +457,7 @@ def test_retry_after_competing_acceptance_uses_first_reserved_job(api, monkeypat
     client, _ = api
     delayed, release = Event(), Event()
     proposed, worked = [], []
+
     def allocate(_):
         if not proposed:
             proposed.append("loser")
@@ -386,6 +465,7 @@ def test_retry_after_competing_acceptance_uses_first_reserved_job(api, monkeypat
             assert release.wait(5)
             return "loser"
         return "winner"
+
     def create(request, *_):
         worked.append(request.job_id)
         if len(worked) == 1:
@@ -394,9 +474,14 @@ def test_retry_after_competing_acceptance_uses_first_reserved_job(api, monkeypat
 
     monkeypatch.setattr(job_preparations, "generate_stable_job_id", allocate)
     monkeypatch.setattr(jobs, "create_job", create)
+
     def submit():
-        return client.post("/api/v1/job-preparations", headers={"Idempotency-Key": "race-on-reservation"},
-                           json={"blueprint_id": "research"})
+        return client.post(
+            "/api/v1/job-preparations",
+            headers={"Idempotency-Key": "race-on-reservation"},
+            json={"blueprint_id": "research"},
+        )
+
     with ThreadPoolExecutor(1) as pool:
         late = pool.submit(submit)
         try:

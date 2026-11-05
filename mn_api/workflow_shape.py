@@ -18,12 +18,14 @@ def definition_shape(job_id: str, definition: dict[str, Any]) -> dict[str, Any]:
             continue
         step_id = str(raw["id"])
         binding = bindings.get(raw.get("run") or step_id) or bindings.get(step_id)
-        steps.append({
-            "id": step_id,
-            "label": str(raw.get("label") or step_id.replace("_", " ").title()),
-            "goal": str(raw.get("goal") or raw.get("action") or ""),
-            "agents": _declared_agents(binding, raw),
-        })
+        steps.append(
+            {
+                "id": step_id,
+                "label": str(raw.get("label") or step_id.replace("_", " ").title()),
+                "goal": str(raw.get("goal") or raw.get("action") or ""),
+                "agents": _declared_agents(binding, raw),
+            }
+        )
     return {
         "job_id": job_id,
         "source": "definition",
@@ -42,12 +44,14 @@ def latest_run_shape(job_id: str, run_id: str, snapshot: dict[str, Any]) -> dict
     for raw in snapshot.get("steps") or []:
         if not isinstance(raw, dict) or not raw.get("id"):
             continue
-        steps.append({
-            "id": str(raw["id"]),
-            "label": str(raw.get("label") or ""),
-            "goal": str(raw.get("goal") or ""),
-            "agents": [_agent(agent) for agent in raw.get("agents") or [] if isinstance(agent, dict)],
-        })
+        steps.append(
+            {
+                "id": str(raw["id"]),
+                "label": str(raw.get("label") or ""),
+                "goal": str(raw.get("goal") or ""),
+                "agents": [_agent(agent) for agent in raw.get("agents") or [] if isinstance(agent, dict)],
+            }
+        )
     return {
         "job_id": job_id,
         "source": "latest_run",
@@ -80,18 +84,47 @@ def steps_view(shape: dict[str, Any]) -> dict[str, Any]:
 
 
 _PROGRESS_FIELDS = {
-    "id", "status", "current", "done_count", "running_count", "idle_count",
-    "ready_count", "failed_count", "total_count", "live", "elapsed_seconds",
-    "started_at", "ended_at", "last_event_at", "retry_at", "deadline_at",
-    "heartbeat_deadline_at", "attempt", "attempt_id", "status_reason", "failure",
-    "progress", "progress_source", "items_done", "items_total", "tokens_used",
-    "mailbox_depth", "activity_summary", "last_activity", "recent_events", "agents",
+    "id",
+    "status",
+    "current",
+    "done_count",
+    "running_count",
+    "idle_count",
+    "ready_count",
+    "failed_count",
+    "total_count",
+    "live",
+    "elapsed_seconds",
+    "started_at",
+    "ended_at",
+    "last_event_at",
+    "retry_at",
+    "deadline_at",
+    "heartbeat_deadline_at",
+    "attempt",
+    "attempt_id",
+    "status_reason",
+    "failure",
+    "progress",
+    "progress_source",
+    "items_done",
+    "items_total",
+    "tokens_used",
+    "mailbox_depth",
+    "activity_summary",
+    "last_activity",
+    "recent_events",
+    "agents",
 }
 
 
 def progress_only(snapshot: dict[str, Any]) -> dict[str, Any]:
-    result = {key: value for key, value in snapshot.items()
-              if key not in {"steps", "current_step", "edges", "layers", "description", "name", "workflow_kind", "graph_revision"}}
+    result = {
+        key: value
+        for key, value in snapshot.items()
+        if key
+        not in {"steps", "current_step", "edges", "layers", "description", "name", "workflow_kind", "graph_revision"}
+    }
     result["steps"] = [_progress_item(step) for step in snapshot.get("steps") or [] if isinstance(step, dict)]
     current = snapshot.get("current_step")
     result["current_step"] = _progress_item(current) if isinstance(current, dict) else None

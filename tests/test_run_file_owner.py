@@ -35,12 +35,21 @@ def remote_run(monkeypatch, tmp_path):
     config = SimpleNamespace(api_token="", request_size_limit_bytes=1024 * 1024, cors_allow_origins=[])
     monkeypatch.setattr(state, "config", config)
     monkeypatch.setattr(state, "refresh_config_from_env", lambda: config)
-    run = {"run_id": "run-1", "job_id": "job-1", "status": "completed",
-           "owner_node": "owner@node", "run_data_ref": {
-               "storage": "syncthing", "submission_id": "definition", "run_id": "physical-1"}}
-    node = {"name": "owner@node", "address": "10.0.4.32", "self?": False,
-            "hardware": {"http_api": {"schema_version": "mn.http_api.endpoint.v1", "enabled": True,
-                                      "scheme": "http", "port": 54007}}}
+    run = {
+        "run_id": "run-1",
+        "job_id": "job-1",
+        "status": "completed",
+        "owner_node": "owner@node",
+        "run_data_ref": {"storage": "syncthing", "submission_id": "definition", "run_id": "physical-1"},
+    }
+    node = {
+        "name": "owner@node",
+        "address": "10.0.4.32",
+        "self?": False,
+        "hardware": {
+            "http_api": {"schema_version": "mn.http_api.endpoint.v1", "enabled": True, "scheme": "http", "port": 54007}
+        },
+    }
     reads = []
     runtime = SimpleNamespace(get_run=lambda run_id: reads.append(run_id) or run)
     monkeypatch.setattr(jobs, "_service", lambda: runtime)
@@ -52,26 +61,39 @@ def remote_run(monkeypatch, tmp_path):
         upstream = Upstream(body, headers)
         upstream.status = status
         upstreams.append(upstream)
+
         class Opener:
             def open(self, request, timeout):
                 calls.append((request, timeout))
                 upstream.headers.setdefault("X-MN-Run-File-Binding", request.get_header("X-mn-run-file-binding"))
                 return upstream
+
         monkeypatch.setattr(urllib.request, "build_opener", lambda *_handlers: Opener())
         return upstream
 
-    return SimpleNamespace(client=TestClient(create_app()), run=run, node=node, reads=reads,
-                           calls=calls, respond=respond, config=config, upstreams=upstreams,
-                           directory=tmp_path / "shared/submissions/definition/outputs/runs/physical-1")
+    return SimpleNamespace(
+        client=TestClient(create_app()),
+        run=run,
+        node=node,
+        reads=reads,
+        calls=calls,
+        respond=respond,
+        config=config,
+        upstreams=upstreams,
+        directory=tmp_path / "shared/submissions/definition/outputs/runs/physical-1",
+    )
 
 
-@pytest.mark.parametrize("suffix,body", [
-    ("artifacts/final", b'{"run_id":"run-1","status":"review_ready"}'),
-    ("artifacts", b'{"items":[],"next_page_token":null}'),
-    ("artifacts/report.md", b"Report bytes\n"),
-    ("outputs", b'{"items":[{"name":"report.md"}],"next_page_token":null}'),
-    ("outputs/0", b"Verified report\n"),
-])
+@pytest.mark.parametrize(
+    "suffix,body",
+    [
+        ("artifacts/final", b'{"run_id":"run-1","status":"review_ready"}'),
+        ("artifacts", b'{"items":[],"next_page_token":null}'),
+        ("artifacts/report.md", b"Report bytes\n"),
+        ("outputs", b'{"items":[{"name":"report.md"}],"next_page_token":null}'),
+        ("outputs/0", b"Verified report\n"),
+    ],
+)
 def test_remote_run_files_use_owner_before_local_replication(remote_run, suffix, body):
     remote = remote_run
     upstream = remote.respond(body)
@@ -91,12 +113,25 @@ def test_remote_run_files_use_owner_before_local_replication(remote_run, suffix,
 def test_owner_authentication_pagination_and_byte_range_are_preserved(remote_run):
     remote = remote_run
     remote.config.api_token = "configured-token"
-    remote.respond(b"partial", {"Content-Range": "bytes 1-7/20", "Content-Type": "text/plain",
-                               "Set-Cookie": "private-cookie", "X-Internal": "private"}, status=206)
-    response = remote.client.get("/api/v1/runs/run-1/outputs/0?download=true", headers={
-        "Authorization": "Bearer configured-token", "Range": "bytes=1-7", "If-Range": '"hash"',
-        "Cookie": "private-caller-cookie",
-    })
+    remote.respond(
+        b"partial",
+        {
+            "Content-Range": "bytes 1-7/20",
+            "Content-Type": "text/plain",
+            "Set-Cookie": "private-cookie",
+            "X-Internal": "private",
+        },
+        status=206,
+    )
+    response = remote.client.get(
+        "/api/v1/runs/run-1/outputs/0?download=true",
+        headers={
+            "Authorization": "Bearer configured-token",
+            "Range": "bytes=1-7",
+            "If-Range": '"hash"',
+            "Cookie": "private-caller-cookie",
+        },
+    )
     assert response.status_code == 206
     assert response.content == b"partial"
     assert response.headers["content-range"] == "bytes 1-7/20"
@@ -151,9 +186,13 @@ def test_owner_confirms_binding_on_an_actual_local_file_response(remote_run):
     remote.directory.mkdir(parents=True)
     (remote.directory / "report.md").write_bytes(b"bound report")
     binding = _binding(remote.run, "owner@node")
-    response = remote.client.get("/api/v1/runs/run-1/artifacts/report.md", headers={
-        HOP_HEADER: "1", BINDING_HEADER: binding,
-    })
+    response = remote.client.get(
+        "/api/v1/runs/run-1/artifacts/report.md",
+        headers={
+            HOP_HEADER: "1",
+            BINDING_HEADER: binding,
+        },
+    )
     assert response.status_code == 200
     assert response.content == b"bound report"
     assert response.headers[BINDING_HEADER] == binding
@@ -178,9 +217,15 @@ def test_one_hop_and_owner_binding_fail_closed(remote_run, change):
     assert remote.calls == []
 
 
-@pytest.mark.parametrize("change,status", [
-    ("run_identity", 502), ("owner_missing", 503), ("bad_endpoint", 503), ("invalid_binding", 503),
-])
+@pytest.mark.parametrize(
+    "change,status",
+    [
+        ("run_identity", 502),
+        ("owner_missing", 503),
+        ("bad_endpoint", 503),
+        ("invalid_binding", 503),
+    ],
+)
 def test_invalid_core_authority_cannot_select_an_arbitrary_peer(remote_run, change, status):
     remote = remote_run
     if change == "run_identity":
@@ -213,8 +258,22 @@ def test_unconfirmed_upstream_response_is_closed_and_rejected(remote_run, change
     assert upstream.closed
 
 
-@pytest.mark.parametrize("code,expected", [(301, 503), (302, 503), (400, 400), (422, 422), (401, 503), (403, 503),
-                                          (404, 404), (409, 409), (416, 416), (500, 503), (503, 503)])
+@pytest.mark.parametrize(
+    "code,expected",
+    [
+        (301, 503),
+        (302, 503),
+        (400, 400),
+        (422, 422),
+        (401, 503),
+        (403, 503),
+        (404, 404),
+        (409, 409),
+        (416, 416),
+        (500, 503),
+        (503, 503),
+    ],
+)
 def test_peer_errors_never_redirect_credentials_or_substitute_local_data(remote_run, monkeypatch, code, expected):
     remote = remote_run
     payload = io.BytesIO(b"private upstream diagnostic")
@@ -223,8 +282,9 @@ def test_peer_errors_never_redirect_credentials_or_substitute_local_data(remote_
     class Opener:
         def open(self, request, timeout):
             remote.calls.append((request, timeout))
-            raise urllib.error.HTTPError(request.full_url, code, "private diagnostic",
-                                         {"Location": "https://attacker.invalid/"}, payload)
+            raise urllib.error.HTTPError(
+                request.full_url, code, "private diagnostic", {"Location": "https://attacker.invalid/"}, payload
+            )
 
     def opener(*configured):
         handlers.extend(configured)
@@ -240,8 +300,9 @@ def test_peer_errors_never_redirect_credentials_or_substitute_local_data(remote_
     assert redirect.redirect_request(None, None, 302, "redirect", {}, "https://attacker.invalid") is None
 
 
-@pytest.mark.parametrize("error", [TimeoutError("private"), OSError("private"),
-                                 ValueError("private"), urllib.error.URLError("private")])
+@pytest.mark.parametrize(
+    "error", [TimeoutError("private"), OSError("private"), ValueError("private"), urllib.error.URLError("private")]
+)
 def test_bounded_transport_failures_are_sanitized(remote_run, monkeypatch, error):
     class Opener:
         def open(self, _request, timeout):
@@ -257,8 +318,17 @@ def test_bounded_transport_failures_are_sanitized(remote_run, monkeypatch, error
 def test_abandoned_stream_closes_upstream_even_before_iteration(remote_run):
     remote = remote_run
     upstream = remote.respond(b"bytes")
-    request = Request({"type": "http", "method": "GET", "path": "/api/v1/runs/run-1/outputs/0",
-                       "query_string": b"", "headers": [], "scheme": "http", "server": ("test", 80)})
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/v1/runs/run-1/outputs/0",
+            "query_string": b"",
+            "headers": [],
+            "scheme": "http",
+            "server": ("test", 80),
+        }
+    )
     response = owner_file_response("run-1", remote.run, request, "outputs/0")
     assert not upstream.closed
     asyncio.run(response.background())
@@ -274,9 +344,12 @@ def test_invalid_membership_never_selects_a_peer(remote_run, monkeypatch, summar
 
 
 @pytest.mark.parametrize("fenced", [False, True])
-def test_documented_offline_replica_read_cannot_acknowledge_an_unverified_owner(remote_run, monkeypatch, tmp_path, fenced):
+def test_documented_offline_replica_read_cannot_acknowledge_an_unverified_owner(
+    remote_run, monkeypatch, tmp_path, fenced
+):
     def unavailable(_run_id):
         raise ConnectionError("Core unavailable")
+
     monkeypatch.setattr(jobs, "_service", lambda: SimpleNamespace(get_run=unavailable))
     monkeypatch.setattr(jobs, "stored_run", lambda _id: {"run_id": "run-1"})
     directory = tmp_path / "runs/run-1"
@@ -293,8 +366,10 @@ def test_documented_offline_replica_read_cannot_acknowledge_an_unverified_owner(
 
 def test_interrupted_stream_closes_the_owner_response(remote_run, monkeypatch):
     upstream = remote_run.respond(b"partial")
+
     def broken(_size):
         raise OSError("disconnected upstream")
+
     monkeypatch.setattr(upstream, "read1", broken)
     with pytest.raises(OSError, match="disconnected upstream"):
         remote_run.client.get("/api/v1/runs/run-1/outputs/0")
@@ -307,9 +382,13 @@ def test_owner_fences_json_metadata_as_well_as_file_bytes(remote_run):
     remote.directory.mkdir(parents=True)
     (remote.directory / "final_artifact.json").write_text('{"status":"review_ready"}')
     binding = _binding(remote.run, "owner@node")
-    response = remote.client.get("/api/v1/runs/run-1/artifacts/final", headers={
-        HOP_HEADER: "1", BINDING_HEADER: binding,
-    })
+    response = remote.client.get(
+        "/api/v1/runs/run-1/artifacts/final",
+        headers={
+            HOP_HEADER: "1",
+            BINDING_HEADER: binding,
+        },
+    )
     assert response.status_code == 200
     assert response.json()["run_id"] == "run-1"
     assert response.headers[BINDING_HEADER] == binding
@@ -320,15 +399,25 @@ def test_owner_fences_json_metadata_as_well_as_file_bytes(remote_run):
 def test_client_disconnect_closes_upstream_before_or_during_body(remote_run, fail_on):
     remote = remote_run
     upstream = remote.respond(b"body bytes")
-    scope = {"type": "http", "method": "GET", "path": "/api/v1/runs/run-1/outputs/0",
-             "query_string": b"", "headers": [], "scheme": "http", "server": ("test", 80),
-             "asgi": {"spec_version": "2.4"}}
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/api/v1/runs/run-1/outputs/0",
+        "query_string": b"",
+        "headers": [],
+        "scheme": "http",
+        "server": ("test", 80),
+        "asgi": {"spec_version": "2.4"},
+    }
     response = owner_file_response("run-1", remote.run, Request(scope), "outputs/0")
+
     async def send(message):
         if message["type"] == fail_on:
             raise OSError("client disconnected")
+
     async def receive():
         return {"type": "http.disconnect"}
+
     with pytest.raises(ClientDisconnect):
         asyncio.run(response(scope, receive, send))
     assert upstream.closed
@@ -336,9 +425,11 @@ def test_client_disconnect_closes_upstream_before_or_during_body(remote_run, fai
 
 def test_offline_missing_final_artifact_does_not_repeat_the_failed_core_read(remote_run, monkeypatch, tmp_path):
     reads = []
+
     def unavailable(run_id):
         reads.append(run_id)
         raise ConnectionError("Core unavailable")
+
     monkeypatch.setattr(jobs, "_service", lambda: SimpleNamespace(get_run=unavailable))
     monkeypatch.setattr(jobs, "stored_run", lambda _id: {"run_id": "run-1"})
     (tmp_path / "runs/run-1").mkdir(parents=True)

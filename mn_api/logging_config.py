@@ -16,9 +16,7 @@ def configure_logging(name: str = "mn-api", default_file: str = "api.log") -> lo
     if logger.handlers:
         return logger
 
-    formatter = logging.Formatter(
-        "%(asctime)s %(levelname)s [%(name)s] %(message)s"
-    )
+    formatter = logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
     log_path = config.api_log_path if default_file == "api.log" else default_logs_root() / default_file
 
     try:

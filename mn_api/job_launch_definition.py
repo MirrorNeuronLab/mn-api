@@ -41,6 +41,8 @@ def require_prepared_launch_models(job, manifest):
     except (AttributeError, TypeError, ValueError):
         prepared, candidate = None, None
     if prepared is None or prepared != candidate:
-        raise HTTPException(409,
+        raise HTTPException(
+            409,
             "This computer's blueprint models differ from the prepared co-worker. "
-            "Update its blueprint catalog and prepare the co-worker again.")
+            "Update its blueprint catalog and prepare the co-worker again.",
+        )

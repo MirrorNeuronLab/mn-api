@@ -486,15 +486,19 @@ def _compact_job_detail(job_id: str, *, run_data_ref: dict[str, Any] | None = No
     run_record = _read_json_file(run_dir / "run.json") if run_dir else {}
     nested_job = stored_job.get("job") if isinstance(stored_job.get("job"), dict) else {}
     observability_summary = _read_json_file(run_dir / "observability_summary.json") if run_dir else {}
-    run_id = run_dir.name if run_data_ref is not None and run_dir is not None else _first_string(
-        nested_job.get("run_id"),
-        nested_job.get("runId"),
-        stored_job.get("run_id"),
-        stored_job.get("runId"),
-        run_record.get("run_id"),
-        run_record.get("runId"),
-        event_run_id,
-        run_dir.name if run_dir else "",
+    run_id = (
+        run_dir.name
+        if run_data_ref is not None and run_dir is not None
+        else _first_string(
+            nested_job.get("run_id"),
+            nested_job.get("runId"),
+            stored_job.get("run_id"),
+            stored_job.get("runId"),
+            run_record.get("run_id"),
+            run_record.get("runId"),
+            event_run_id,
+            run_dir.name if run_dir else "",
+        )
     )
     graph_id = _first_string(
         nested_job.get("graph_id"),

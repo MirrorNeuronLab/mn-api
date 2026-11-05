@@ -42,9 +42,7 @@ def test_run_admission_overload_returns_retryable_capacity_problem(status):
 
 @pytest.mark.parametrize("status", [grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.INTERNAL])
 def test_no_schedulable_node_returns_distinct_problem(status):
-    response = handle_grpc_error(
-        RpcError(status, "no schedulable runtime nodes are available"), run_start=True
-    )
+    response = handle_grpc_error(RpcError(status, "no schedulable runtime nodes are available"), run_start=True)
 
     body = json.loads(response.body)
     assert response.status_code == 503
@@ -53,9 +51,7 @@ def test_no_schedulable_node_returns_distinct_problem(status):
 
 
 def test_other_operations_keep_their_existing_runtime_error_contract():
-    response = handle_grpc_error(
-        RpcError(grpc.StatusCode.UNAVAILABLE, "resource_overloaded: memory is busy")
-    )
+    response = handle_grpc_error(RpcError(grpc.StatusCode.UNAVAILABLE, "resource_overloaded: memory is busy"))
 
     assert json.loads(response.body)["code"] == "MN_RUNTIME_UNAVAILABLE"
 
@@ -114,12 +110,31 @@ def test_invalid_argument_does_not_build_validation_report_from_plain_detail():
 
 
 def test_measured_core_admission_problem_survives_rest_boundary():
-    response = handle_grpc_error(RpcError(grpc.StatusCode.INTERNAL,
-        'placement_failed: private@10.0.4.32 token=secret\nmn_admission_v1:' + json.dumps({"blockers": [{
-            "code": "MN_GPU_MEMORY_UNAVAILABLE", "node_index": 1, "node_label": "spark",
-            "resource": "gpu_memory_free_mb", "available": 8.17, "required": 48, "unit": "GiB",
-            "message": "secret", "hint": "secret", "path": "/Users/private",
-        }]})), run_start=True)
+    response = handle_grpc_error(
+        RpcError(
+            grpc.StatusCode.INTERNAL,
+            "placement_failed: private@10.0.4.32 token=secret\nmn_admission_v1:"
+            + json.dumps(
+                {
+                    "blockers": [
+                        {
+                            "code": "MN_GPU_MEMORY_UNAVAILABLE",
+                            "node_index": 1,
+                            "node_label": "spark",
+                            "resource": "gpu_memory_free_mb",
+                            "available": 8.17,
+                            "required": 48,
+                            "unit": "GiB",
+                            "message": "secret",
+                            "hint": "secret",
+                            "path": "/Users/private",
+                        }
+                    ]
+                }
+            ),
+        ),
+        run_start=True,
+    )
     body = json.loads(response.body)
     assert response.status_code == 503
     assert body["code"] == "MN_GPU_MEMORY_UNAVAILABLE"

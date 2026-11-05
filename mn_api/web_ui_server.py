@@ -278,7 +278,9 @@ async def proxy_job_ui_websocket_request(
             api_token=api_token,
             check_readiness=not probe,
         )
-        target_url = _job_ui_target_url(web_ui, port=port, path=path, query=query, websocket=True, check_readiness=not probe)
+        target_url = _job_ui_target_url(
+            web_ui, port=port, path=path, query=query, websocket=True, check_readiness=not probe
+        )
         target_url = relay_target(web_ui, job_id, port, path, query, websocket=True) or target_url
     except (JobUiProxyError, HTTPException):
         await _close_websocket(websocket, 1008)
@@ -348,12 +350,7 @@ def _job_ui_target_url(
         raise JobUiProxyError(409, "The job Web UI service is not running.")
     raw_url = web_ui.get("url")
     parsed = urllib.parse.urlsplit(str(raw_url or ""))
-    if (
-        parsed.scheme not in {"http", "https"}
-        or not parsed.hostname
-        or parsed.username
-        or parsed.password
-    ):
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
         raise JobUiProxyError(404, "The job Web UI endpoint is invalid.")
 
     try:
@@ -365,13 +362,7 @@ def _job_ui_target_url(
         raise JobUiProxyError(404, "That job Web UI connection is not declared.")
 
     path = _safe_proxy_path(path)
-    scheme = (
-        "wss"
-        if websocket and parsed.scheme == "https"
-        else "ws"
-        if websocket
-        else parsed.scheme
-    )
+    scheme = "wss" if websocket and parsed.scheme == "https" else "ws" if websocket else parsed.scheme
     host = parsed.hostname
     display_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
     target = f"{scheme}://{display_host}:{port}/{path}" if path else f"{scheme}://{display_host}:{port}/"
@@ -412,7 +403,16 @@ def _normalize_proxy_query(query: str) -> str:
 
 
 def _remote_proxy_headers(headers: Iterable[tuple[str, str]]) -> dict[str, str]:
-    excluded = HOP_BY_HOP_HEADERS | {"host", "authorization", "cookie", "accept-encoding", "origin", PROBE_HEADER.lower(), EXECUTION_HEADER.lower(), HOP_HEADER.lower()}
+    excluded = HOP_BY_HOP_HEADERS | {
+        "host",
+        "authorization",
+        "cookie",
+        "accept-encoding",
+        "origin",
+        PROBE_HEADER.lower(),
+        EXECUTION_HEADER.lower(),
+        HOP_HEADER.lower(),
+    }
     return {key: value for key, value in headers if key.lower() not in excluded}
 
 

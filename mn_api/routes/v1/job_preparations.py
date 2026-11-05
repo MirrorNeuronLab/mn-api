@@ -1,4 +1,5 @@
 """Short submissions for durable Job preparation, independent of HTTP lifetime."""
+
 from __future__ import annotations
 
 from hashlib import sha256
@@ -57,12 +58,21 @@ def _accepted(kind, operation_id, options, fingerprint, work):
         # before either accepts. The worker always uses the winning receipt.
         return work(progress, get_operation(operation_id)["options"])
 
-    operation = start_local_operation(kind, options, run_claimed, operation_id=operation_id,
-                                      request_fingerprint=fingerprint, durable=True, retry_failed=True)
+    operation = start_local_operation(
+        kind,
+        options,
+        run_claimed,
+        operation_id=operation_id,
+        request_fingerprint=fingerprint,
+        durable=True,
+        retry_failed=True,
+    )
     return resource_response(operation, status_code=202, location=f"{API_PREFIX}/operations/{operation_id}")
 
 
-@router.post("/job-preparations", status_code=202, operation_id="prepare_job", tags=["jobs"], response_model=ResourceModel)
+@router.post(
+    "/job-preparations", status_code=202, operation_id="prepare_job", tags=["jobs"], response_model=ResourceModel
+)
 def prepare_job(
     request: JobCreate,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", max_length=255),
@@ -76,8 +86,10 @@ def prepare_job(
     definition_fingerprint = idempotency_records.fingerprint(request.model_dump(exclude={"resolved_configuration"}))
     corrected = False
     if previous and previous.get("request_fingerprint") != fingerprint:
-        if (previous.get("status") == "failed" and
-                previous.get("options", {}).get("definition_fingerprint") == definition_fingerprint):
+        if (
+            previous.get("status") == "failed"
+            and previous.get("options", {}).get("definition_fingerprint") == definition_fingerprint
+        ):
             # A corrected request gets another operation, but retains the
             # original reserved Job identity. Failed preparation must not make
             # settings fixes impossible or leave a second Job behind.
@@ -86,12 +98,17 @@ def prepare_job(
         else:
             # Expose the original claim for explicit reconciliation, without
             # accepting a changed payload or allocating another Job identity.
-            raise HTTPException(status_code=409, detail="The request key already identifies another preparation.",
-                                headers={"Location": f"{API_PREFIX}/operations/{operation_id}"})
+            raise HTTPException(
+                status_code=409,
+                detail="The request key already identifies another preparation.",
+                headers={"Location": f"{API_PREFIX}/operations/{operation_id}"},
+            )
     # Allocate in the API and save before dispatch. Reconnection and API restart
     # reuse this exact identity even if Core committed before the reply was lost.
-    job_id = (previous.get("options") or {}).get("job_id") or request.job_id or generate_stable_job_id(
-        request.blueprint_id or "job"
+    job_id = (
+        (previous.get("options") or {}).get("job_id")
+        or request.job_id
+        or generate_stable_job_id(request.blueprint_id or "job")
     )
 
     def work(progress, claim):
@@ -100,27 +117,44 @@ def prepare_job(
         progress(stage="prepare", label="Prepare co-worker", detail="Preparing the saved Job definition.")
         current = _job_if_present(job_id)
         if current is not None:
-            if (current.get("job_id") != job_id or
-                request.blueprint_id and current.get("blueprint_id") != request.blueprint_id):
+            if (
+                current.get("job_id") != job_id
+                or request.blueprint_id
+                and current.get("blueprint_id") != request.blueprint_id
+            ):
                 raise HTTPException(status_code=409, detail="The prepared Job does not match this request.")
             if current.get("resolved_configuration", {}) != request.resolved_configuration:
                 if not corrected:
                     raise HTTPException(status_code=409, detail="The prepared Job configuration changed.")
                 with operation_progress(progress):
-                    response = jobs.update_job(job_id, JobUpdate(resolved_configuration=request.resolved_configuration),
-                                               strong_etag(current), principal)
+                    response = jobs.update_job(
+                        job_id,
+                        JobUpdate(resolved_configuration=request.resolved_configuration),
+                        strong_etag(current),
+                        principal,
+                    )
                 return json.loads(response.body)
             return current
         with operation_progress(progress):
             response = jobs.create_job(prepared_request, operation_id, principal, None)
         return json.loads(response.body)
 
-    return _accepted("prepare_job", operation_id, {"job_id": job_id, "definition_fingerprint": definition_fingerprint},
-                     fingerprint, work)
+    return _accepted(
+        "prepare_job",
+        operation_id,
+        {"job_id": job_id, "definition_fingerprint": definition_fingerprint},
+        fingerprint,
+        work,
+    )
 
 
-@router.post("/jobs/{job_id}/preparations", status_code=202, operation_id="prepare_job_update", tags=["jobs"],
-             response_model=ResourceModel)
+@router.post(
+    "/jobs/{job_id}/preparations",
+    status_code=202,
+    operation_id="prepare_job_update",
+    tags=["jobs"],
+    response_model=ResourceModel,
+)
 def prepare_job_update(
     job_id: str,
     request: JobUpdate,
@@ -146,13 +180,21 @@ def prepare_job_update(
         uncertain = previous.get("status") == "interrupted" or (
             previous.get("status") == "failed" and previous.get("error", {}).get("retryable") is True
         )
-        if (uncertain and not request.refresh_contract and
-                strong_etag(current) != expected_etag and
-                current.get("resolved_configuration") == request.resolved_configuration):
+        if (
+            uncertain
+            and not request.refresh_contract
+            and strong_etag(current) != expected_etag
+            and current.get("resolved_configuration") == request.resolved_configuration
+        ):
             return current
         with operation_progress(progress):
             response = jobs.update_job(job_id, request, expected_etag, principal)
         return json.loads(response.body)
 
-    return _accepted("prepare_job_update", operation_id, {"job_id": job_id, "expected_etag": expected_etag},
-                     idempotency_records.fingerprint(request.model_dump()), work)
+    return _accepted(
+        "prepare_job_update",
+        operation_id,
+        {"job_id": job_id, "expected_etag": expected_etag},
+        idempotency_records.fingerprint(request.model_dump()),
+        work,
+    )

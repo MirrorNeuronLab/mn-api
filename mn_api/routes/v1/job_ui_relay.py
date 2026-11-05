@@ -15,8 +15,12 @@ from mn_api.job_ui_readiness import PROBE_HEADER
 from mn_api.job_ui_routing import EXECUTION_HEADER, HOP_HEADER, placement
 from mn_api import job_ui as jobs
 from mn_api.web_ui_server import (
-    _job_ui_target_url, _remote_proxy_headers, _remote_response_headers,
-    _stream_binary_response, _bridge_websockets, JobUiProxyError,
+    _job_ui_target_url,
+    _remote_proxy_headers,
+    _remote_response_headers,
+    _stream_binary_response,
+    _bridge_websockets,
+    JobUiProxyError,
     _safe_proxy_path,
     _close_websocket,
 )
@@ -41,14 +45,17 @@ def local_target(job_id, port, path, query, headers, *, websocket=False):
         raise HTTPException(409, "This Web UI registration belongs to an earlier execution.")
     try:
         # A probe may bypass reachability, never lifecycle, execution or ports.
-        _job_ui_target_url(web_ui, port=port, path=path, query=query,
-                           websocket=websocket, check_readiness=not probe)
+        _job_ui_target_url(web_ui, port=port, path=path, query=query, websocket=websocket, check_readiness=not probe)
     except JobUiProxyError as exc:
         raise HTTPException(exc.status_code, exc.detail) from exc
     base = RuntimeConfig.from_env().web_ui_url.rstrip("/")
-    target = f"{base}/job-ui-proxy/{quote(job_id, safe='-._')}/{port}/" + ("ws/" if websocket else "") + _safe_proxy_path(path)
+    target = (
+        f"{base}/job-ui-proxy/{quote(job_id, safe='-._')}/{port}/"
+        + ("ws/" if websocket else "")
+        + _safe_proxy_path(path)
+    )
     if websocket:
-        target = ("wss" if target.startswith("https:") else "ws") + target[target.index(":"):]
+        target = ("wss" if target.startswith("https:") else "ws") + target[target.index(":") :]
     return target + ("?" + query if query else "")
 
 
@@ -72,8 +79,11 @@ def relay_http(job_id: str, port: int, path: str, request: Request, _auth=Depend
         upstream = opener.open(upstream_request, timeout=WebUiConfig.from_env().proxy_timeout_seconds)
     except OSError as exc:
         raise HTTPException(502, "The job Web UI could not be reached.") from exc
-    return StreamingResponse(_stream_binary_response(upstream), status_code=upstream.status,
-                             headers=_remote_response_headers(upstream.headers.items()))
+    return StreamingResponse(
+        _stream_binary_response(upstream),
+        status_code=upstream.status,
+        headers=_remote_response_headers(upstream.headers.items()),
+    )
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -84,17 +94,20 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 @router.websocket("/jobs/{job_id}/ui-proxy/{port}/ws/{path:path}")
 async def relay_websocket(websocket: WebSocket, job_id: str, port: int, path: str):
     if auth_enabled(state.config) and not hmac.compare_digest(
-        websocket.headers.get("authorization", ""), "Bearer " + state.config.api_token,
+        websocket.headers.get("authorization", ""),
+        "Bearer " + state.config.api_token,
     ):
         await websocket.close(code=1008)
         return
     try:
-        target = await asyncio.to_thread(local_target, job_id, port, path, websocket.url.query,
-                                         websocket.headers, websocket=True)
+        target = await asyncio.to_thread(
+            local_target, job_id, port, path, websocket.url.query, websocket.headers, websocket=True
+        )
         import websockets
 
-        async with websockets.connect(target, additional_headers=owner_headers({}),
-                                      open_timeout=WebUiConfig.from_env().proxy_timeout_seconds) as upstream:
+        async with websockets.connect(
+            target, additional_headers=owner_headers({}), open_timeout=WebUiConfig.from_env().proxy_timeout_seconds
+        ) as upstream:
             await websocket.accept()
             await _bridge_websockets(websocket, upstream)
     except HTTPException:

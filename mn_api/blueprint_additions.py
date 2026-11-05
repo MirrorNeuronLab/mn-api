@@ -145,10 +145,20 @@ def add_catalog_blueprint(
     report_progress: ProgressReporter | None = None,
 ) -> dict[str, Any]:
     report = report_progress or (lambda **_progress: None)
-    report(percent=10, stage="resolve_blueprint", label="Resolve blueprint", detail="Reading the configured blueprint catalog.")
+    report(
+        percent=10,
+        stage="resolve_blueprint",
+        label="Resolve blueprint",
+        detail="Reading the configured blueprint catalog.",
+    )
     repo_root, blueprint = find_blueprint(config, blueprint_id)
 
-    report(percent=30, stage="validate_blueprint", label="Validate blueprint", detail="Checking the blueprint bundle and manifest.")
+    report(
+        percent=30,
+        stage="validate_blueprint",
+        label="Validate blueprint",
+        detail="Checking the blueprint bundle and manifest.",
+    )
     bundle_root = validate_blueprint_bundle(repo_root, blueprint)
 
     report(
@@ -158,21 +168,32 @@ def add_catalog_blueprint(
         detail="Validating model requirements and preparing required runtime services. Models install on first use.",
     )
     try:
-        model_summary = defer_blueprint_runtime_models(repo_root, blueprint, force=force, config_overrides=config_overrides)
+        model_summary = defer_blueprint_runtime_models(
+            repo_root, blueprint, force=force, config_overrides=config_overrides
+        )
     except Exception as exc:
         raise BlueprintAddError() from exc
     if not model_summary.get("ok", True):
         raise BlueprintAddError(issues=_model_issues(model_summary))
 
-    report(percent=75, stage="prepare_skills", label="Prepare co-worker tools", detail="Installing this co-worker's required native tools.")
+    report(
+        percent=75,
+        stage="prepare_skills",
+        label="Prepare co-worker tools",
+        detail="Installing this co-worker's required native tools.",
+    )
     try:
         model_summary["skills"] = prepare_blueprint_install_skills(bundle_root, config_overrides=config_overrides)
     except SkillInstallError as exc:
-        raise BlueprintAddError(issues=[{"code": "skill_setup_failed", "message": str(exc), "severity": "error"}]) from exc
+        raise BlueprintAddError(
+            issues=[{"code": "skill_setup_failed", "message": str(exc), "severity": "error"}]
+        ) from exc
     except Exception as exc:
         raise BlueprintAddError() from exc
 
-    report(percent=90, stage="record_addition", label="Record blueprint", detail="Recording the added blueprint locally.")
+    report(
+        percent=90, stage="record_addition", label="Record blueprint", detail="Recording the added blueprint locally."
+    )
     _write_add_record(
         config=config,
         blueprint_id=blueprint_id,

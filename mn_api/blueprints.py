@@ -1276,9 +1276,7 @@ def validation_failure_report(message: str) -> Dict[str, Any]:
     }
 
 
-def record_prevalidated_command_rules(
-    manifest: Dict[str, Any], validation_report: Dict[str, Any]
-) -> None:
+def record_prevalidated_command_rules(manifest: Dict[str, Any], validation_report: Dict[str, Any]) -> None:
     sdk_record_prevalidated_command_rules(
         manifest,
         validation_report,
@@ -1302,7 +1300,9 @@ def load_blueprint_bundle(
     from mn_api import state
 
     with launch_activity(
-        progress_callback, "Read blueprint package.", "Reading and validating the blueprint and its referenced files.",
+        progress_callback,
+        "Read blueprint package.",
+        "Reading and validating the blueprint and its referenced files.",
         stage="bundle_validation",
     ):
         bundle_root = validate_blueprint_bundle(repo_root, blueprint)
@@ -1350,11 +1350,16 @@ def load_blueprint_bundle(
         )
         validation_env.update(preparation_env)
         with launch_activity(
-            progress_callback, "Validate configured inputs.",
-            "Checking configured inputs and their declared validators.", stage="input_validation",
+            progress_callback,
+            "Validate configured inputs.",
+            "Checking configured inputs and their declared validators.",
+            stage="input_validation",
         ):
             input_validation_report = run_input_validation(
-                bundle_root, validation_manifest, config=validation_config, env=validation_env,
+                bundle_root,
+                validation_manifest,
+                config=validation_config,
+                env=validation_env,
             )
         if not input_validation_report.get("ok"):
             raise HTTPException(status_code=422, detail=input_validation_report)
@@ -1466,7 +1471,9 @@ def load_blueprint_bundle(
             )
 
     with launch_activity(
-        progress_callback, "Stage workflow files.", "Copying and verifying payload assets and local inputs.",
+        progress_callback,
+        "Stage workflow files.",
+        "Copying and verifying payload assets and local inputs.",
         stage="payload_staging",
     ):
         payloads = stage_payload_assets(
@@ -1600,15 +1607,21 @@ def prepare_hostlocal_python_environments_for_submission(
             raise RuntimeError(f"{node_id}: HostLocal Python environment preparation did not return a runtime path")
         python_environment["path"] = runtime_path
         if native_host:
-            if response.get("native_host_protocol") != "mn.native.host-python.v1" or not response.get("bridge_runtime_path"):
-                raise RuntimeError("Native host Python support is unavailable. Update the native SDK and restart its service.")
+            if response.get("native_host_protocol") != "mn.native.host-python.v1" or not response.get(
+                "bridge_runtime_path"
+            ):
+                raise RuntimeError(
+                    "Native host Python support is unavailable. Update the native SDK and restart its service."
+                )
             config[NATIVE_ENVIRONMENT_KEY] = {
                 "python": str(Path(str(response.get("host_path") or runtime_path)) / "bin" / "python"),
                 "target": str(response.get("native_target") or ""),
                 "environment": dict(python_environment),
             }
-            config["python_environment"] = {"packages": ["mirrorneuron-python-sdk>1.3,<2"],
-                                            "path": str(response["bridge_runtime_path"])}
+            config["python_environment"] = {
+                "packages": ["mirrorneuron-python-sdk>1.3,<2"],
+                "path": str(response["bridge_runtime_path"]),
+            }
         prepared.append(
             {
                 "node_id": node_id,
@@ -2393,8 +2406,12 @@ def start_background_event_relay_if_needed(
         str(runs_root),
     )
     start_background_run_relay(
-        run_id, execution_id, storage, config=config,
-        env_overrides=env_overrides, grpc_target=grpc_target,
+        run_id,
+        execution_id,
+        storage,
+        config=config,
+        env_overrides=env_overrides,
+        grpc_target=grpc_target,
         grpc_auth_token=grpc_auth_token,
         grpc_timeout_seconds=grpc_timeout_seconds,
     )

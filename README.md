@@ -9,7 +9,6 @@ installation credential file, carry its fingerprint, and stop after reset,
 credential revocation or authoritative run deletion. PID reuse does not suppress
 recovery, and an OS execution lock prevents duplicate delivery observers.
 
-
 API preparation recognizes `MirrorNeuron.Runner.OpenShell`. Before storing a Job
 definition or configuration update, it uses the SDK to build the declared image
 and prepare its shared sandbox on the selected runtime host, including federated
@@ -144,7 +143,6 @@ reenabling paused schedules. Core must include stable-Job reactivation support.
 `POST /api/v1/job-preparations` accepts `JobCreate` with an `Idempotency-Key`, reserves a stable Job identity before dispatch, and returns `202` with a durable operation and `Location`. `POST /api/v1/jobs/{id}/preparations` accepts configuration-only `JobUpdate` with `Idempotency-Key` and `If-Match`. Follow `/api/v1/operations/{id}` or its authenticated SSE stream. Reading a failed preparation never restarts it; explicitly reposting retries under its original reserved Job and conditional fence. Reposting the same claim reconnects to it; after API restart the original Job identity and conditional revision fence are reused. A changed active/completed creation payload returns `409` with the original operation location for reconciliation. A corrected failed preparation receives a new operation for the original reserved Job. Synchronous REST resources remain available for existing direct clients; OtterDesk uses only the asynchronous preparation path.
 
 Job MCP `ask_job` advertises `background` and `reply_action` (`start`, `read`, `cancel`) for both read-only and bounded-agent replies. Async calls require a stable request ID and preserve the question, original conversation ID and assistance intent across reads. A read-only activity-control capability probe verifies owner support before dispatch. Each call returns `mn.mcp.job_reply_operation.v1` with Job/blueprint/request/operation/conversation identity, status, cumulative bounded text, and a final `response` retaining the existing answer contract. The Job owner persists its claim before running the answer. Relay unavailability returns `mn.mcp.job_reply_observation.v1`; clients reconnect to the original claim instead of treating it as an owner failure. Connections observe work; they do not own its lifetime. Read-only cancellation is explicit. Effectful interruption is reported for reconciliation and never automatically replayed. Deploy the matching SDK job-response component on each owner and restart the native SDK service alongside the API.
-
 
 ## Quick Start
 
@@ -500,6 +498,7 @@ The new SSE transport keeps MCP's loopback Host/Origin protection enabled
 transports retain their settings. Non-loopback SSE exposure requires an explicit
 trusted-host configuration in the transport before deployment; it must not be
 enabled by disabling rebinding protection.
+
 # Run result publication
 
 Blueprint submissions with shared output copies start the background event relay, even without a post-launch hook. While a run is active, the run events API also reads published `run_result_available` events directly from the job's shared submission. This makes service results available before a local run store or completion relay exists. On completion the relay copies stable outputs and publishes their result events. Clients can show every declared result without depending on blueprint-specific configuration.
@@ -565,8 +564,7 @@ requirements remain enforced.
 Authenticated `GET /api/v1/jobs/{job_id}/analysis` returns the SDK job analysis:
 `job_id`, `snapshot_at`, `scope: recorded_history`, `history_complete`, `runs`,
 `running_time`, and `tokens`. Coverage accompanies nullable duration/token values.
-Unknown jobs use the normal not-found problem response; analysis deadlines return
-504. Disconnects cancel further collection. No model calls or runtime starts occur.
+Unknown jobs use the normal not-found problem response; analysis deadlines return 504. Disconnects cancel further collection. No model calls or runtime starts occur.
 
 ## Shared assistance evaluation
 
@@ -632,7 +630,6 @@ Requires matching Core `ExportJobBackup` / `RestoreJobBackup` streamed RPCs and
 SDK `mn.backup.v3` support. The destination runtime, Python and Docker installation
 must already be available on a compatible OS/architecture/Python ABI.
 
-
 ## Collaboration group catalog contract
 
 Catalog projections preserve the SDK-validated `mn.collaboration.group.v1`
@@ -641,7 +638,6 @@ IDs, member capacity (2–16), goalKey/commonGoalKey, groupKey, peersKey, and
 sameRuntime. Group peer configuration uses stable `{jobId, blueprintId}` entries.
 Invalid declarations and private metadata are omitted. Legacy pair declarations
 remain capacity two. This contract does not launch work or grant approvals.
-
 
 ## Preparation timing
 
@@ -660,7 +656,6 @@ Runtime events use the shared [`mn.runtime.event.v1` contract](../mn-python-sdk/
 including level, blueprint owner, UTC timestamp and actor attribution.
 The SDK selects meaningful activity for the CLI, API, desktop and web monitors;
 raw events remain available for diagnostics.
-
 
 ## Standard Job MCP supervision
 
@@ -757,7 +752,6 @@ in their AI client's MCP settings.
 
 Local-source MCP integration requires the matching SDK/common/MCP family from `1.3.61.dev12` onward, below `2.0`. This floor accepts the source revision containing supervision and Skills; it does not require an unpublished `1.3.62` family.
 
-
 ## Automatically queued starts and schedule controls
 
 `GET /api/v1/runs/{run_id}` and `/api/v1/runs/{run_id}/monitor` expose the same
@@ -842,7 +836,6 @@ clients retain their restricted native-launch authority. Redirects and environme
 proxies are disabled, request bodies are bounded to 1 MiB, and peer streams close
 on completion or disconnect. Deploy this API revision on ingress and owner nodes.
 
-
 ## Runtime delivery flows
 
 Deploy with matching Core v2 and SDK/native components. Authenticated run input
@@ -850,7 +843,6 @@ submission and status endpoints preserve command receipts. Independent errors an
 responses SSE channels support durable replay through `Last-Event-ID`.
 
 See [SPEC.md](SPEC.md) for queue guarantees, correlation, replay, and compatibility details.
-
 
 ## Native tools on co-worker addition
 

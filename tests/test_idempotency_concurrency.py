@@ -22,8 +22,13 @@ def test_matching_requests_share_work_and_other_keys_keep_progressing(monkeypatc
 
     def request(key="same", body=None, call=work):
         return public.idempotent_response(
-            principal="fixture", route="/fixture", key=key, body=body or {},
-            call=call, status_code=202, location=lambda value: "/operations/" + value["operation_id"],
+            principal="fixture",
+            route="/fixture",
+            key=key,
+            body=body or {},
+            call=call,
+            status_code=202,
+            location=lambda value: "/operations/" + value["operation_id"],
         )
 
     def duplicate():
@@ -79,8 +84,9 @@ def test_inflight_custom_response_preserves_wire_bytes_and_duplicate_headers(mon
         return response
 
     def request():
-        return public.idempotent_response(principal="fixture", route="/custom", key="key",
-                                          body={}, call=work, status_code=202, location=None)
+        return public.idempotent_response(
+            principal="fixture", route="/custom", key="key", body={}, call=work, status_code=202, location=None
+        )
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         owner = pool.submit(request)

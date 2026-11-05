@@ -38,7 +38,11 @@ def public_value(value: Any) -> Any:
             normalized_key = str(key)
             if normalized_key == "version" or normalized_key.startswith("_") or normalized_key in _PRIVATE_KEYS:
                 continue
-            if isinstance(item, str) and os.path.isabs(item) and (normalized_key == "path" or normalized_key.endswith("_path")):
+            if (
+                isinstance(item, str)
+                and os.path.isabs(item)
+                and (normalized_key == "path" or normalized_key.endswith("_path"))
+            ):
                 continue
             result[normalized_key] = public_value(item)
         return result
@@ -106,19 +110,31 @@ def idempotent_response(
         headers = {"Location": resolved_location} if resolved_location else {}
         if key:
             idempotency_records.store(
-                principal=principal, route=route, key=key, fingerprint=fingerprint,
-                status_code=status_code, headers=headers, body=result,
+                principal=principal,
+                route=route,
+                key=key,
+                fingerprint=fingerprint,
+                status_code=status_code,
+                headers=headers,
+                body=result,
             )
         return JSONResponse(status_code=status_code, content=result, headers=headers)
 
     if not key:
         return execute()
     response, replayed = idempotency_records.execute(
-        principal=principal, route=route, key=key, fingerprint=fingerprint, call=execute,
+        principal=principal,
+        route=route,
+        key=key,
+        fingerprint=fingerprint,
+        call=execute,
     )
     if isinstance(response, Replay):
-        return JSONResponse(status_code=response.status_code, content=response.body,
-                            headers={**response.headers, "Idempotency-Replayed": "true"})
+        return JSONResponse(
+            status_code=response.status_code,
+            content=response.body,
+            headers={**response.headers, "Idempotency-Replayed": "true"},
+        )
     if replayed:
         replay = Response(status_code=response.status_code, content=response.body)
         replay.raw_headers = list(response.raw_headers)

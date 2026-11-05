@@ -92,7 +92,6 @@ class TestBundleServices(unittest.TestCase):
             self.assertIn("only Markdown corpus v2", raised.exception.detail)
 
 
-
 def test_save_uploaded_bundle_accepts_current_bundle(tmp_path):
     source = tmp_path / "source"
     write_blueprint_definition(

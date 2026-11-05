@@ -26,8 +26,13 @@ def probe_job_web_ui(job_id: str, url: str) -> dict[str, Any]:
         port = parsed.port or (443 if parsed.scheme == "https" else 80)
     except ValueError:
         return {"schema_version": "mn.web_ui.readiness.v1", "ready": False, "reason": "invalid_url"}
-    if (parsed.scheme not in {"http", "https"} or not parsed.hostname
-            or parsed.username is not None or parsed.password is not None or not 1 <= port <= 65535):
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or not 1 <= port <= 65535
+    ):
         return {"schema_version": "mn.web_ui.readiness.v1", "ready": False, "reason": "invalid_url"}
 
     base = RuntimeConfig.from_env().web_ui_url.rstrip("/")

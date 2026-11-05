@@ -33,7 +33,7 @@ if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
     echo "tag_name=$tag"
     echo "version=$version"
     echo "is_prerelease=$is_prerelease"
-  } >> "$GITHUB_OUTPUT"
+  } >>"$GITHUB_OUTPUT"
 fi
 
 if [[ -n "${GITHUB_ENV:-}" ]]; then
@@ -41,7 +41,7 @@ if [[ -n "${GITHUB_ENV:-}" ]]; then
     echo "TAG_NAME=$tag"
     echo "VERSION=$version"
     echo "IS_PRERELEASE=$is_prerelease"
-  } >> "$GITHUB_ENV"
+  } >>"$GITHUB_ENV"
 fi
 
 echo "Validated release tag $tag (version $version, prerelease $is_prerelease)."

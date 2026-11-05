@@ -8,9 +8,14 @@ def test_recover_stored_workflow_progress(tmp_path, monkeypatch):
     local = tmp_path / "runs" / "bootstrap"
     local.mkdir(parents=True)
     (local / "job.json").write_text(json.dumps({"run_id": "remote-1"}), encoding="utf-8")
-    (local / "manifest.json").write_text(json.dumps({
-        "workflow": {"steps": [{"id": "prepare", "run": "prepare"}]},
-    }), encoding="utf-8")
+    (local / "manifest.json").write_text(
+        json.dumps(
+            {
+                "workflow": {"steps": [{"id": "prepare", "run": "prepare"}]},
+            }
+        ),
+        encoding="utf-8",
+    )
     remote = tmp_path / "shared" / "remote-1"
     remote.mkdir(parents=True)
     (remote / "run.json").write_text(json.dumps({"run_id": "remote-1", "status": "failed"}), encoding="utf-8")
@@ -34,11 +39,15 @@ def test_stale_running_shared_record_is_unknown(tmp_path, monkeypatch):
 
 
 def test_api_run_list_keeps_mapped_runs_and_prefers_core_status(monkeypatch):
-    monkeypatch.setattr(jobs, "list_local_runs", lambda: [
-        {"run_id": "old", "status": "failed"},
-        {"run_id": "stale", "status": "running", "placement": {"owner_node": "old"}},
-        {"run_id": "live", "status": "unknown", "placement": {"owner_node": "old"}},
-    ])
+    monkeypatch.setattr(
+        jobs,
+        "list_local_runs",
+        lambda: [
+            {"run_id": "old", "status": "failed"},
+            {"run_id": "stale", "status": "running", "placement": {"owner_node": "old"}},
+            {"run_id": "live", "status": "unknown", "placement": {"owner_node": "old"}},
+        ],
+    )
 
     class Service:
         def list_jobs(self, **_kwargs):
@@ -59,14 +68,19 @@ def test_api_run_list_keeps_mapped_runs_and_prefers_core_status(monkeypatch):
 
 def test_all_runs_bounds_parallel_reads_and_preserves_partial_results(monkeypatch):
     from threading import Barrier, Lock
+
     barrier = Barrier(8, timeout=2)
     lock = Lock()
     active = 0
     peak = 0
-    monkeypatch.setattr(jobs, "list_local_runs", lambda: [
-        {"run_id": "failed-owner", "status": "running"},
-        {"run_id": "saved", "status": "completed"},
-    ])
+    monkeypatch.setattr(
+        jobs,
+        "list_local_runs",
+        lambda: [
+            {"run_id": "failed-owner", "status": "running"},
+            {"run_id": "saved", "status": "completed"},
+        ],
+    )
 
     class Service:
         def list_jobs(self, **kwargs):

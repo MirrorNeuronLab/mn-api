@@ -16,8 +16,16 @@ from mn_api.node_api import node_api_base_url
 
 HOP_HEADER = "X-MN-Run-File-Hop"
 BINDING_HEADER = "X-MN-Run-File-Binding"
-_RESPONSE_HEADERS = {"content-type", "content-length", "content-disposition", "content-range",
-                     "accept-ranges", "etag", "last-modified", "cache-control"}
+_RESPONSE_HEADERS = {
+    "content-type",
+    "content-length",
+    "content-disposition",
+    "content-range",
+    "accept-ranges",
+    "etag",
+    "last-modified",
+    "cache-control",
+}
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -38,9 +46,13 @@ class _OwnerFileResponse(StreamingResponse):
 
 
 def _binding(run, owner):
-    value = {"run_id": run.get("run_id"), "job_id": run.get("job_id"), "owner_node": owner,
-             "data_generation": run.get("data_generation"),
-             "reference": run.get("run_data_ref") or run.get("result_ref")}
+    value = {
+        "run_id": run.get("run_id"),
+        "job_id": run.get("job_id"),
+        "owner_node": owner,
+        "data_generation": run.get("data_generation"),
+        "reference": run.get("run_data_ref") or run.get("result_ref"),
+    }
     try:
         encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     except (ValueError, TypeError) as error:
@@ -118,10 +130,12 @@ def owner_file_response(run_id, run, request, resource):
         raise HTTPException(503, "Couldn't read run files from their owner. Try again.") from error
     except (OSError, ValueError, urllib.error.URLError) as error:
         raise HTTPException(503, "Couldn't read run files from their owner. Try again.") from error
-    if (upstream.status not in (200, 206)
-            or upstream.headers.get("X-API-Contract") != API_CONTRACT
-            or upstream.headers.get(BINDING_HEADER) != binding
-            or upstream.headers.get("Content-Encoding", "identity").lower() not in ("", "identity")):
+    if (
+        upstream.status not in (200, 206)
+        or upstream.headers.get("X-API-Contract") != API_CONTRACT
+        or upstream.headers.get(BINDING_HEADER) != binding
+        or upstream.headers.get("Content-Encoding", "identity").lower() not in ("", "identity")
+    ):
         upstream.close()
         raise HTTPException(502, "The run-file owner did not confirm this storage binding. Update its API.")
 
@@ -135,6 +149,10 @@ def owner_file_response(run_id, run, request, resource):
         finally:
             upstream.close()
 
-    return _OwnerFileResponse(upstream, chunks(), status_code=upstream.status,
+    return _OwnerFileResponse(
+        upstream,
+        chunks(),
+        status_code=upstream.status,
         headers={key: value for key, value in upstream.headers.items() if key.lower() in _RESPONSE_HEADERS},
-        background=BackgroundTask(upstream.close))
+        background=BackgroundTask(upstream.close),
+    )

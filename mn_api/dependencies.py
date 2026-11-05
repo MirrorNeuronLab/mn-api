@@ -26,6 +26,7 @@ async def enforce_request_size(request: Request, call_next):
     limit = state.config.request_size_limit_bytes
     if request.method == "POST" and request.url.path.rstrip("/") == f"{API_PREFIX}/job-restorations":
         from mn_sdk.job_backup.archive import MAX_BYTES
+
         limit = MAX_BYTES
     if request.method == "POST" and request.url.path.rstrip("/") == f"{API_PREFIX}/bundles":
         # Permit multipart framing in addition to the separately enforced file cap.

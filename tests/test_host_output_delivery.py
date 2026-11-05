@@ -18,10 +18,12 @@ def test_reconciles_completed_scheduled_run_without_desktop_copy(monkeypatch, tm
         "host_root": str(shared),
         "host_submission_path": str(submission),
         "runtime_root": "/runtime/shared",
-        "output_copy": [{
-            "source_path": "/runtime/shared/submissions/job-1-def-current/outputs/user",
-            "target_path": str(tmp_path / "Downloads" / "report"),
-        }],
+        "output_copy": [
+            {
+                "source_path": "/runtime/shared/submissions/job-1-def-current/outputs/user",
+                "target_path": str(tmp_path / "Downloads" / "report"),
+            }
+        ],
     }
     (submission / "submission.json").write_text(json.dumps(storage), encoding="utf-8")
     (run / ".mn_completion.json").write_text(
@@ -39,7 +41,8 @@ def test_reconciles_completed_scheduled_run_without_desktop_copy(monkeypatch, tm
     )
     monkeypatch.setattr(host_output_delivery, "shared_runs_root", lambda: str(local_runs))
     monkeypatch.setattr(
-        host_output_delivery, "start_background_run_relay",
+        host_output_delivery,
+        "start_background_run_relay",
         lambda *args: calls.append(args),
     )
 
@@ -50,10 +53,13 @@ def test_reconciles_completed_scheduled_run_without_desktop_copy(monkeypatch, tm
     # A live but unrelated PID must not prevent recovery of run delivery.
     assert host_output_delivery.reconcile_host_output_delivery() == 1
     monkeypatch.setattr("mn_sdk.blueprint_support.relay_ownership.process_identity", lambda pid: "relay-birth")
-    (local_run / "event_relay.json").write_text(json.dumps({"pid": os.getpid(), "process_identity": "relay-birth"}), encoding="utf-8")
+    (local_run / "event_relay.json").write_text(
+        json.dumps({"pid": os.getpid(), "process_identity": "relay-birth"}), encoding="utf-8"
+    )
     assert host_output_delivery.reconcile_host_output_delivery() == 0
     (local_run / "event_relay.json").unlink()
     from pathlib import Path
+
     token = Path(os.environ["MN_HOME"]) / "grpc_auth.token"
     old_token = token.read_text()
     token.write_text("replacement-installation")

@@ -166,6 +166,7 @@ def test_agent_topology_and_openshell_path_helpers(tmp_path):
 
     assert blueprints.manifest_agent_nodes(manifest) == [{"node_id": "a"}]
 
+
 def test_background_relay_config_helpers(monkeypatch):
     values = {}
     monkeypatch.setattr("mn_api.blueprints.config_optional_value", lambda name: values.get(name))
@@ -188,7 +189,7 @@ def test_result_copy_starts_background_relay_without_post_launch_hook(monkeypatc
     monkeypatch.setattr(blueprints, "validate_blueprint_bundle", lambda *_args: tmp_path)
     monkeypatch.setattr(blueprints, "load_blueprint_config", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(blueprints, "with_shared_run_store_config", lambda config, *_args: config)
-    monkeypatch.setattr(blueprints, "subprocess_environment", lambda: {"MN_HOME": str(tmp_path / "runtime")} )
+    monkeypatch.setattr(blueprints, "subprocess_environment", lambda: {"MN_HOME": str(tmp_path / "runtime")})
     (tmp_path / "runtime").mkdir()
     (tmp_path / "runtime/grpc_auth.token").write_text("isolated-runtime-credential")
     monkeypatch.setattr(blueprints, "runtime_path_environment", lambda: {})

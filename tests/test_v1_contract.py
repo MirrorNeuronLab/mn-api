@@ -36,10 +36,7 @@ class CanonicalRuntime:
     def list_jobs(self, *, include_archived=False, page_size=50, page_token="", local_only=False):
         self.calls.append(("list_jobs", include_archived))
         offset = int(page_token or 0)
-        values = [
-            {"job_id": f"job-{index:03}", "created_at": f"2026-01-01T00:{index:02}:00Z"}
-            for index in range(75)
-        ]
+        values = [{"job_id": f"job-{index:03}", "created_at": f"2026-01-01T00:{index:02}:00Z"} for index in range(75)]
         selected = values[offset : offset + page_size]
         next_offset = offset + len(selected)
         return json.dumps(
@@ -68,10 +65,14 @@ class CanonicalRuntime:
         return json.dumps({"job_id": job_id, "run_id": kwargs.get("run_id") or "run-1", "status": "pending"})
 
     def list_runs(self, job_id, *, page_size=50, page_token=""):
-        return json.dumps({"items": [{"job_id": job_id, "run_id": "run-1", "status": "completed"}], "next_page_token": None})
+        return json.dumps(
+            {"items": [{"job_id": job_id, "run_id": "run-1", "status": "completed"}], "next_page_token": None}
+        )
 
     def get_run(self, run_id):
-        return json.dumps({"job_id": "job-1", "run_id": run_id, "status": self.run_status, "runtime_run_id": "runtime-1"})
+        return json.dumps(
+            {"job_id": "job-1", "run_id": run_id, "status": self.run_status, "runtime_run_id": "runtime-1"}
+        )
 
     def pause_run(self, run_id):
         self.run_status = "paused"
@@ -142,7 +143,9 @@ class CanonicalRuntime:
         return json.dumps({"node": node_id, "enabled": enabled, **kwargs})
 
     def deploy_job(self, _manifest, _payloads, **kwargs):
-        return json.dumps({"deployment_id": kwargs.get("deployment_key") or "deployment-1", "status": "running", "revision": 1})
+        return json.dumps(
+            {"deployment_id": kwargs.get("deployment_key") or "deployment-1", "status": "running", "revision": 1}
+        )
 
     def list_deployments(self):
         return json.dumps({"items": [{"deployment_id": "deployment-1", "status": "running", "revision": 1}]})
@@ -254,7 +257,9 @@ def test_openapi_is_only_canonical_v1_and_documents_auth():
     paths = schema["paths"]
     assert paths
     assert all(path.startswith("/api/v1") for path in paths)
-    assert not any("/api/v2" in path or "/runtime-runs" in path or ":" in path or path.endswith("/ws") for path in paths)
+    assert not any(
+        "/api/v2" in path or "/runtime-runs" in path or ":" in path or path.endswith("/ws") for path in paths
+    )
     operation_ids = [
         operation["operationId"]
         for methods in paths.values()
@@ -337,9 +342,7 @@ def test_collection_pagination_and_filter_binding(monkeypatch):
     assert second["items"][0]["job_id"] == "job-025"
     assert final["next_page_token"] is None
 
-    mismatch = client.get(
-        f"/api/v1/jobs?include_archived=true&page_size=25&page_token={first['next_page_token']}"
-    )
+    mismatch = client.get(f"/api/v1/jobs?include_archived=true&page_size=25&page_token={first['next_page_token']}")
     assert mismatch.status_code == 400
     assert mismatch.json()["code"] == "bad_request"
 
@@ -374,9 +377,15 @@ def test_page_snapshot_is_stable_under_inserts(monkeypatch):
 
 def test_restore_archived_job_is_conditional_and_does_not_create_or_start_work(monkeypatch):
     client, runtime = _client(monkeypatch)
-    saved = {"job_id": "job-1", "status": "archived", "revision": 7,
-             "latest_run_id": "completed-run", "data_generation": 3,
-             "resolved_configuration": {"mode": "saved"}, "schedules": [{"status": "paused"}]}
+    saved = {
+        "job_id": "job-1",
+        "status": "archived",
+        "revision": 7,
+        "latest_run_id": "completed-run",
+        "data_generation": 3,
+        "resolved_configuration": {"mode": "saved"},
+        "schedules": [{"status": "paused"}],
+    }
     monkeypatch.setattr(runtime, "get_job", lambda _job_id, **_kwargs: json.dumps(saved))
 
     def update_job(job_id, attrs, **kwargs):
@@ -398,8 +407,9 @@ def test_restore_archived_job_is_conditional_and_does_not_create_or_start_work(m
     assert saved["resolved_configuration"] == {"mode": "saved"}
     assert saved["schedules"] == [{"status": "paused"}]
     assert restored.headers["etag"] != current.headers["etag"]
-    assert runtime.calls == [("update_job", "job-1", {"status": "active"},
-                              {"expected_revision": 7, "replace_existing_run": False})]
+    assert runtime.calls == [
+        ("update_job", "job-1", {"status": "active"}, {"expected_revision": 7, "replace_existing_run": False})
+    ]
 
 
 def test_etag_precondition_and_idempotent_run_creation(monkeypatch):
@@ -466,15 +476,17 @@ def test_job_configuration_and_run_overrides_reprepare_catalog_definition(monkey
     monkeypatch.setattr(
         runtime,
         "get_job",
-        lambda job_id: json.dumps({
-            "job_id": job_id,
-            "blueprint_id": "worker-1",
-            "status": "active",
-            "revision": 1,
-            "owner_node": "mirror_neuron@gpu-node",
-            "resolved_configuration": {"worker": {"mode": "saved"}},
-            "native_resource_ownership": {"submission_id": "job-1-def-current"},
-        }),
+        lambda job_id: json.dumps(
+            {
+                "job_id": job_id,
+                "blueprint_id": "worker-1",
+                "status": "active",
+                "revision": 1,
+                "owner_node": "mirror_neuron@gpu-node",
+                "resolved_configuration": {"worker": {"mode": "saved"}},
+                "native_resource_ownership": {"submission_id": "job-1-def-current"},
+            }
+        ),
     )
     monkeypatch.setattr(
         jobs,
@@ -494,12 +506,16 @@ def test_job_configuration_and_run_overrides_reprepare_catalog_definition(monkey
         lambda *args, **kwargs: relays.append((args, kwargs)),
     )
     submission_lookups = []
+
     def load_submission(*args):
         submission_lookups.append(args)
         return {"output_copy": [{"source_path": "/runtime/output", "target_path": "/host/output"}]}
+
     monkeypatch.setattr(jobs.RuntimeConfig, "from_env", lambda: SimpleNamespace(shared_storage_root="/tmp/test-shared"))
     monkeypatch.setattr(jobs, "load_submission_storage", load_submission)
-    monkeypatch.setattr(jobs, "start_background_run_relay", lambda *args, **kwargs: output_relays.append((args, kwargs)))
+    monkeypatch.setattr(
+        jobs, "start_background_run_relay", lambda *args, **kwargs: output_relays.append((args, kwargs))
+    )
 
     current = client.get("/api/v1/jobs/job-1")
     updated = client.patch(
@@ -542,7 +558,6 @@ def test_job_configuration_and_run_overrides_reprepare_catalog_definition(monkey
     assert relays[-1][0][3] == "run-1"
     assert relays[-1][1]["config_overrides"]["execution"]["quick_test"] is True
 
-
     update_count = len([call for call in runtime.calls if call[0] == "update_job"])
     started_without_overrides = client.post(
         "/api/v1/jobs/job-1/runs",
@@ -579,14 +594,16 @@ def test_otterdesk_stable_service_start_acknowledges_run_with_runtime_shared_sto
     monkeypatch.setattr(
         runtime,
         "get_job",
-        lambda job_id: json.dumps({
-            "job_id": job_id,
-            "blueprint_id": "cctv_operator",
-            "status": "active",
-            "revision": 1,
-            "resolved_configuration": {"input": "sample"},
-            "native_resource_ownership": {"submission_id": "job-co-definition"},
-        }),
+        lambda job_id: json.dumps(
+            {
+                "job_id": job_id,
+                "blueprint_id": "cctv_operator",
+                "status": "active",
+                "revision": 1,
+                "resolved_configuration": {"input": "sample"},
+                "native_resource_ownership": {"submission_id": "job-co-definition"},
+            }
+        ),
     )
     monkeypatch.setattr(jobs.RuntimeConfig, "from_env", lambda: SimpleNamespace(shared_storage_root="/runtime/shared"))
     storage_calls = []
@@ -598,9 +615,11 @@ def test_otterdesk_stable_service_start_acknowledges_run_with_runtime_shared_sto
 
     monkeypatch.setattr(jobs, "load_submission_storage", load_storage)
     monkeypatch.setattr(jobs, "start_background_run_relay", lambda *args, **kwargs: relay_calls.append((args, kwargs)))
-    monkeypatch.setattr(jobs, "find_blueprint", lambda *_args: (_ for _ in ()).throw(
-        AssertionError("An unchanged Job must use its prepared definition")
-    ))
+    monkeypatch.setattr(
+        jobs,
+        "find_blueprint",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("An unchanged Job must use its prepared definition")),
+    )
     headers = {"Idempotency-Key": "otterdesk-sample-start"}
     body = {"inputs": {}, "config_overrides": {"input": "sample"}}
 
@@ -623,10 +642,15 @@ def test_run_uses_current_job_revision_after_bundle_preparation(monkeypatch):
     revision = 1
 
     def get_job(job_id, **_kwargs):
-        return json.dumps({
-            "job_id": job_id, "blueprint_id": "worker-1", "status": "active",
-            "revision": revision, "resolved_configuration": {"worker": {"mode": "saved"}},
-        })
+        return json.dumps(
+            {
+                "job_id": job_id,
+                "blueprint_id": "worker-1",
+                "status": "active",
+                "revision": revision,
+                "resolved_configuration": {"worker": {"mode": "saved"}},
+            }
+        )
 
     def prepare(*_args, **_kwargs):
         nonlocal revision
@@ -655,11 +679,15 @@ def test_run_accepts_matching_configuration_saved_during_preparation(monkeypatch
     mappings = []
 
     def get_job(job_id, **_kwargs):
-        return json.dumps({
-            "job_id": job_id, "blueprint_id": "worker-1", "status": "active",
-            "revision": 2 if configuration["worker"]["mode"] == "updated" else 1,
-            "resolved_configuration": configuration,
-        })
+        return json.dumps(
+            {
+                "job_id": job_id,
+                "blueprint_id": "worker-1",
+                "status": "active",
+                "revision": 2 if configuration["worker"]["mode"] == "updated" else 1,
+                "resolved_configuration": configuration,
+            }
+        )
 
     def prepare(*_args, **_kwargs):
         nonlocal configuration
@@ -685,13 +713,24 @@ def test_run_accepts_matching_configuration_saved_during_preparation(monkeypatch
 
 def test_repeated_job_config_patch_reuses_prepared_definition(monkeypatch):
     client, runtime = _client(monkeypatch)
-    monkeypatch.setattr(runtime, "get_job", lambda job_id, **_kwargs: json.dumps({
-        "job_id": job_id, "blueprint_id": "cctv_operator", "status": "active",
-        "revision": 7, "resolved_configuration": {"input": "sample"},
-    }))
-    monkeypatch.setattr(jobs, "find_blueprint", lambda *_args: (_ for _ in ()).throw(
-        AssertionError("An unchanged configuration must not load the catalog")
-    ))
+    monkeypatch.setattr(
+        runtime,
+        "get_job",
+        lambda job_id, **_kwargs: json.dumps(
+            {
+                "job_id": job_id,
+                "blueprint_id": "cctv_operator",
+                "status": "active",
+                "revision": 7,
+                "resolved_configuration": {"input": "sample"},
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        jobs,
+        "find_blueprint",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("An unchanged configuration must not load the catalog")),
+    )
     current = client.get("/api/v1/jobs/job-co")
     repeated = client.patch(
         "/api/v1/jobs/job-co",
@@ -717,8 +756,11 @@ def test_repeated_job_config_patch_reuses_prepared_definition(monkeypatch):
 def test_otterdesk_config_patch_can_finish_while_run_prepares(monkeypatch):
     client, runtime = _client(monkeypatch)
     job = {
-        "job_id": "job-1", "blueprint_id": "worker-1", "status": "active",
-        "revision": 1, "resolved_configuration": {"worker": {"mode": "saved"}},
+        "job_id": "job-1",
+        "blueprint_id": "worker-1",
+        "status": "active",
+        "revision": 1,
+        "resolved_configuration": {"worker": {"mode": "saved"}},
     }
     prepared = []
     cleaned = []
@@ -764,8 +806,11 @@ def test_job_config_patch_rejects_a_concurrent_different_save(monkeypatch):
     client, runtime = _client(monkeypatch)
     no_raise_client = TestClient(client.app, raise_server_exceptions=False)
     job = {
-        "job_id": "job-1", "blueprint_id": "worker-1", "status": "active",
-        "revision": 1, "resolved_configuration": {"worker": {"mode": "saved"}},
+        "job_id": "job-1",
+        "blueprint_id": "worker-1",
+        "status": "active",
+        "revision": 1,
+        "resolved_configuration": {"worker": {"mode": "saved"}},
     }
     prepared = []
 
@@ -821,11 +866,15 @@ def test_run_rejects_different_configuration_saved_during_preparation(monkeypatc
     cleaned = []
 
     def get_job(job_id, **_kwargs):
-        return json.dumps({
-            "job_id": job_id, "blueprint_id": "worker-1", "status": "active",
-            "revision": 2 if configuration["worker"]["mode"] == "other" else 1,
-            "resolved_configuration": configuration,
-        })
+        return json.dumps(
+            {
+                "job_id": job_id,
+                "blueprint_id": "worker-1",
+                "status": "active",
+                "revision": 2 if configuration["worker"]["mode"] == "other" else 1,
+                "resolved_configuration": configuration,
+            }
+        )
 
     def prepare(*_args, **_kwargs):
         nonlocal configuration
@@ -908,36 +957,66 @@ def _patch_canonical_projections(monkeypatch):
         lambda _id: {"run_id": "runtime-1", "status": "completed", "steps": []},
     )
     monkeypatch.setattr(jobs.runtime_run_routes, "get_run_logs", lambda *_args: {"data": [{"id": "log-1"}]})
-    monkeypatch.setattr(jobs.runtime_run_routes, "get_run_events", lambda *_args: {"data": [{"id": "event-1", "type": "done"}]})
+    monkeypatch.setattr(
+        jobs.runtime_run_routes, "get_run_events", lambda *_args: {"data": [{"id": "event-1", "type": "done"}]}
+    )
     monkeypatch.setattr(jobs.runtime_run_routes, "get_run_resources", lambda *_args: {"cpu": []})
-    monkeypatch.setattr(jobs.runtime_run_routes, "get_run_human_events", lambda *_args: {"data": [{"request_id": "request-1"}]})
-    monkeypatch.setattr(jobs.runtime_run_routes, "post_run_human_response", lambda *_args: {"request_id": "request-1", "status": "answered"})
-    monkeypatch.setattr(jobs.runtime_run_routes, "post_run_human_ack", lambda *_args: {"request_id": "request-1", "status": "acknowledged"})
+    monkeypatch.setattr(
+        jobs.runtime_run_routes, "get_run_human_events", lambda *_args: {"data": [{"request_id": "request-1"}]}
+    )
+    monkeypatch.setattr(
+        jobs.runtime_run_routes,
+        "post_run_human_response",
+        lambda *_args: {"request_id": "request-1", "status": "answered"},
+    )
+    monkeypatch.setattr(
+        jobs.runtime_run_routes,
+        "post_run_human_ack",
+        lambda *_args: {"request_id": "request-1", "status": "acknowledged"},
+    )
     monkeypatch.setattr(
         jobs.runtime_job_routes,
         "get_job_ui",
         lambda job_id, *_args: {"job_id": job_id, "ui": {"job_id": job_id}, "web_ui": {"job_id": job_id}},
     )
     monkeypatch.setattr(jobs.runtime_run_routes, "get_run_final_artifact", lambda *_args: {"artifact_id": "final"})
-    monkeypatch.setattr(jobs.runtime_run_routes, "list_run_artifacts", lambda *_args: {"artifacts": [{"artifact_id": "a"}]})
+    monkeypatch.setattr(
+        jobs.runtime_run_routes, "list_run_artifacts", lambda *_args: {"artifacts": [{"artifact_id": "a"}]}
+    )
     monkeypatch.setattr(jobs.runtime_run_routes, "get_run_artifact", lambda *_args: {"download": "artifact"})
     monkeypatch.setattr(jobs.runtime_run_routes, "list_run_outputs", lambda *_args: {"outputs": [{"index": 0}]})
     monkeypatch.setattr(jobs.runtime_run_routes, "get_run_output", lambda *_args: {"download": "output"})
-    monkeypatch.setattr(jobs.runtime_run_routes, "get_run_observability_summary", lambda *_args: {"trace_id": "trace-1"})
+    monkeypatch.setattr(
+        jobs.runtime_run_routes, "get_run_observability_summary", lambda *_args: {"trace_id": "trace-1"}
+    )
     monkeypatch.setattr(jobs.runtime_run_routes, "export_run", lambda *_args: {"run_id": "runtime-1"})
     monkeypatch.setattr(jobs, "build_agent_graph", lambda *_args: {"nodes": [], "edges": []})
 
-    monkeypatch.setattr(infrastructure.model_routes, "list_runtime_models", lambda **_kwargs: {"models": [{"id": "model-1"}]})
+    monkeypatch.setattr(
+        infrastructure.model_routes, "list_runtime_models", lambda **_kwargs: {"models": [{"id": "model-1"}]}
+    )
     monkeypatch.setattr(infrastructure.model_routes, "show_runtime_model", lambda model_id: {"id": model_id})
-    monkeypatch.setattr(infrastructure, "install_model", lambda model_id, options, progress: {"model": model_id, "status": "ready"})
-    monkeypatch.setattr(infrastructure.model_routes, "benchmark_model", lambda model_id, request, _principal: {"id": model_id, **request})
-    monkeypatch.setattr(infrastructure, "registered_model_records", lambda: [{"id": "remote-1", "source": "rest_remote"}])
+    monkeypatch.setattr(
+        infrastructure, "install_model", lambda model_id, options, progress: {"model": model_id, "status": "ready"}
+    )
+    monkeypatch.setattr(
+        infrastructure.model_routes,
+        "benchmark_model",
+        lambda model_id, request, _principal: {"id": model_id, **request},
+    )
+    monkeypatch.setattr(
+        infrastructure, "registered_model_records", lambda: [{"id": "remote-1", "source": "rest_remote"}]
+    )
     monkeypatch.setattr(infrastructure, "provider_registration", lambda model_id, **kwargs: {"id": model_id, **kwargs})
     monkeypatch.setattr(infrastructure, "remove_registered_model", lambda _name: (None, None))
     monkeypatch.setattr(infrastructure.model_routes, "_upsert_registry_record", lambda record: record)
-    monkeypatch.setattr(infrastructure.model_routes, "_remote_projection", lambda _record: {"name": "remote-1", "model": "m"})
+    monkeypatch.setattr(
+        infrastructure.model_routes, "_remote_projection", lambda _record: {"name": "remote-1", "model": "m"}
+    )
     monkeypatch.setattr(infrastructure.model_routes, "_proxy_projection", lambda _record: {"model_id": "proxy-1"})
-    monkeypatch.setattr(infrastructure, "uploaded_bundle_root", lambda *_args: SimpleNamespace(__truediv__=lambda *_: None))
+    monkeypatch.setattr(
+        infrastructure, "uploaded_bundle_root", lambda *_args: SimpleNamespace(__truediv__=lambda *_: None)
+    )
     monkeypatch.setattr(infrastructure, "run_service_validation", lambda *_args, **_kwargs: {"ok": True})
     monkeypatch.setattr(
         blueprints,
@@ -1241,10 +1320,15 @@ def test_job_run_operation_reconciles_a_committed_core_update_after_deadline(mon
     updates = []
 
     def get_job(job_id, **_kwargs):
-        return json.dumps({
-            "job_id": job_id, "blueprint_id": "worker-1", "status": "active",
-            "revision": 1 + len(updates), "resolved_configuration": configuration,
-        })
+        return json.dumps(
+            {
+                "job_id": job_id,
+                "blueprint_id": "worker-1",
+                "status": "active",
+                "revision": 1 + len(updates),
+                "resolved_configuration": configuration,
+            }
+        )
 
     class Deadline(grpc.RpcError):
         def code(self):
@@ -1464,26 +1548,34 @@ def test_canonical_resource_happy_paths(monkeypatch):
     removed = _wait_for_operation(client, removal.json()["operation_id"])
     assert removed["result"] == {"removed": True, "blueprint_id": "worker-1"}
     assert client.post("/api/v1/blueprints/worker-1/validations", json={}).status_code == 201
-    assert client.post(
-        "/api/v1/blueprints/worker-1/runs",
-        headers={"Idempotency-Key": "blueprint-run-1"},
-        json={},
-    ).status_code == 202
+    assert (
+        client.post(
+            "/api/v1/blueprints/worker-1/runs",
+            headers={"Idempotency-Key": "blueprint-run-1"},
+            json={},
+        ).status_code
+        == 202
+    )
     refresh = client.post("/api/v1/blueprint-catalog-refreshes", headers={"Idempotency-Key": "refresh-1"})
     assert refresh.status_code == 202
     refresh_operation_id = refresh.json()["operation_id"]
     refresh_stream = client.get(f"/api/v1/operations/{refresh_operation_id}/events/stream")
     assert "event: operation.completed" in refresh_stream.text
-    assert client.post("/api/v1/blueprint-cleanups", headers={"Idempotency-Key": "cleanup-1"}, json={}).status_code == 202
+    assert (
+        client.post("/api/v1/blueprint-cleanups", headers={"Idempotency-Key": "cleanup-1"}, json={}).status_code == 202
+    )
 
     created = client.post("/api/v1/jobs", json={"bundle_id": "bundle-1"})
     assert created.status_code == 201
     current = client.get("/api/v1/jobs/job-1")
-    assert client.put(
-        "/api/v1/jobs/job-1/bundle",
-        headers={"If-Match": current.headers["etag"]},
-        json={"bundle_id": "bundle-2", "replace_existing_run": True},
-    ).status_code == 200
+    assert (
+        client.put(
+            "/api/v1/jobs/job-1/bundle",
+            headers={"If-Match": current.headers["etag"]},
+            json={"bundle_id": "bundle-2", "replace_existing_run": True},
+        ).status_code
+        == 200
+    )
     bundle_update = [call for call in runtime.calls if call[0] == "update_job"][-1]
     assert bundle_update[3]["replace_existing_run"] is True
     assert client.post("/api/v1/jobs/job-1/data-resets").status_code == 202
@@ -1552,9 +1644,7 @@ def test_run_artifact_projection_resolves_staged_result_reference(monkeypatch, t
     monkeypatch.setattr(
         jobs.runtime_run_routes,
         "get_run_final_artifact",
-        lambda *_args: (_ for _ in ()).throw(
-            jobs.HTTPException(status_code=404, detail="final artifact not found")
-        ),
+        lambda *_args: (_ for _ in ()).throw(jobs.HTTPException(status_code=404, detail="final artifact not found")),
     )
 
     response = client.get("/api/v1/runs/run-1/artifacts/final")
@@ -1570,14 +1660,18 @@ def test_run_monitor_overlays_canonical_terminal_status(monkeypatch):
     _patch_canonical_projections(monkeypatch)
     monitored_ids = []
     reads = []
-    runtime.get_run = lambda run_id: reads.append(run_id) or json.dumps(
-        {
-            "job_id": "job-1",
-            "run_id": run_id,
-            "status": "completed",
-            "runtime_run_id": "runtime-1",
-        }
+    runtime.get_run = lambda run_id: (
+        reads.append(run_id)
+        or json.dumps(
+            {
+                "job_id": "job-1",
+                "run_id": run_id,
+                "status": "completed",
+                "runtime_run_id": "runtime-1",
+            }
+        )
     )
+
     def monitor_for_run(run_id):
         monitored_ids.append(run_id)
         return {
@@ -1599,19 +1693,33 @@ def test_run_monitor_overlays_canonical_terminal_status(monkeypatch):
 
 def test_active_run_events_use_canonical_data_reference_before_final_result(monkeypatch):
     client, runtime = _client(monkeypatch)
-    runtime.get_run = lambda run_id: json.dumps({
-        "job_id": "job-1", "run_id": run_id, "status": "running",
-        "run_data_ref": {"run_id": "output-current", "submission_id": "definition-1"},
-        "result_ref": {"run_id": "bootstrap-old"},
-    })
+    runtime.get_run = lambda run_id: json.dumps(
+        {
+            "job_id": "job-1",
+            "run_id": run_id,
+            "status": "running",
+            "run_data_ref": {"run_id": "output-current", "submission_id": "definition-1"},
+            "result_ref": {"run_id": "bootstrap-old"},
+        }
+    )
     event_ids = []
     monkeypatch.setattr(jobs, "shared_run_dir", lambda _run_id: None)
     monkeypatch.setattr(jobs, "shared_result_events", lambda *_args: [])
-    monkeypatch.setattr(jobs.runtime_run_routes, "get_run_events", lambda run_id, *_args: (
-        event_ids.append(run_id) or {"data": [{
-            "type": "source.acquisition.completed", "timestamp": "2026-01-01T00:00:00Z",
-        }]}
-    ))
+    monkeypatch.setattr(
+        jobs.runtime_run_routes,
+        "get_run_events",
+        lambda run_id, *_args: (
+            event_ids.append(run_id)
+            or {
+                "data": [
+                    {
+                        "type": "source.acquisition.completed",
+                        "timestamp": "2026-01-01T00:00:00Z",
+                    }
+                ]
+            }
+        ),
+    )
 
     response = client.get("/api/v1/runs/run-2/events")
 
@@ -1627,15 +1735,24 @@ def test_active_run_files_resolve_exact_submission_without_legacy_mapping(monkey
     directory = shared / "submissions" / "definition-current" / "outputs" / "runs" / "output-current"
     (directory / "workflow_state").mkdir(parents=True)
     (directory / "workflow_state" / "runtime_context.json").write_text(json.dumps({"run_id": "output-current"}))
-    (directory / "events.jsonl").write_text(json.dumps({"type": "source.acquisition.completed", "ts": "2026-01-01T00:00:00Z"}) + "\n")
+    (directory / "events.jsonl").write_text(
+        json.dumps({"type": "source.acquisition.completed", "ts": "2026-01-01T00:00:00Z"}) + "\n"
+    )
     (directory / "snapshot.json").write_text(json.dumps({"source_count": 359}))
     monkeypatch.setenv("MN_SHARED_STORAGE_ROOT", str(shared))
     monkeypatch.setenv("MN_HOST_SHARED_STORAGE_ROOT", str(shared))
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "local-runs"))
-    runtime.get_run = lambda run_id: json.dumps({
-        "job_id": "job-1", "run_id": run_id, "status": "completed", "run_data_ref": reference,
-    })
-    monkeypatch.setattr(jobs.runtime_job_routes, "_workflow_progress_snapshot_for_run", lambda _id: {"status": "completed", "steps": []})
+    runtime.get_run = lambda run_id: json.dumps(
+        {
+            "job_id": "job-1",
+            "run_id": run_id,
+            "status": "completed",
+            "run_data_ref": reference,
+        }
+    )
+    monkeypatch.setattr(
+        jobs.runtime_job_routes, "_workflow_progress_snapshot_for_run", lambda _id: {"status": "completed", "steps": []}
+    )
 
     events = client.get("/api/v1/runs/run-2/events")
     assert events.status_code == 200, events.text
@@ -1660,9 +1777,9 @@ def test_active_run_files_resolve_exact_submission_without_legacy_mapping(monkey
 
 def test_run_progress_uses_execution_id_when_output_id_differs(monkeypatch):
     client, runtime = _client(monkeypatch)
-    runtime.get_run = lambda run_id: json.dumps({
-        "job_id": "job-1", "run_id": run_id, "runtime_run_id": "output-1", "status": "completed"
-    })
+    runtime.get_run = lambda run_id: json.dumps(
+        {"job_id": "job-1", "run_id": run_id, "runtime_run_id": "output-1", "status": "completed"}
+    )
     progress_ids = []
     event_ids = []
 
@@ -1700,14 +1817,22 @@ def test_run_progress_uses_execution_id_when_output_id_differs(monkeypatch):
 
 def test_shared_run_events_use_mapped_run_id_before_core_result_reference(monkeypatch):
     client, runtime = _client(monkeypatch)
-    runtime.get_run = lambda run_id: json.dumps({
-        "run_id": run_id, "status": "failed", "result_ref": {"run_id": "bootstrap-old"},
-    })
+    runtime.get_run = lambda run_id: json.dumps(
+        {
+            "run_id": run_id,
+            "status": "failed",
+            "result_ref": {"run_id": "bootstrap-old"},
+        }
+    )
     monkeypatch.setattr(jobs, "shared_run_dir", lambda _run_id: object())
     received = []
-    monkeypatch.setattr(jobs.runtime_run_routes, "get_run_events", lambda run_id, *_args: (
-        received.append(run_id) or {"data": [{"type": "workflow_step_failed", "timestamp": "2026-01-01T00:00:00Z"}]}
-    ))
+    monkeypatch.setattr(
+        jobs.runtime_run_routes,
+        "get_run_events",
+        lambda run_id, *_args: (
+            received.append(run_id) or {"data": [{"type": "workflow_step_failed", "timestamp": "2026-01-01T00:00:00Z"}]}
+        ),
+    )
 
     response = client.get("/api/v1/runs/run-1/events?page_size=2")
 
@@ -1717,19 +1842,27 @@ def test_shared_run_events_use_mapped_run_id_before_core_result_reference(monkey
 
 def test_active_service_result_events_are_served_from_shared_submission(monkeypatch):
     client, runtime = _client(monkeypatch)
-    runtime.get_run = lambda run_id: json.dumps({
-        "run_id": run_id, "job_id": "job-microduck", "status": "running"
-    })
-    monkeypatch.setattr(jobs.runtime_run_routes, "get_run_events", lambda *_args: (
-        (_ for _ in ()).throw(HTTPException(status_code=404, detail="run not found"))
-    ))
+    runtime.get_run = lambda run_id: json.dumps({"run_id": run_id, "job_id": "job-microduck", "status": "running"})
+    monkeypatch.setattr(
+        jobs.runtime_run_routes,
+        "get_run_events",
+        lambda *_args: (_ for _ in ()).throw(HTTPException(status_code=404, detail="run not found")),
+    )
     calls = []
-    monkeypatch.setattr(jobs, "shared_result_events", lambda job_id, run_id: (
-        calls.append((job_id, run_id)) or [{
-            "type": "run_result_available", "timestamp": "2026-01-01T00:00:00Z",
-            "payload": {"run_id": run_id, "result_id": "aaaaaaaaaaaaaaaaaaaaaaaa", "kind": "web_ui"}
-        }]
-    ))
+    monkeypatch.setattr(
+        jobs,
+        "shared_result_events",
+        lambda job_id, run_id: (
+            calls.append((job_id, run_id))
+            or [
+                {
+                    "type": "run_result_available",
+                    "timestamp": "2026-01-01T00:00:00Z",
+                    "payload": {"run_id": run_id, "result_id": "aaaaaaaaaaaaaaaaaaaaaaaa", "kind": "web_ui"},
+                }
+            ]
+        ),
+    )
 
     response = client.get("/api/v1/runs/mcv-live/events")
 
@@ -1742,15 +1875,21 @@ def test_run_event_stream_keeps_snapshot_when_local_event_copy_is_not_ready(monk
     from fastapi import HTTPException
 
     client, runtime = _client(monkeypatch)
-    runtime.get_run = lambda run_id: json.dumps({
-        "job_id": "job-1", "run_id": run_id, "status": "completed"
-    })
-    monkeypatch.setattr(jobs.runtime_job_routes, "_workflow_progress_snapshot_for_run", lambda _id: {
-        "job_id": "job-1", "status": "completed", "steps": [],
-    })
-    monkeypatch.setattr(jobs.runtime_run_routes, "get_run_events", lambda *_args: (_ for _ in ()).throw(
-        HTTPException(status_code=404, detail="run not found")
-    ))
+    runtime.get_run = lambda run_id: json.dumps({"job_id": "job-1", "run_id": run_id, "status": "completed"})
+    monkeypatch.setattr(
+        jobs.runtime_job_routes,
+        "_workflow_progress_snapshot_for_run",
+        lambda _id: {
+            "job_id": "job-1",
+            "status": "completed",
+            "steps": [],
+        },
+    )
+    monkeypatch.setattr(
+        jobs.runtime_run_routes,
+        "get_run_events",
+        lambda *_args: (_ for _ in ()).throw(HTTPException(status_code=404, detail="run not found")),
+    )
 
     response = client.get("/api/v1/runs/run-2/events/stream?interval=0.25")
 
@@ -1782,28 +1921,39 @@ def test_canonical_run_detail_and_operations(monkeypatch):
         response = client.get(f"/api/v1/runs/run-1/{suffix}")
         assert response.status_code == 200, (suffix, response.text)
 
-    assert client.post(
-        "/api/v1/runs/run-1/human-requests/request-1/responses",
-        json={"response": "approved"},
-    ).status_code == 201
-    assert client.post(
-        "/api/v1/runs/run-1/human-requests/request-1/acknowledgements",
-        json={"note": "seen"},
-    ).status_code == 201
+    assert (
+        client.post(
+            "/api/v1/runs/run-1/human-requests/request-1/responses",
+            json={"response": "approved"},
+        ).status_code
+        == 201
+    )
+    assert (
+        client.post(
+            "/api/v1/runs/run-1/human-requests/request-1/acknowledgements",
+            json={"note": "seen"},
+        ).status_code
+        == 201
+    )
     stream = client.get("/api/v1/runs/run-1/events/stream?interval=0.25")
     assert stream.status_code == 200
     assert "event: run.completed" in stream.text
 
-    assert client.put(
-        "/api/v1/models/model-1/installation",
-        headers={"Idempotency-Key": "model-install-1"},
-        json={},
-    ).status_code == 202
+    assert (
+        client.put(
+            "/api/v1/models/model-1/installation",
+            headers={"Idempotency-Key": "model-install-1"},
+            json={},
+        ).status_code
+        == 202
+    )
     assert client.delete("/api/v1/models/model-1/installation").status_code == 202
     assert client.post("/api/v1/models/model-1/benchmarks", json={"prompt": "OK"}).status_code == 201
     remote = client.post("/api/v1/model-remotes", json={"model": "m", "base_url": "http://model.local"})
     assert remote.status_code == 201
-    assert client.delete("/api/v1/model-remotes/remote-1", headers={"If-Match": remote.headers["etag"]}).status_code == 204
+    assert (
+        client.delete("/api/v1/model-remotes/remote-1", headers={"If-Match": remote.headers["etag"]}).status_code == 204
+    )
     assert client.post("/api/v1/model-proxies", json={"model_id": "proxy-1"}).status_code == 201
 
 
@@ -1901,7 +2051,9 @@ def test_remote_operation_stream_emits_snapshot_when_upstream_ends(monkeypatch):
     client, runtime = _client(monkeypatch)
     monkeypatch.setattr(operations, "is_local_operation", lambda _: False)
     runtime.stream_operation_events = lambda *_args, **_kwargs: iter([json.dumps({"status": "running"})])
-    monkeypatch.setattr(operations, "get_operation", lambda operation_id: {"operation_id": operation_id, "status": "completed"})
+    monkeypatch.setattr(
+        operations, "get_operation", lambda operation_id: {"operation_id": operation_id, "status": "completed"}
+    )
     response = client.get("/api/v1/operations/remote-ended/events/stream")
     assert response.status_code == 200
     assert "id: 1" in response.text
@@ -1926,9 +2078,11 @@ def test_staged_final_artifact_errors_preserve_retry_and_integrity_contract(monk
         (jobs.ArtifactIntegrityError("digest mismatch"), 500, "internal_error"),
         (jobs.StagedArtifactError("invalid reference"), 500, "internal_error"),
     ]:
+
         def resolve(_run_id, *, run, failure=error):
             assert run["run_id"] == _run_id
             raise failure
+
         monkeypatch.setattr(jobs, "_resolve_run_result_reference", resolve)
         response = client.get("/api/v1/runs/run-1/artifacts/final")
         assert response.status_code == status
@@ -1951,13 +2105,15 @@ def test_job_workflow_shape_views_and_progress_only(monkeypatch):
         },
         "runtime": {"bindings": {"left": {"workers": [{"id": "agent-left", "role": "research", "model": "m"}]}}},
     }
-    runtime.get_job = lambda job_id, **_kwargs: json.dumps({
-        "job_id": job_id,
-        "status": "active",
-        "revision": 1,
-        "latest_run_id": "run-1",
-        "workflow_definition": definition,
-    })
+    runtime.get_job = lambda job_id, **_kwargs: json.dumps(
+        {
+            "job_id": job_id,
+            "status": "active",
+            "revision": 1,
+            "latest_run_id": "run-1",
+            "workflow_definition": definition,
+        }
+    )
     snapshot = {
         "job_id": "runtime-1",
         "workflow_id": "flow-1",
@@ -1965,9 +2121,23 @@ def test_job_workflow_shape_views_and_progress_only(monkeypatch):
         "status": "completed",
         "steps": [
             {"id": "start", "label": "Start", "goal": "", "status": "done", "parents": [], "agents": []},
-            {"id": "dynamic", "label": "Dynamic", "goal": "Inspect", "status": "done", "parents": ["start"],
-             "agents": [{"id": "agent-dynamic", "display_name": "Inspector", "role": "inspect", "model": "m",
-                         "status": "done", "progress": 1.0}]},
+            {
+                "id": "dynamic",
+                "label": "Dynamic",
+                "goal": "Inspect",
+                "status": "done",
+                "parents": ["start"],
+                "agents": [
+                    {
+                        "id": "agent-dynamic",
+                        "display_name": "Inspector",
+                        "role": "inspect",
+                        "model": "m",
+                        "status": "done",
+                        "progress": 1.0,
+                    }
+                ],
+            },
         ],
         "edges": [{"from": "start", "to": "dynamic"}],
         "layers": [["start"], ["dynamic"]],
@@ -2001,9 +2171,11 @@ def test_job_workflow_shape_views_and_progress_only(monkeypatch):
     assert "label" not in progress.json()["steps"][1]
     assert "role" not in progress.json()["steps"][1]["agents"][0]
 
-    monkeypatch.setattr(jobs.runtime_job_routes, "_workflow_progress_snapshot_for_run", lambda _id: {
-        "job_id": "runtime-1", "status": "running", "steps": [], "edges": [], "layers": []
-    })
+    monkeypatch.setattr(
+        jobs.runtime_job_routes,
+        "_workflow_progress_snapshot_for_run",
+        lambda _id: {"job_id": "runtime-1", "status": "running", "steps": [], "edges": [], "layers": []},
+    )
     empty_runtime_shape = client.get(f"{base}/latest-run/steps")
     assert empty_runtime_shape.status_code == 200
     assert [step["id"] for step in empty_runtime_shape.json()["steps"]] == ["start", "left", "right"]
@@ -2047,11 +2219,21 @@ def test_monitor_passes_the_canonical_storage_binding_without_another_core_read(
     client, runtime = _client(monkeypatch)
     reference = {"storage": "syncthing", "submission_id": "definition", "run_id": "physical-run"}
     reads, bindings = [], []
-    runtime.get_run = lambda run_id: reads.append(run_id) or json.dumps({
-        "run_id": run_id, "status": "completed", "run_data_ref": reference,
-    })
-    monkeypatch.setattr(jobs.runtime_job_routes, "_compact_job_detail",
-                        lambda run_id, **options: bindings.append((run_id, options)) or {"job": {}, "summary": {}})
+    runtime.get_run = lambda run_id: (
+        reads.append(run_id)
+        or json.dumps(
+            {
+                "run_id": run_id,
+                "status": "completed",
+                "run_data_ref": reference,
+            }
+        )
+    )
+    monkeypatch.setattr(
+        jobs.runtime_job_routes,
+        "_compact_job_detail",
+        lambda run_id, **options: bindings.append((run_id, options)) or {"job": {}, "summary": {}},
+    )
     response = client.get("/api/v1/runs/run-1/monitor")
     assert response.status_code == 200
     assert bindings == [("run-1", {"run_data_ref": reference})]
@@ -2078,49 +2260,75 @@ def test_monitor_recovers_after_one_failed_core_read(monkeypatch):
 
 def test_refresh_mcp_contract_reprepares_unchanged_configuration_and_blocks_active_runs(monkeypatch):
     client, runtime = _client(monkeypatch)
-    job = {'job_id': 'job-1', 'blueprint_id': 'worker-1', 'status': 'active', 'revision': 7,
-           'resolved_configuration': {'input': 'saved'}, 'latest_run_id': 'run-1'}
-    monkeypatch.setattr(runtime, 'get_job', lambda *_args, **_kwargs: json.dumps(job))
+    job = {
+        "job_id": "job-1",
+        "blueprint_id": "worker-1",
+        "status": "active",
+        "revision": 7,
+        "resolved_configuration": {"input": "saved"},
+        "latest_run_id": "run-1",
+    }
+    monkeypatch.setattr(runtime, "get_job", lambda *_args, **_kwargs: json.dumps(job))
     prepared = []
+
     def prepare(job_id, current, configuration, **kwargs):
         prepared.append((job_id, configuration, kwargs))
-        return '{"mcp":{"profile":"mn.mcp.supervision.v1"}}', {'manual': b'installed revision'}
-    monkeypatch.setattr(jobs, '_prepare_catalog_job_update', prepare)
-    headers = {'If-Match': strong_etag(job)}
-    runtime.run_status = 'running'
-    blocked = client.patch('/api/v1/jobs/job-1', headers=headers, json={'refresh_contract': True})
+        return '{"mcp":{"profile":"mn.mcp.supervision.v1"}}', {"manual": b"installed revision"}
+
+    monkeypatch.setattr(jobs, "_prepare_catalog_job_update", prepare)
+    headers = {"If-Match": strong_etag(job)}
+    runtime.run_status = "running"
+    blocked = client.patch("/api/v1/jobs/job-1", headers=headers, json={"refresh_contract": True})
     assert blocked.status_code == 409
     assert not prepared
-    assert not any(call[0] in {'update_job', 'cancel_run'} for call in runtime.calls)
-    runtime.run_status = 'completed'
-    refreshed = client.patch('/api/v1/jobs/job-1', headers=headers, json={'refresh_contract': True})
+    assert not any(call[0] in {"update_job", "cancel_run"} for call in runtime.calls)
+    runtime.run_status = "completed"
+    refreshed = client.patch("/api/v1/jobs/job-1", headers=headers, json={"refresh_contract": True})
     assert refreshed.status_code == 200, refreshed.text
-    assert refreshed.json()['job_id'] == 'job-1'
-    assert prepared == [('job-1', {'input': 'saved'}, {'validate_inputs': True})]
-    update = next(call for call in runtime.calls if call[0] == 'update_job')
-    assert update[2] == {'resolved_configuration': {'input': 'saved'}}
-    assert update[3]['expected_revision'] == 7
-    assert update[3]['payloads']['manual'] == b'installed revision'
+    assert refreshed.json()["job_id"] == "job-1"
+    assert prepared == [("job-1", {"input": "saved"}, {"validate_inputs": True})]
+    update = next(call for call in runtime.calls if call[0] == "update_job")
+    assert update[2] == {"resolved_configuration": {"input": "saved"}}
+    assert update[3]["expected_revision"] == 7
+    assert update[3]["payloads"]["manual"] == b"installed revision"
 
 
 def test_queued_start_receipt_and_conditional_cancel(monkeypatch):
     client, runtime = _client(monkeypatch)
     runtime.run_status = "queued"
-    receipt = {"job_id": "job-1", "run_id": "run-1", "status": "queued",
-        "admission": {"state": "queued", "queue_id": "queue_run-1", "owner_node": "spark@pc", "position": 1,
-            "blocked_by": {"job_name": "Research assistant"}, "message": "Queued on Spark. It will start automatically."}}
+    receipt = {
+        "job_id": "job-1",
+        "run_id": "run-1",
+        "status": "queued",
+        "admission": {
+            "state": "queued",
+            "queue_id": "queue_run-1",
+            "owner_node": "spark@pc",
+            "position": 1,
+            "blocked_by": {"job_name": "Research assistant"},
+            "message": "Queued on Spark. It will start automatically.",
+        },
+    }
     monkeypatch.setattr(runtime, "start_run", lambda *_args, **_kwargs: json.dumps(receipt))
     started = client.post("/api/v1/jobs/job-1/runs", json={})
     assert started.status_code == 202
     assert started.json()["status"] == "queued"
     assert started.json()["admission"]["queue_id"] == "queue_run-1"
     calls = []
-    monkeypatch.setattr(runtime, "cancel_run", lambda run_id, **kwargs: calls.append((run_id, kwargs)) or json.dumps({"run_id": run_id, "status": "cancelled"}))
+    monkeypatch.setattr(
+        runtime,
+        "cancel_run",
+        lambda run_id, **kwargs: (
+            calls.append((run_id, kwargs)) or json.dumps({"run_id": run_id, "status": "cancelled"})
+        ),
+    )
     cancelled = client.patch("/api/v1/runs/run-1", json={"desired_state": "cancelled", "queued_only": True})
     assert cancelled.status_code == 200
     assert calls == [("run-1", {"queued_only": True})]
     runtime.run_status = "running"
-    assert client.patch("/api/v1/runs/run-1", json={"desired_state": "cancelled", "queued_only": True}).status_code == 409
+    assert (
+        client.patch("/api/v1/runs/run-1", json={"desired_state": "cancelled", "queued_only": True}).status_code == 409
+    )
     assert len(calls) == 1
 
 
@@ -2138,9 +2346,11 @@ def test_queue_schedule_changes_require_current_etag(monkeypatch):
 def test_blueprint_addition_preserves_invocation_configuration(monkeypatch):
     client, _runtime = _client(monkeypatch)
     seen = []
+
     def add(_config, blueprint_id, *, config_overrides, **_kwargs):
         seen.append((blueprint_id, config_overrides))
         return {"added": True, "blueprint": {"id": blueprint_id}}
+
     monkeypatch.setattr(blueprints, "add_catalog_blueprint", add)
     overrides = {"llm": {"mode": "fake"}, "execution": {"fake_skills": True}}
     response = client.post("/api/v1/blueprints/worker-1/additions", json={"config_overrides": overrides})

@@ -1,4 +1,5 @@
 """Protected runtime signals; no snapshot polling or bulk event buffering."""
+
 from __future__ import annotations
 
 import asyncio
@@ -26,9 +27,16 @@ class RunInputRequest(BaseModel):
 
 @router.post("/runs/{run_id}/inputs", tags=["runs"], response_model=ResourceModel)
 def send_input(run_id: str, request: RunInputRequest, _principal=Depends(require_auth)):
-    return public_value(decode(state.client.send_run_input(
-        run_id, request.input_id, request.payload, idempotency_key=request.idempotency_key,
-    )))
+    return public_value(
+        decode(
+            state.client.send_run_input(
+                run_id,
+                request.input_id,
+                request.payload,
+                idempotency_key=request.idempotency_key,
+            )
+        )
+    )
 
 
 @router.get("/runs/{run_id}/inputs/{command_id:path}", tags=["runs"], response_model=ResourceModel)
@@ -55,7 +63,7 @@ async def signal_events(upstream, channel: str):
             if not isinstance(sequence, int) or sequence <= 0 or event.get("channel") != channel:
                 raise ValueError("Invalid signal event")
             # The Core identity and durable position survive every adapter.
-            yield f'id: {sequence}\nevent: runtime.signal\ndata: {json.dumps(event, separators=(",", ":"))}\n\n'
+            yield f"id: {sequence}\nevent: runtime.signal\ndata: {json.dumps(event, separators=(',', ':'))}\n\n"
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -63,10 +71,13 @@ async def signal_events(upstream, channel: str):
         if callable(details):
             details = details()
         gap = "signal_replay_gap" in str(details)
-        notice = {"channel": channel, "code": "replay_required" if gap else "transport_unavailable",
-                  "resume_from": 0 if gap else None}
+        notice = {
+            "channel": channel,
+            "code": "replay_required" if gap else "transport_unavailable",
+            "resume_from": 0 if gap else None,
+        }
         # Transport loss is never an operation failure or successful delivery.
-        yield f'event: stream.unavailable\ndata: {json.dumps(notice)}\n\n'
+        yield f"event: stream.unavailable\ndata: {json.dumps(notice)}\n\n"
     finally:
         upstream.close()
 
@@ -84,7 +95,11 @@ def stream_signals(
             raise ValueError()
     except ValueError as exc:
         raise HTTPException(400, "Last-Event-ID must be a nonnegative integer.") from exc
-    upstream = state.client.stream_events(run_id, channel=channel, after_sequence=cursor,
-                                          follow=True, timeout=None, heartbeat_interval_ms=1000)
-    return StreamingResponse(signal_events(upstream, channel), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+    upstream = state.client.stream_events(
+        run_id, channel=channel, after_sequence=cursor, follow=True, timeout=None, heartbeat_interval_ms=1000
+    )
+    return StreamingResponse(
+        signal_events(upstream, channel),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

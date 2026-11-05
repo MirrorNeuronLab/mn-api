@@ -22,7 +22,6 @@ from mn_api.public import decode, public_value
 router = APIRouter(prefix=API_PREFIX)
 
 
-
 @router.get("/operations", operation_id="list_operations", tags=["operations"], response_model=PageResponse)
 def list_operations(
     page_size: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
@@ -44,7 +43,9 @@ def list_operations(
     )
 
 
-@router.get("/operations/{operation_id}", operation_id="get_operation", tags=["operations"], response_model=ResourceModel)
+@router.get(
+    "/operations/{operation_id}", operation_id="get_operation", tags=["operations"], response_model=ResourceModel
+)
 def operation(operation_id: str, _principal=Depends(require_auth)):
     return get_operation(operation_id)
 
@@ -87,7 +88,11 @@ def stream_operation_events(
             sequence += 1
             if sequence <= resume_after:
                 continue
-            event_type = str(event.get("type") or event.get("status") or "operation.event") if isinstance(event, dict) else "operation.event"
+            event_type = (
+                str(event.get("type") or event.get("status") or "operation.event")
+                if isinstance(event, dict)
+                else "operation.event"
+            )
             yield encode_sse(
                 sse_envelope(
                     event_id=sequence,

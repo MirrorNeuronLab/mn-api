@@ -5,28 +5,42 @@ from fastapi.testclient import TestClient
 from mn_api.routes.v1 import interactions
 from mn_sdk.interactions import InteractionError
 
+
 @pytest.fixture
 def client(monkeypatch):
     class Service:
         commands = []
-        def snapshot(self): return {"capability": "mn.interaction.v1", "cursor": "cursor", "items": []}
-        def get(self, id): return {"id": id, "state": "pending", "revision": 1}
+
+        def snapshot(self):
+            return {"capability": "mn.interaction.v1", "cursor": "cursor", "items": []}
+
+        def get(self, id):
+            return {"id": id, "state": "pending", "revision": 1}
+
         def respond(self, id, **kwargs):
             self.commands.append((id, kwargs))
             if kwargs["expected_revision"] != 1:
                 raise InteractionError("revision_conflict")
             return {"id": id, "state": "responded", "effect": "not_started"}
+
         def events(self, cursor):
             class Events:
-                def __iter__(self): return self
+                def __iter__(self):
+                    return self
+
                 def __next__(self):
                     if self.done:
                         raise StopIteration
                     self.done = True
                     return {"id": "cursor2", "type": "interaction.updated", "data": {"id": "review-1"}}
+
                 done = False
-                def close(self): self.closed = True
+
+                def close(self):
+                    self.closed = True
+
             return Events()
+
     service = Service()
     monkeypatch.setattr(interactions, "service", lambda: service)
     app = FastAPI()
@@ -37,12 +51,23 @@ def client(monkeypatch):
 
 def test_revision_and_idempotency_are_required(client):
     api, service = client
-    assert api.post("/api/v1/interactions/review-1/responses", json={"expected_revision": 1, "answer": {}}).status_code == 422
-    result = api.post("/api/v1/interactions/review-1/responses", headers={"Idempotency-Key": "decision-1"}, json={"expected_revision": 1, "answer": {"option_id": "approve"}})
+    assert (
+        api.post("/api/v1/interactions/review-1/responses", json={"expected_revision": 1, "answer": {}}).status_code
+        == 422
+    )
+    result = api.post(
+        "/api/v1/interactions/review-1/responses",
+        headers={"Idempotency-Key": "decision-1"},
+        json={"expected_revision": 1, "answer": {"option_id": "approve"}},
+    )
     assert result.status_code == 200
     assert result.json()["effect"] == "not_started"
     assert service.commands[0][1]["command_id"] == "decision-1"
-    conflict = api.post("/api/v1/interactions/review-1/responses", headers={"Idempotency-Key": "decision-2"}, json={"expected_revision": 2})
+    conflict = api.post(
+        "/api/v1/interactions/review-1/responses",
+        headers={"Idempotency-Key": "decision-2"},
+        json={"expected_revision": 2},
+    )
     assert conflict.status_code == 409
 
 

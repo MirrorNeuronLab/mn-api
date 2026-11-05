@@ -15,7 +15,7 @@ from mn_sdk_mcp import JobSupervisor, OperationStore
 from mn_api import state
 from mn_api.path_utils import resolve_mn_home
 
-native_launch_authority = ContextVar('mcp_native_launch_authority', default=False)
+native_launch_authority = ContextVar("mcp_native_launch_authority", default=False)
 
 
 class BoundJobSupervision:
@@ -65,12 +65,24 @@ class BoundJobSupervision:
             from mn_api.routes.v1.jobs import create_job_run_operation
             from mn_api.routes.v1.blueprints import create_blueprint_run
 
-            if not isinstance(metadata, dict) or set(metadata) - {"config_overrides", "secret_environment", "force", "admission_policy"}:
+            if not isinstance(metadata, dict) or set(metadata) - {
+                "config_overrides",
+                "secret_environment",
+                "force",
+                "admission_policy",
+            }:
                 raise ValueError("Invalid native launch metadata")
             configuration = metadata.get("config_overrides", {})
             secrets = metadata.get("secret_environment", {})
             if not secrets:
-                response = create_job_run_operation(job_id, RunCreate(config_overrides=configuration, admission_policy=metadata.get("admission_policy", "start_now")), request_id, "mcp")
+                response = create_job_run_operation(
+                    job_id,
+                    RunCreate(
+                        config_overrides=configuration, admission_policy=metadata.get("admission_policy", "start_now")
+                    ),
+                    request_id,
+                    "mcp",
+                )
                 return json.loads(response.body)
             # A credential-only launch on the owner must not replace the
             # definition prepared by a different computer's catalog.
@@ -82,8 +94,13 @@ class BoundJobSupervision:
             manifest = read_manifest_for_launch(validate_blueprint_bundle(repo_root, blueprint))
             prepared_job = runtime.get_job(job_id, include_workflow_definition=True)
             require_prepared_launch_models(prepared_job, manifest)
-            request = BlueprintRunCreate(job_id=job_id, config_overrides=configuration,
-                                         secret_environment=secrets, force=metadata.get("force", False), admission_policy=metadata.get("admission_policy", "start_now"))
+            request = BlueprintRunCreate(
+                job_id=job_id,
+                config_overrides=configuration,
+                secret_environment=secrets,
+                force=metadata.get("force", False),
+                admission_policy=metadata.get("admission_policy", "start_now"),
+            )
             # Credentials are captured only by this in-memory callback. The
             # durable operation stores identity and progress, never this request.
             operation_id = "op-local-" + hashlib.sha256(f"mcp:{job_id}:{request_id}".encode()).hexdigest()
@@ -93,11 +110,14 @@ class BoundJobSupervision:
                 response = create_blueprint_run(blueprint_id, request, request_id, "mcp", None)
                 return json.loads(response.body)
 
-            return start_local_operation("create_job_run", {"job_id": job_id}, run, operation_id=operation_id, durable=True)
+            return start_local_operation(
+                "create_job_run", {"job_id": job_id}, run, operation_id=operation_id, durable=True
+            )
 
         async def activity(arguments, ctx):
             import time
             from mn_sdk_mcp import job_activity_input_required, resolve_job_activity_receipt
+
             if ctx is not None:
                 receipt = resolve_job_activity_receipt(ctx)
                 if receipt is not None:
@@ -105,8 +125,11 @@ class BoundJobSupervision:
             cursor = arguments.get("after_event_id", "")
             deadline = time.monotonic() + arguments.get("wait_seconds", 20)
             while True:
-                item = await anyio.to_thread.run_sync(lambda: adapter.context_provider.get_next_activity(
-                    job_id, after_event_id=cursor, wait_seconds=max(0, deadline - time.monotonic())))
+                item = await anyio.to_thread.run_sync(
+                    lambda: adapter.context_provider.get_next_activity(
+                        job_id, after_event_id=cursor, wait_seconds=max(0, deadline - time.monotonic())
+                    )
+                )
                 if item is not None:
                     return job_activity_input_required(item, after_event_id=cursor)
                 if time.monotonic() >= deadline:
@@ -114,30 +137,62 @@ class BoundJobSupervision:
                 await anyio.sleep(0.5)
 
         from mn_api.operations import get_operation
+
         def launch_binding(request_id, metadata):
             if metadata and not native_launch_authority.get():
-                raise ValueError('Native launch metadata requires an internal desktop session.')
+                raise ValueError("Native launch metadata requires an internal desktop session.")
             if metadata.get("secret_environment"):
                 value = f"mcp:{job_id}:{request_id}".encode()
             else:
-                value = json.dumps(["mcp", f"/api/v1/jobs/{job_id}/run-operations", request_id], separators=(",", ":")).encode()
+                value = json.dumps(
+                    ["mcp", f"/api/v1/jobs/{job_id}/run-operations", request_id], separators=(",", ":")
+                ).encode()
             return "op-local-" + hashlib.sha256(value).hexdigest()
 
         def poll_launch(operation_id):
             snapshot = get_operation(operation_id)
             result = snapshot.get("result") or {}
-            receipt = {key: result[key] for key in ("job_id", "run_id", "execution_id", "runtime_run_id", "workflow_id", "graph_id", "status", "admission", "message") if key in result}
+            receipt = {
+                key: result[key]
+                for key in (
+                    "job_id",
+                    "run_id",
+                    "execution_id",
+                    "runtime_run_id",
+                    "workflow_id",
+                    "graph_id",
+                    "status",
+                    "admission",
+                    "message",
+                )
+                if key in result
+            }
             projected = {"status": snapshot.get("status"), "progress": snapshot.get("progress", {})}
             if receipt:
                 projected["result"] = receipt
             error = snapshot.get("error")
             if error:
-                projected["failure"] = {key: error[key] for key in ("code", "retryable", "details", "problem_code", "category") if key in error}
+                projected["failure"] = {
+                    key: error[key]
+                    for key in ("code", "retryable", "details", "problem_code", "category")
+                    if key in error
+                }
             return projected
+
         store_path = resolve_mn_home() / "mcp_operations" / (hashlib.sha256(job_id.encode()).hexdigest() + ".sqlite3")
-        return JobSupervisor(job_id=job_id, blueprint_id=blueprint_id, declaration=job["mcp"],
-                             runtime=RuntimeControls(), context=self.context_provider, operations=OperationStore(store_path),
-                             launch=launch, launch_binding=launch_binding, poll_launch=poll_launch, domain=RuntimeMCPAdapter(state.client), activity=activity)
+        return JobSupervisor(
+            job_id=job_id,
+            blueprint_id=blueprint_id,
+            declaration=job["mcp"],
+            runtime=RuntimeControls(),
+            context=self.context_provider,
+            operations=OperationStore(store_path),
+            launch=launch,
+            launch_binding=launch_binding,
+            poll_launch=poll_launch,
+            domain=RuntimeMCPAdapter(state.client),
+            activity=activity,
+        )
 
     async def capabilities(self):
         return await anyio.to_thread.run_sync(lambda: self._supervisor().capabilities())
@@ -149,4 +204,5 @@ class BoundJobSupervision:
                 return pending
         result = await anyio.to_thread.run_sync(lambda: self._supervisor().invoke(name, arguments, ctx))
         import inspect
+
         return await result if inspect.isawaitable(result) else result

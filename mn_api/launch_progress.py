@@ -25,7 +25,6 @@ def operation_progress(observer: Callable[..., None]) -> Iterator[None]:
         _operation_observer.reset(token)
 
 
-
 def progress_reporter(progress_id: str | None, phase: str = "prepare_bundle") -> ProgressCallback | None:
     observer = _operation_observer.get()
     if not progress_id and observer is None:
@@ -98,8 +97,7 @@ def public_progress_snapshot(progress_id: str) -> dict:
 
 @contextmanager
 def launch_activity(
-    report: ProgressCallback | None, message: str, detail: str, expectation: str = "",
-    *, stage: str = "preparation"
+    report: ProgressCallback | None, message: str, detail: str, expectation: str = "", *, stage: str = "preparation"
 ) -> Iterator[None]:
     """Keep the existing progress record current without inspecting runtime logs."""
     started = time.monotonic()
@@ -107,8 +105,13 @@ def launch_activity(
 
     def timing(event: str, status: str) -> None:
         try:
-            logger.info("worker.preparation.%s stage=%s outcome=%s duration_ms=%d",
-                        event, stage, status, max(0, int((time.monotonic() - started) * 1000)))
+            logger.info(
+                "worker.preparation.%s stage=%s outcome=%s duration_ms=%d",
+                event,
+                stage,
+                status,
+                max(0, int((time.monotonic() - started) * 1000)),
+            )
         except Exception:
             pass
 

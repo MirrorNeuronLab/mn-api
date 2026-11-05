@@ -240,7 +240,9 @@ def event_message_summary(event: dict[str, Any]) -> dict[str, Any] | None:
     if event.get("type") == "agent_message_received" and isinstance(payload, dict):
         return payload
 
-    if event.get("type") in {"backpressure_signal", "delivery_failed", "backpressure_rejected"} and isinstance(payload, dict):
+    if event.get("type") in {"backpressure_signal", "delivery_failed", "backpressure_rejected"} and isinstance(
+        payload, dict
+    ):
         return payload
 
     message = event.get("message")

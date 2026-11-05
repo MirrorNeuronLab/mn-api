@@ -18,12 +18,20 @@ class TestRunStore(unittest.TestCase):
             root = Path(tmp)
             events = root / "submissions" / "job-mc-def-123" / "outputs" / "runs" / "mcv-1" / "events.jsonl"
             events.parent.mkdir(parents=True)
-            events.write_text("\n".join(json.dumps(event) for event in [
-                {"type": "run_result_available", "payload": {"run_id": "mcv-1", "result_id": "a"}},
-                {"type": "run_result_available", "payload": {"run_id": "other", "result_id": "b"}},
-                {"type": "workflow_step_completed", "payload": {"run_id": "mcv-1"}},
-            ]) + "\n")
-            with patch("mn_api.run_store.RuntimeConfig.from_env", return_value=SimpleNamespace(shared_storage_root=str(root))):
+            events.write_text(
+                "\n".join(
+                    json.dumps(event)
+                    for event in [
+                        {"type": "run_result_available", "payload": {"run_id": "mcv-1", "result_id": "a"}},
+                        {"type": "run_result_available", "payload": {"run_id": "other", "result_id": "b"}},
+                        {"type": "workflow_step_completed", "payload": {"run_id": "mcv-1"}},
+                    ]
+                )
+                + "\n"
+            )
+            with patch(
+                "mn_api.run_store.RuntimeConfig.from_env", return_value=SimpleNamespace(shared_storage_root=str(root))
+            ):
                 self.assertEqual(len(shared_result_events("job-mc", "mcv-1")), 1)
                 self.assertEqual(shared_result_events("other-job", "mcv-1"), [])
                 self.assertEqual(shared_result_events("../job-mc", "mcv-1"), [])

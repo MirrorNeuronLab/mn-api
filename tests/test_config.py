@@ -135,8 +135,7 @@ class TestApiConfig(unittest.TestCase):
             state_dir = Path(tmp) / ".mn"
             state_dir.mkdir()
             (state_dir / "docker-compose.env").write_text(
-                "MN_GRPC_AUTH_TOKEN=stale-auth-from-state\n"
-                "MN_GRPC_ADMIN_TOKEN=stale-admin-from-state\n",
+                "MN_GRPC_AUTH_TOKEN=stale-auth-from-state\nMN_GRPC_ADMIN_TOKEN=stale-admin-from-state\n",
                 encoding="utf-8",
             )
             (state_dir / "grpc_auth.token").write_text("auth-from-file\n", encoding="utf-8")
@@ -153,8 +152,7 @@ class TestApiConfig(unittest.TestCase):
             state_dir = Path(tmp) / ".mn"
             state_dir.mkdir()
             (state_dir / "docker-compose.env").write_text(
-                "MN_GRPC_AUTH_TOKEN=stale-auth-from-state\n"
-                "MN_GRPC_ADMIN_TOKEN=stale-admin-from-state\n",
+                "MN_GRPC_AUTH_TOKEN=stale-auth-from-state\nMN_GRPC_ADMIN_TOKEN=stale-admin-from-state\n",
                 encoding="utf-8",
             )
             auth_file = Path(tmp) / "auth.token"

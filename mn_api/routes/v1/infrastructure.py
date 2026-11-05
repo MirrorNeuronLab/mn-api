@@ -199,7 +199,9 @@ def create_model_remote(request: ModelRegistration, response: Response, principa
     return public_value(remote)
 
 
-@router.delete("/model-remotes/{name}", status_code=status.HTTP_204_NO_CONTENT, operation_id="delete_model_remote", tags=["models"])
+@router.delete(
+    "/model-remotes/{name}", status_code=status.HTTP_204_NO_CONTENT, operation_id="delete_model_remote", tags=["models"]
+)
 def delete_model_remote(
     name: str,
     if_match: str | None = Header(default=None, alias="If-Match"),

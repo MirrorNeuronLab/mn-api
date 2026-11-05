@@ -21,6 +21,7 @@ from mn_api.path_utils import resolve_mn_home
 PROGRESS_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,220}$")
 TERMINAL_LAUNCH_PROGRESS_STATUSES = {"completed", "failed"}
 
+
 def launch_progress_snapshot(progress_id: str) -> dict[str, Any]:
     resolved_progress_id = validate_progress_id(progress_id)
     events = read_launch_progress(resolved_progress_id)

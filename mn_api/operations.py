@@ -96,6 +96,7 @@ def _operation_error(error: Exception) -> dict[str, Any]:
         result["category"] = app_error.category
     if app_error.details and "blockers" in app_error.details:
         from mn_sdk.errors import sanitize_context
+
         result["details"] = {"blockers": sanitize_context(app_error.details)["blockers"]}
         result["problem_code"] = app_error.problem_code
         result["category"] = app_error.category
@@ -267,7 +268,9 @@ def start_local_operation(
         existing = _load_durable_operation_locked(operation_id) if durable else _operations.get(operation_id)
         if existing:
             if request_fingerprint and existing.get("request_fingerprint") != request_fingerprint:
-                raise HTTPException(status_code=409, detail="The Idempotency-Key was already used with another request.")
+                raise HTTPException(
+                    status_code=409, detail="The Idempotency-Key was already used with another request."
+                )
             if (
                 existing.get("status") == "completed"
                 or (
@@ -295,7 +298,11 @@ def start_local_operation(
     def run():
         try:
             update_local_operation(
-                operation_id, status="running", percent=1, stage="starting", label="Starting",
+                operation_id,
+                status="running",
+                percent=1,
+                stage="starting",
+                label="Starting",
                 detail="The local API host started the operation.",
             )
             try:
@@ -303,9 +310,15 @@ def start_local_operation(
             except Exception as exc:
                 update_local_operation(operation_id, status="failed", error=_operation_error(exc))
             else:
-                update_local_operation(operation_id, status="completed", percent=100, stage="completed",
-                                       label="Completed", detail="The operation completed successfully.",
-                                       result=result)
+                update_local_operation(
+                    operation_id,
+                    status="completed",
+                    percent=100,
+                    stage="completed",
+                    label="Completed",
+                    detail="The operation completed successfully.",
+                    result=result,
+                )
         except Exception:
             state.logger.error("Local operation publication failed operation_id=%s kind=%s", operation_id, kind)
         finally:
@@ -391,8 +404,4 @@ def sse_envelope(*, event_id: int, event_type: str, resource: str, data: Any) ->
 
 
 def encode_sse(envelope: dict[str, Any]) -> str:
-    return (
-        f"id: {envelope['id']}\n"
-        f"event: {envelope['type']}\n"
-        f"data: {json.dumps(envelope, separators=(',', ':'))}\n\n"
-    )
+    return f"id: {envelope['id']}\nevent: {envelope['type']}\ndata: {json.dumps(envelope, separators=(',', ':'))}\n\n"

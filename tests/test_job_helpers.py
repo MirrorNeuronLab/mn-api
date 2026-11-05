@@ -13,7 +13,11 @@ from mn_api import job_projection as jobs
 
 @pytest.fixture(autouse=True)
 def ready_ui_probe(monkeypatch):
-    monkeypatch.setattr(job_ui, "probe_job_web_ui", lambda _job_id, _url: {"schema_version": "mn.web_ui.readiness.v1", "ready": True, "reason": "ready"})
+    monkeypatch.setattr(
+        job_ui,
+        "probe_job_web_ui",
+        lambda _job_id, _url: {"schema_version": "mn.web_ui.readiness.v1", "ready": True, "reason": "ready"},
+    )
     # These tests isolate durable-handle discovery from Core placement. Relay
     # authority and cross-node transport are covered in test_job_ui_relay.
     monkeypatch.setattr("mn_api.job_ui_routing.routed_handle", lambda handle: handle)
@@ -103,9 +107,16 @@ def test_recent_run_events_read_newest_segments_only_and_keep_order(tmp_path, mo
     middle.write_text('{"index":1}\n{"index":2}\n')
     current = tmp_path / "events.jsonl"
     current.write_text('{"index":3}\n{"index":4}\n')
-    (tmp_path / "events.index.json").write_text(json.dumps({"segments": [
-        {"path": old.name}, {"path": middle.name},
-    ]}))
+    (tmp_path / "events.index.json").write_text(
+        json.dumps(
+            {
+                "segments": [
+                    {"path": old.name},
+                    {"path": middle.name},
+                ]
+            }
+        )
+    )
     original = jobs._read_jsonl_file
     reads = []
 
@@ -132,10 +143,12 @@ def test_run_workflow_progress_reads_execution_and_stable_definition(monkeypatch
 
         def get_job(self, job_id, *, include_workflow_definition=False):
             calls.append(("job", job_id, include_workflow_definition))
-            return json.dumps({
-                "job_id": job_id,
-                "workflow_definition": {"workflow": {"steps": [{"id": "prepare"}]}},
-            })
+            return json.dumps(
+                {
+                    "job_id": job_id,
+                    "workflow_definition": {"workflow": {"steps": [{"id": "prepare"}]}},
+                }
+            )
 
         def stream_events(self, run_id, **_kwargs):
             calls.append(("events", run_id))
@@ -167,16 +180,21 @@ def test_run_progress_prefers_saved_run_manifest_and_replays_older_events(monkey
     run_id = "execution-2"
     run_dir = tmp_path / run_id
     run_dir.mkdir()
-    (run_dir / "manifest.json").write_text(json.dumps({
-        "apiVersion": "mn.workflow/v1",
-        "kind": "Workflow",
-        "id": "research-assistant",
-        "name": "This execution",
-        "contract": {},
-        "agents": {},
-        "workflow": {"steps": [{"id": "prepare"}, {"id": "publish"}]},
-        "runtime": {"bindings": {}},
-    }), encoding="utf-8")
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "apiVersion": "mn.workflow/v1",
+                "kind": "Workflow",
+                "id": "research-assistant",
+                "name": "This execution",
+                "contract": {},
+                "agents": {},
+                "workflow": {"steps": [{"id": "prepare"}, {"id": "publish"}]},
+                "runtime": {"bindings": {}},
+            }
+        ),
+        encoding="utf-8",
+    )
     monkeypatch.setattr(jobs, "_run_dir_from_id", lambda identifier: run_dir if identifier == run_id else None)
 
     event_history = [
@@ -209,6 +227,7 @@ def test_run_progress_prefers_saved_run_manifest_and_replays_older_events(monkey
 
     def missing_definition(_job_id, *, include_workflow_definition=False):
         from mn_sdk.errors import AppError
+
         raise AppError("MN_NOT_FOUND", "The stable definition has been removed.", http_status=404)
 
     monkeypatch.setattr(state.client, "get_job", missing_definition)
@@ -220,14 +239,20 @@ def test_run_progress_recovers_retried_public_step_from_runtime_worker_events(mo
     run_id = "execution-retry"
     run_dir = tmp_path / run_id
     run_dir.mkdir()
-    (run_dir / "manifest.json").write_text(json.dumps({
-        "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "research",
-        "contract": {}, "agents": {},
-        "workflow": {"steps": [{"id": "develop", "run": "develop__start"}]},
-        "runtime": {"bindings": {"develop__start": {
-            "workers": [{"id": "researcher"}]
-        }}},
-    }), encoding="utf-8")
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "apiVersion": "mn.workflow/v1",
+                "kind": "Workflow",
+                "id": "research",
+                "contract": {},
+                "agents": {},
+                "workflow": {"steps": [{"id": "develop", "run": "develop__start"}]},
+                "runtime": {"bindings": {"develop__start": {"workers": [{"id": "researcher"}]}}},
+            }
+        ),
+        encoding="utf-8",
+    )
     monkeypatch.setattr(jobs, "_run_dir_from_id", lambda identifier: run_dir if identifier == run_id else None)
 
     class FakeClient:
@@ -237,12 +262,14 @@ def test_run_progress_recovers_retried_public_step_from_runtime_worker_events(mo
         def stream_events(self, _run_id, **_kwargs):
             for event in (
                 {"type": "workflow_step_failed", "payload": {"step": "develop", "error": "old failure"}},
-                {"type": "workflow_step_attempt_started", "payload": {
-                    "step": "develop", "worker": "develop__researcher", "attempt": 2
-                }},
-                {"type": "docker_worker_command_started", "payload": {
-                    "step": "develop", "worker": "develop__researcher"
-                }},
+                {
+                    "type": "workflow_step_attempt_started",
+                    "payload": {"step": "develop", "worker": "develop__researcher", "attempt": 2},
+                },
+                {
+                    "type": "docker_worker_command_started",
+                    "payload": {"step": "develop", "worker": "develop__researcher"},
+                },
             ):
                 yield json.dumps(event)
 
@@ -258,10 +285,13 @@ def test_run_progress_recovers_retried_public_step_from_runtime_worker_events(mo
 def test_run_store_progress_replays_all_events_without_durable_ledger(tmp_path):
     run_dir = tmp_path / "run-1"
     run_dir.mkdir()
-    (run_dir / "events.jsonl").write_text("".join(
-        json.dumps({"type": "workflow_step_completed", "payload": {"step": f"step-{index}"}}) + "\n"
-        for index in range(30)
-    ), encoding="utf-8")
+    (run_dir / "events.jsonl").write_text(
+        "".join(
+            json.dumps({"type": "workflow_step_completed", "payload": {"step": f"step-{index}"}}) + "\n"
+            for index in range(30)
+        ),
+        encoding="utf-8",
+    )
 
     events = jobs._run_store_events(run_dir, limit=0)
     assert len(events) == 30
@@ -340,8 +370,12 @@ def test_get_job_ui_reads_the_durable_job_data_directory(monkeypatch, tmp_path):
     assert job_ui.get_job_ui("job-1") == {
         "job_id": "job-1",
         "ui": {"job_id": "job-1", "title": "Example"},
-        "web_ui": {"job_id": "job-1", "url": "http://127.0.0.1:61000", "status": "running",
-                   "metadata": {"readiness": {"schema_version": "mn.web_ui.readiness.v1", "ready": True, "reason": "ready"}}},
+        "web_ui": {
+            "job_id": "job-1",
+            "url": "http://127.0.0.1:61000",
+            "status": "running",
+            "metadata": {"readiness": {"schema_version": "mn.web_ui.readiness.v1", "ready": True, "reason": "ready"}},
+        },
     }
 
 
@@ -353,18 +387,43 @@ def test_get_job_ui_uses_selected_runtime_node_for_passing_service(monkeypatch, 
 
         def list_services(self, **query):
             assert query == {
-                "job_id": "run-1", "node": "mirror_neuron@10.0.4.32",
-                "passing_only": True, "page_size": 200,
+                "job_id": "run-1",
+                "node": "mirror_neuron@10.0.4.32",
+                "passing_only": True,
+                "page_size": 200,
             }
-            return json.dumps({"items": [
-                {"job_id": "run-1", "name": "warehouse-ui", "node": "mirror_neuron@10.0.4.32",
-                 "address": "10.0.4.26", "port": 8088, "status": "passing", "tags": ["web_ui"],
-                 "meta": {"title": "Warehouse AMR Monitor", "load_event": "did-finish-load"}},
-                {"job_id": "run-1", "name": "video", "node": "mirror_neuron@10.0.4.32",
-                 "port": 8080, "status": "passing", "tags": ["video"]},
-                {"job_id": "run-1", "name": "rosbridge", "node": "mirror_neuron@10.0.4.32",
-                 "port": 9090, "status": "passing", "tags": ["websocket"]},
-            ]})
+            return json.dumps(
+                {
+                    "items": [
+                        {
+                            "job_id": "run-1",
+                            "name": "warehouse-ui",
+                            "node": "mirror_neuron@10.0.4.32",
+                            "address": "10.0.4.26",
+                            "port": 8088,
+                            "status": "passing",
+                            "tags": ["web_ui"],
+                            "meta": {"title": "Warehouse AMR Monitor", "load_event": "did-finish-load"},
+                        },
+                        {
+                            "job_id": "run-1",
+                            "name": "video",
+                            "node": "mirror_neuron@10.0.4.32",
+                            "port": 8080,
+                            "status": "passing",
+                            "tags": ["video"],
+                        },
+                        {
+                            "job_id": "run-1",
+                            "name": "rosbridge",
+                            "node": "mirror_neuron@10.0.4.32",
+                            "port": 9090,
+                            "status": "passing",
+                            "tags": ["websocket"],
+                        },
+                    ]
+                }
+            )
 
         def get_system_summary(self):
             return json.dumps({"nodes": [{"name": "mirror_neuron@10.0.4.32", "address": "10.0.4.32"}]})
@@ -386,18 +445,24 @@ def test_get_job_ui_uses_selected_runtime_node_for_passing_service(monkeypatch, 
     assert job_ui.get_job_ui("job-1")["web_ui"]["status"] == "running"
 
 
-@pytest.mark.parametrize("claim_url,expected", [
-    ("http://10.0.4.32:8088/", "did-finish-load"),
-    ("http://10.0.4.32:8089/", "dom-ready"),
-])
+@pytest.mark.parametrize(
+    "claim_url,expected",
+    [
+        ("http://10.0.4.32:8088/", "did-finish-load"),
+        ("http://10.0.4.32:8089/", "dom-ready"),
+    ],
+)
 def test_live_ui_preserves_load_event_only_for_the_claimed_page(monkeypatch, tmp_path, claim_url, expected):
     directory = tmp_path / "job-1"
     directory.mkdir()
     (directory / "ui.json").write_text(json.dumps({"job_id": "job-1"}))
-    (directory / "web_ui.json").write_text(json.dumps({
-        "job_id": "job-1", "url": claim_url, "metadata": {"load_event": "did-finish-load"}
-    }))
-    live = {"job_id": "job-1", "web_ui": {"url": "http://10.0.4.32:8088", "status": "running", "metadata": {"load_event": "dom-ready"}}}
+    (directory / "web_ui.json").write_text(
+        json.dumps({"job_id": "job-1", "url": claim_url, "metadata": {"load_event": "did-finish-load"}})
+    )
+    live = {
+        "job_id": "job-1",
+        "web_ui": {"url": "http://10.0.4.32:8088", "status": "running", "metadata": {"load_event": "dom-ready"}},
+    }
     monkeypatch.setattr(job_ui, "job_data_dir_from_id", lambda *_args, **_kwargs: directory)
     monkeypatch.setattr(job_ui, "shared_job_ui_dir_from_id", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(job_ui, "_job_ui_handle_from_services", lambda _job_id: live)
@@ -414,10 +479,16 @@ def test_job_ui_does_not_promote_lifecycle_state_from_reachability(monkeypatch, 
 
 
 def test_job_ui_rechecks_stale_ready_receipts_without_changing_persisted_handle(monkeypatch):
-    handle = {"job_id": "job-1", "web_ui": {"url": "http://worker:8080/", "status": "running",
-                         "metadata": {"readiness": {"ready": True}}}}
+    handle = {
+        "job_id": "job-1",
+        "web_ui": {"url": "http://worker:8080/", "status": "running", "metadata": {"readiness": {"ready": True}}},
+    }
     urls = []
-    monkeypatch.setattr(job_ui, "probe_job_web_ui", lambda job_id, url: urls.append((job_id, url)) or {"ready": False, "reason": "unreachable"})
+    monkeypatch.setattr(
+        job_ui,
+        "probe_job_web_ui",
+        lambda job_id, url: urls.append((job_id, url)) or {"ready": False, "reason": "unreachable"},
+    )
     result = job_ui._checked_job_ui_handle(handle)
     assert result["web_ui"]["status"] == "starting"
     assert result["web_ui"]["metadata"]["readiness"]["ready"] is False
@@ -439,9 +510,7 @@ def test_get_job_ui_prefers_the_cross_node_shared_handle(monkeypatch, tmp_path):
             json.dumps({"job_id": "job-1", "url": f"http://10.0.4.26:{port}", "status": "running"}),
             encoding="utf-8",
         )
-    monkeypatch.setattr(
-        job_ui, "job_data_dir_from_id", lambda _job_id, must_exist=False: local_dir
-    )
+    monkeypatch.setattr(job_ui, "job_data_dir_from_id", lambda _job_id, must_exist=False: local_dir)
     monkeypatch.setattr(
         job_ui,
         "shared_job_ui_dir_from_id",
@@ -473,8 +542,12 @@ def test_get_job_ui_reads_its_current_federated_owner_before_replicas(monkeypatc
     remote_handle = {
         "job_id": "job-1",
         "ui": {"job_id": "job-1", "title": "Example"},
-        "web_ui": {"job_id": "job-1", "url": "http://10.0.4.26:45767", "status": "running",
-                   "metadata": {"readiness": {"schema_version": "mn.web_ui.readiness.v1", "ready": True, "reason": "ready"}}},
+        "web_ui": {
+            "job_id": "job-1",
+            "url": "http://10.0.4.26:45767",
+            "status": "running",
+            "metadata": {"readiness": {"schema_version": "mn.web_ui.readiness.v1", "ready": True, "reason": "ready"}},
+        },
     }
 
     class FakeClient:
@@ -489,7 +562,14 @@ def test_get_job_ui_reads_its_current_federated_owner_before_replicas(monkeypatc
                             "name": "mirror_neuron@10.0.4.26",
                             "address": "10.0.4.26",
                             "self?": False,
-                            "hardware": {"http_api": {"schema_version": "mn.http_api.endpoint.v1", "enabled": True, "scheme": "http", "port": 54001}},
+                            "hardware": {
+                                "http_api": {
+                                    "schema_version": "mn.http_api.endpoint.v1",
+                                    "enabled": True,
+                                    "scheme": "http",
+                                    "port": 54001,
+                                }
+                            },
                         }
                     ]
                 }
@@ -573,13 +653,17 @@ def test_get_job_ui_never_uses_an_untrusted_owner_address(monkeypatch, tmp_path)
 
 def test_runtime_activity_receipt_deduplicates_ledger_and_core_copy():
     from mn_sdk_common.runtime_events import runtime_event, worker_event
-    ledger = runtime_event('agent_activity', {'message': 'Person presence confirmed'},
-                           owner_blueprint='cctv_operator', activity_kind='finding')
-    core = {'type': ledger['type'], 'timestamp': '2026-10-13T15:00:01Z',
-            'payload': worker_event(ledger)['payload']}
+
+    ledger = runtime_event(
+        "agent_activity",
+        {"message": "Person presence confirmed"},
+        owner_blueprint="cctv_operator",
+        activity_kind="finding",
+    )
+    core = {"type": ledger["type"], "timestamp": "2026-10-13T15:00:01Z", "payload": worker_event(ledger)["payload"]}
     merged = jobs._merge_events([ledger], [core])
     assert len(merged) == 1
     compact = jobs._compact_event(merged[0])
-    assert compact['schema'] == 'mn.runtime.event.v1'
-    assert compact['owner_blueprint'] == 'cctv_operator'
-    assert compact['level'] == 'info'
+    assert compact["schema"] == "mn.runtime.event.v1"
+    assert compact["owner_blueprint"] == "cctv_operator"
+    assert compact["level"] == "info"

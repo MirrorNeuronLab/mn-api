@@ -23,6 +23,7 @@ def _relay_running(run_dir: Path) -> bool:
     try:
         metadata = json.loads((run_dir / "event_relay.json").read_text(encoding="utf-8"))
         from mn_sdk.blueprint_support.relay_ownership import relay_process_running
+
         return relay_process_running(metadata)
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         return False

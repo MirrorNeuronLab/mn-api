@@ -10,7 +10,9 @@ from mn_api.app import create_app
 
 @pytest.fixture
 def client(monkeypatch):
-    monkeypatch.setattr(state, "config", SimpleNamespace(api_token="", request_size_limit_bytes=1024 * 1024, cors_allow_origins=[]))
+    monkeypatch.setattr(
+        state, "config", SimpleNamespace(api_token="", request_size_limit_bytes=1024 * 1024, cors_allow_origins=[])
+    )
 
     class Runtime:
         def __init__(self):
@@ -21,9 +23,21 @@ def client(monkeypatch):
 
         def check_run_admission(self, job_id, **kwargs):
             self.calls.append((job_id, kwargs))
-            return json.dumps({"status": "runnable_later", "node_label": "Spark", "blockers": [
-                {"code": "MN_GPU_MEMORY_UNAVAILABLE", "resource": "gpu_memory_free_mb", "available": 12, "required": 20, "unit": "GiB"}
-            ]})
+            return json.dumps(
+                {
+                    "status": "runnable_later",
+                    "node_label": "Spark",
+                    "blockers": [
+                        {
+                            "code": "MN_GPU_MEMORY_UNAVAILABLE",
+                            "resource": "gpu_memory_free_mb",
+                            "available": 12,
+                            "required": 20,
+                            "unit": "GiB",
+                        }
+                    ],
+                }
+            )
 
     runtime = Runtime()
     monkeypatch.setattr(state, "client", runtime)
@@ -45,8 +59,15 @@ def test_resume_is_bound_to_the_existing_run(client):
     assert runtime.calls == [("job-1", {"run_id": "run-1"})]
 
 
-@pytest.mark.parametrize("body,status", [({"action": "resume"}, 422), ({"action": "execute"}, 422),
-    ({"config_overrides": {"size": 2}}, 409), ({"unexpected": True}, 422)])
+@pytest.mark.parametrize(
+    "body,status",
+    [
+        ({"action": "resume"}, 422),
+        ({"action": "execute"}, 422),
+        ({"config_overrides": {"size": 2}}, 409),
+        ({"unexpected": True}, 422),
+    ],
+)
 def test_rejects_invalid_or_unsaved_launch_settings_without_side_effects(client, body, status):
     api, runtime = client
     result = api.post("/api/v1/jobs/job-1/run-admission-checks", json=body)

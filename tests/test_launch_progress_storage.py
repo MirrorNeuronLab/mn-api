@@ -11,14 +11,29 @@ from mn_api import blueprint_launch as progress
 def test_progress_history_keeps_terminal_status_and_latest_phase(monkeypatch, tmp_path):
     monkeypatch.setenv("MN_LAUNCH_PROGRESS_DIR", str(tmp_path))
     progress.record_launch_progress(
-        "run", "submit", "running", "Submitting", {"run_id": "run-1"},
-        label="Submit", detail="Waiting", expectation="Ready", severity="info",
+        "run",
+        "submit",
+        "running",
+        "Submitting",
+        {"run_id": "run-1"},
+        label="Submit",
+        detail="Waiting",
+        expectation="Ready",
+        severity="info",
     )
     path = tmp_path / "run.jsonl"
     raw = json.loads(path.read_text())
     assert set(raw) == {
-        "version", "ts", "phase", "status", "message", "details", "label",
-        "detail", "expectation", "severity",
+        "version",
+        "ts",
+        "phase",
+        "status",
+        "message",
+        "details",
+        "label",
+        "detail",
+        "expectation",
+        "severity",
     }
     assert raw["version"] == 2
     assert raw["details"] == {"run_id": "run-1"}
@@ -42,17 +57,31 @@ def test_progress_history_keeps_terminal_status_and_latest_phase(monkeypatch, tm
 
 
 def test_progress_phase_replacement_preserves_first_seen_order():
-    phases = progress.summarize_launch_progress_phases([
-        {},
-        {"step": "custom_step", "state": "pending", "detail": "First", "timestamp": "a"},
-        {"id": "validation", "message": "Checking"},
-        {"phase": "custom_step", "status": "completed", "message": "Last", "ts": "b"},
-    ])
+    phases = progress.summarize_launch_progress_phases(
+        [
+            {},
+            {"step": "custom_step", "state": "pending", "detail": "First", "timestamp": "a"},
+            {"id": "validation", "message": "Checking"},
+            {"phase": "custom_step", "status": "completed", "message": "Last", "ts": "b"},
+        ]
+    )
     assert phases == [
-        {"version": 2, "id": "custom_step", "label": "Custom Step", "status": "completed",
-         "message": "Last", "updated_at": "b"},
-        {"version": 2, "id": "validation", "label": "Validate inputs", "status": "running",
-         "message": "Checking", "updated_at": ""},
+        {
+            "version": 2,
+            "id": "custom_step",
+            "label": "Custom Step",
+            "status": "completed",
+            "message": "Last",
+            "updated_at": "b",
+        },
+        {
+            "version": 2,
+            "id": "validation",
+            "label": "Validate inputs",
+            "status": "running",
+            "message": "Checking",
+            "updated_at": "",
+        },
     ]
 
 

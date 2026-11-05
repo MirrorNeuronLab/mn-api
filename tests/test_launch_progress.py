@@ -63,6 +63,7 @@ def test_local_stage_timings_do_not_require_progress_or_expose_details(monkeypat
 def test_timing_sink_cannot_change_preparation(monkeypatch):
     def broken(*args):
         raise OSError("logging unavailable")
+
     monkeypatch.setattr(launch_progress.logger, "info", broken)
     with launch_progress.launch_activity(None, "prepare", "prepare"):
         pass
@@ -155,10 +156,12 @@ def test_operation_observer_is_captured_by_heartbeat_and_reset(monkeypatch):
     monkeypatch.setattr(launch_progress, "HEARTBEAT_SECONDS", 0.01)
     events = []
     heartbeat = Event()
+
     def observe(**event):
         events.append(event)
         if "elapsed" in event["detail"]:
             heartbeat.set()
+
     assert launch_progress.progress_reporter(None) is None
     with launch_progress.operation_progress(observe):
         reporter = launch_progress.progress_reporter(None)
@@ -172,5 +175,6 @@ def test_operation_observer_is_captured_by_heartbeat_and_reset(monkeypatch):
 def test_unavailable_operation_observer_does_not_change_preparation():
     def broken(**_event):
         raise OSError("unavailable")
+
     with launch_progress.operation_progress(broken):
         launch_progress.progress_reporter(None)("Prepare", "Ready", "")

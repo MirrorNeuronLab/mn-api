@@ -26,13 +26,20 @@ def test_model_collection_defaults_to_catalog_and_marks_default_chain(client, mo
     assert response.status_code == 200, response.text
     items = response.json()["items"]
     assert {item["id"] for item in items} == {
-        "nemotron-3.5-bolt-e4b:q4_k_m", "bonsai2:ptq1_0", "nemotron3:q4_K_M",
-        "nemotron-3.5-lightning:latest", "nemotron-3.5-super-vl:120b-a12b",
+        "nemotron-3.5-bolt-e4b:q4_k_m",
+        "bonsai2:ptq1_0",
+        "nemotron3:q4_K_M",
+        "nemotron-3.5-lightning:latest",
+        "nemotron-3.5-super-vl:120b-a12b",
         "huggingface.co/mirrorneuronlab/embeddinggemma-2-gguf:Q4_K_M",
     }
     assert next(item for item in items if item["id"] == "bonsai2:ptq1_0")["source"] == "dmr"
     assert next(item for item in items if item["id"] == "bonsai2:ptq1_0")["preparation"]["kind"] == "dmr_native"
-    assert {item["id"] for item in items if item["default"]} == {"nemotron-3.5-lightning:latest", "bonsai2:ptq1_0", "nemotron-3.5-bolt-e4b:q4_k_m"}
+    assert {item["id"] for item in items if item["default"]} == {
+        "nemotron-3.5-lightning:latest",
+        "bonsai2:ptq1_0",
+        "nemotron-3.5-bolt-e4b:q4_k_m",
+    }
     assert client.get("/api/v1/models?installed_only=true").json()["items"] == []
 
 
@@ -170,25 +177,44 @@ def test_docker_installation_uses_shared_sdk_and_nim_gateway(monkeypatch, remote
     # Docker models are operator catalog entries, independent of the packaged
     # DMR catalog. Exercise the real catalog and registration boundaries.
     catalog = tmp_path / "models.json"
-    catalog.write_text(json.dumps({"version": 1, "models": [{
-        "id": "test-video:1", "model": "test-video:1", "source": "docker",
-        "provider": "docker_model_runner", "backend": "nim",
-        "api_model": "test/video", "aliases": ["test-video"],
-        "docker": {"image": "example.test/nim/video:1", "port": 30082},
-    }]}))
+    catalog.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "models": [
+                    {
+                        "id": "test-video:1",
+                        "model": "test-video:1",
+                        "source": "docker",
+                        "provider": "docker_model_runner",
+                        "backend": "nim",
+                        "api_model": "test/video",
+                        "aliases": ["test-video"],
+                        "docker": {"image": "example.test/nim/video:1", "port": 30082},
+                    }
+                ],
+            }
+        )
+    )
     monkeypatch.setenv("MN_MODEL_CATALOG_PATH", str(catalog))
     entry = resolve_model_entry("test-video")
-    monkeypatch.setattr(model_installation, "resolve_runtime_cluster_model_for_api",
-                        lambda **_kw: {"node": "spark"} if remote else None)
+    monkeypatch.setattr(
+        model_installation, "resolve_runtime_cluster_model_for_api", lambda **_kw: {"node": "spark"} if remote else None
+    )
     calls = []
+
     def local(model, **_options):
         calls.append(model)
         return {"entry": entry, "source": "docker"}
+
     def native(**kwargs):
         calls.append(kwargs["entry"]["id"])
         assert kwargs["entry"]["source"] == "docker"
-        return {"install": {"source": "docker"}, "endpoint": docker_model_runner_endpoint(
-            entry, node="spark", source="sdk_native_runtime_service")}
+        return {
+            "install": {"source": "docker"},
+            "endpoint": docker_model_runner_endpoint(entry, node="spark", source="sdk_native_runtime_service"),
+        }
+
     monkeypatch.setattr(model_installation, "install_runtime_model", local)
     monkeypatch.setattr(model_installation, "install_runtime_cluster_model_for_api", native)
     monkeypatch.setattr(model_installation, "sync_runtime_model_gateways_for_api", lambda summary: summary["endpoints"])

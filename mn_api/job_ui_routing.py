@@ -25,16 +25,19 @@ def placement(job_id, job=None):
     if not execution_id or not owner:
         raise HTTPException(409, "The job has no current UI service placement.")
     summary = _record(state.client.get_system_summary())
-    node = next((node for node in summary.get("nodes", [])
-                 if node.get("name") == owner), None)
+    node = next((node for node in summary.get("nodes", []) if node.get("name") == owner), None)
     if not node:
         raise HTTPException(503, "The computer hosting this Web UI is unavailable.")
     # Only Core membership may select the peer, never a handle or query value.
     host = _registered_host(node)
     local = node.get("self?") is True or node.get("self") is True
-    return {"execution_id": execution_id, "owner_node": owner,
-            "local": local, "host": host,
-            **({"api_base_url": node_api_base_url(node)} if not local else {})}
+    return {
+        "execution_id": execution_id,
+        "owner_node": owner,
+        "local": local,
+        "host": host,
+        **({"api_base_url": node_api_base_url(node)} if not local else {}),
+    }
 
 
 def routed_handle(handle):
@@ -70,12 +73,20 @@ def relay_target(web_ui, job_id, port, path, query, *, websocket=False):
         raise HTTPException(502, "The job UI transport is invalid.")
     base = str(transport.get("owner_api_url") or "")
     parsed = urlsplit(base)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path != "/api/v1":
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+        or parsed.path != "/api/v1"
+    ):
         raise HTTPException(502, "The job UI transport is invalid.")
     from urllib.parse import quote
 
     suffix = ("ws/" if websocket else "") + _safe_proxy_path(path)
     target = f"{base}/jobs/{quote(job_id, safe='-._')}/ui-proxy/{port}/{suffix}"
     if websocket:
-        target = ("wss" if parsed.scheme == "https" else "ws") + target[target.index(":"):]
+        target = ("wss" if parsed.scheme == "https" else "ws") + target[target.index(":") :]
     return target + ("?" + query if query else "")

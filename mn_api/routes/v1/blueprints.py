@@ -14,7 +14,12 @@ from mn_api.api_models import (
     ResourceModel,
 )
 from mn_api.blueprint_additions import add_catalog_blueprint, blueprint_public_projection
-from mn_api.blueprints import filter_blueprints_by_category, find_blueprint, load_blueprint_catalog, refresh_blueprint_catalog
+from mn_api.blueprints import (
+    filter_blueprints_by_category,
+    find_blueprint,
+    load_blueprint_catalog,
+    refresh_blueprint_catalog,
+)
 from mn_api.contracts import API_PREFIX, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 from mn_api.dependencies import require_auth
 from mn_api.launch_progress import public_progress_snapshot
@@ -33,15 +38,21 @@ def _config():
 
 
 @router.get(
-    "/launch-progress/{progress_id}", operation_id="get_launch_progress", tags=["blueprints"], response_model=ResourceModel
+    "/launch-progress/{progress_id}",
+    operation_id="get_launch_progress",
+    tags=["blueprints"],
+    response_model=ResourceModel,
 )
 def get_launch_progress(progress_id: str, _principal=Depends(require_auth)):
     return public_progress_snapshot(progress_id)
 
 
 @router.get(
-    "/blueprints", operation_id="list_blueprints", tags=["blueprints"],
-    response_model=BlueprintPageResponse, response_model_exclude_unset=True,
+    "/blueprints",
+    operation_id="list_blueprints",
+    tags=["blueprints"],
+    response_model=BlueprintPageResponse,
+    response_model_exclude_unset=True,
 )
 def list_blueprints(
     category: str | None = None,
@@ -65,8 +76,11 @@ def list_blueprints(
 
 
 @router.get(
-    "/blueprints/{blueprint_id}", operation_id="get_blueprint", tags=["blueprints"],
-    response_model=BlueprintResource, response_model_exclude_unset=True,
+    "/blueprints/{blueprint_id}",
+    operation_id="get_blueprint",
+    tags=["blueprints"],
+    response_model=BlueprintResource,
+    response_model_exclude_unset=True,
 )
 def get_blueprint(blueprint_id: str, _principal=Depends(require_auth)):
     _repo_root, blueprint = find_blueprint(_config(), blueprint_id)
@@ -128,8 +142,18 @@ def create_blueprint_removal(
     payload = request or BlueprintRemove()
 
     def remove(report):
-        report(percent=20, stage="resolve_blueprint", label="Resolve blueprint", detail="Locating the added blueprint record.")
-        report(percent=55, stage="remove_resources", label="Remove resources", detail="Removing blueprint-owned runtime resources.")
+        report(
+            percent=20,
+            stage="resolve_blueprint",
+            label="Resolve blueprint",
+            detail="Locating the added blueprint record.",
+        )
+        report(
+            percent=55,
+            stage="remove_resources",
+            label="Remove resources",
+            detail="Removing blueprint-owned runtime resources.",
+        )
         result = legacy_blueprints.uninstall_blueprints(
             BlueprintUninstallRequest(blueprint_id=blueprint_id, **payload.model_dump()),
             _auth=principal,
@@ -142,7 +166,9 @@ def create_blueprint_removal(
         route=f"{API_PREFIX}/blueprints/{blueprint_id}/removals",
         key=idempotency_key,
         body=payload.model_dump(),
-        call=lambda: start_local_operation("remove_blueprint", {"blueprint_id": blueprint_id, **payload.model_dump()}, remove),
+        call=lambda: start_local_operation(
+            "remove_blueprint", {"blueprint_id": blueprint_id, **payload.model_dump()}, remove
+        ),
         status_code=status.HTTP_202_ACCEPTED,
         location=lambda result: f"{API_PREFIX}/operations/{result.get('operation_id') or result.get('id')}",
     )
@@ -155,7 +181,9 @@ def create_blueprint_removal(
     tags=["blueprints"],
     response_model=ResourceModel,
 )
-def create_blueprint_validation(blueprint_id: str, request: BlueprintValidation | None = None, _principal=Depends(require_auth)):
+def create_blueprint_validation(
+    blueprint_id: str, request: BlueprintValidation | None = None, _principal=Depends(require_auth)
+):
     repo_root, blueprint = find_blueprint(_config(), blueprint_id)
     result = legacy_blueprints.validate_blueprint_inputs(
         repo_root,

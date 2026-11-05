@@ -43,8 +43,9 @@ class IdempotencyRegistry:
         self._lock = threading.Lock()
         self._inflight: dict[tuple[str, str, str], tuple[str, Future]] = {}
 
-    def execute(self, *, principal: str, route: str, key: str, fingerprint: str,
-                call: Callable[[], Any]) -> tuple[Any, bool]:
+    def execute(
+        self, *, principal: str, route: str, key: str, fingerprint: str, call: Callable[[], Any]
+    ) -> tuple[Any, bool]:
         """Coalesce an in-flight request without serializing unrelated keys.
 
         Completed responses retain the existing replay policy. Failures are
@@ -57,7 +58,9 @@ class IdempotencyRegistry:
             active = self._inflight.get(identity)
             previous = replay.fingerprint if replay is not None else active[0] if active else None
             if previous is not None and previous != fingerprint:
-                raise HTTPException(status_code=409, detail="The Idempotency-Key was already used with another request.")
+                raise HTTPException(
+                    status_code=409, detail="The Idempotency-Key was already used with another request."
+                )
             if replay is not None:
                 self._records.move_to_end(identity)
                 return replay, True
@@ -130,4 +133,3 @@ class IdempotencyRegistry:
 
 
 idempotency_records = IdempotencyRegistry()
-

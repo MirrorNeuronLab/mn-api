@@ -87,7 +87,13 @@ def _service() -> RuntimeService:
     return RuntimeService(state.client)
 
 
-@router.post("/jobs/{job_id}/relocations", status_code=202, operation_id="relocate_job", tags=["jobs"], response_model=ResourceModel)
+@router.post(
+    "/jobs/{job_id}/relocations",
+    status_code=202,
+    operation_id="relocate_job",
+    tags=["jobs"],
+    response_model=ResourceModel,
+)
 def relocate_job(job_id: str, request: JobRelocationCreate, principal=Depends(require_auth)):
     operation_id = "op-local-" + sha256(json.dumps([principal, job_id, request.transfer_id]).encode()).hexdigest()
     options = {"job_id": job_id, **request.model_dump()}
@@ -96,8 +102,15 @@ def relocate_job(job_id: str, request: JobRelocationCreate, principal=Depends(re
         progress(stage="transfer", label="Move co-worker", detail="Verifying data and transferring ownership.")
         return _service().relocate_job(job_id, request.target_node, transfer_id=request.transfer_id)
 
-    operation = start_local_operation("relocate_job", options, work, operation_id=operation_id,
-        request_fingerprint=idempotency_records.fingerprint(options), durable=True, retry_failed=True)
+    operation = start_local_operation(
+        "relocate_job",
+        options,
+        work,
+        operation_id=operation_id,
+        request_fingerprint=idempotency_records.fingerprint(options),
+        durable=True,
+        retry_failed=True,
+    )
     return resource_response(operation, status_code=202, location=f"{API_PREFIX}/operations/{operation_id}")
 
 
@@ -202,7 +215,9 @@ def _runtime_output_id(run_id: str, *, run: dict[str, Any] | None = None) -> str
 
 
 def _runtime_output_location(
-    run_id: str, *, run: dict[str, Any] | None = None,
+    run_id: str,
+    *,
+    run: dict[str, Any] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Carry Core's exact data binding into file readers without another RPC."""
     if run is None:
@@ -215,8 +230,11 @@ def _runtime_output_location(
             return run_id, {}
     runtime_id = _runtime_output_id(run_id, run=run)
     reference = run.get("run_data_ref")
-    if (isinstance(reference, dict) and reference.get("storage") == "syncthing"
-            and reference.get("run_id") == runtime_id):
+    if (
+        isinstance(reference, dict)
+        and reference.get("storage") == "syncthing"
+        and reference.get("run_id") == runtime_id
+    ):
         return runtime_id, {"run_data_ref": reference}
     return runtime_id, {}
 
@@ -408,22 +426,42 @@ def _job_workflow_shape(job_id: str, source: str) -> dict[str, Any]:
     return shape
 
 
-@router.get("/jobs/{job_id}/workflow/definition/dag", operation_id="get_job_definition_dag", tags=["jobs"], response_model=WorkflowDag)
+@router.get(
+    "/jobs/{job_id}/workflow/definition/dag",
+    operation_id="get_job_definition_dag",
+    tags=["jobs"],
+    response_model=WorkflowDag,
+)
 def get_job_definition_dag(job_id: str, _principal=Depends(require_auth)):
     return dag_view(_job_workflow_shape(job_id, "definition"))
 
 
-@router.get("/jobs/{job_id}/workflow/definition/steps", operation_id="get_job_definition_steps", tags=["jobs"], response_model=WorkflowSteps)
+@router.get(
+    "/jobs/{job_id}/workflow/definition/steps",
+    operation_id="get_job_definition_steps",
+    tags=["jobs"],
+    response_model=WorkflowSteps,
+)
 def get_job_definition_steps(job_id: str, _principal=Depends(require_auth)):
     return steps_view(_job_workflow_shape(job_id, "definition"))
 
 
-@router.get("/jobs/{job_id}/workflow/latest-run/dag", operation_id="get_job_latest_run_dag", tags=["jobs"], response_model=WorkflowDag)
+@router.get(
+    "/jobs/{job_id}/workflow/latest-run/dag",
+    operation_id="get_job_latest_run_dag",
+    tags=["jobs"],
+    response_model=WorkflowDag,
+)
 def get_job_latest_run_dag(job_id: str, _principal=Depends(require_auth)):
     return dag_view(_job_workflow_shape(job_id, "latest_run"))
 
 
-@router.get("/jobs/{job_id}/workflow/latest-run/steps", operation_id="get_job_latest_run_steps", tags=["jobs"], response_model=WorkflowSteps)
+@router.get(
+    "/jobs/{job_id}/workflow/latest-run/steps",
+    operation_id="get_job_latest_run_steps",
+    tags=["jobs"],
+    response_model=WorkflowSteps,
+)
 def get_job_latest_run_steps(job_id: str, _principal=Depends(require_auth)):
     return steps_view(_job_workflow_shape(job_id, "latest_run"))
 
@@ -451,8 +489,8 @@ def _prepare_catalog_job_update(
             status_code=422,
             detail="Catalog configuration overrides require a Job with a blueprint_id.",
         )
-    repo_root, blueprint = catalog_entry if catalog_entry is not None else find_blueprint(
-        state.refresh_config_from_env(), blueprint_id
+    repo_root, blueprint = (
+        catalog_entry if catalog_entry is not None else find_blueprint(state.refresh_config_from_env(), blueprint_id)
     )
     owner_node = str(current.get("owner_node") or "").strip()
     return load_blueprint_bundle(
@@ -479,14 +517,22 @@ def update_job(
     if request.status == "archived":
         result = _service().archive_job(job_id, expected_revision=_revision(current))
     else:
-        attrs = {key: value for key, value in request.model_dump(exclude_none=True).items() if key not in {"status", "refresh_contract"}}
+        attrs = {
+            key: value
+            for key, value in request.model_dump(exclude_none=True).items()
+            if key not in {"status", "refresh_contract"}
+        }
         if request.refresh_contract:
             latest_run_id = current.get("latest_run_id")
             if latest_run_id:
                 latest = _service().get_run(latest_run_id)
                 if latest.get("status") not in _TERMINAL:
                     raise HTTPException(status_code=409, detail="Stop the active run before updating its MCP contract.")
-            attrs["resolved_configuration"] = request.resolved_configuration if request.resolved_configuration is not None else current.get("resolved_configuration", {})
+            attrs["resolved_configuration"] = (
+                request.resolved_configuration
+                if request.resolved_configuration is not None
+                else current.get("resolved_configuration", {})
+            )
         if request.status:
             attrs["status"] = request.status
         if (
@@ -583,7 +629,12 @@ def create_job_data_reset(
     )
 
 
-@router.post("/jobs/{job_id}/run-admission-checks", operation_id="check_job_run_admission", tags=["runs"], response_model=ResourceModel)
+@router.post(
+    "/jobs/{job_id}/run-admission-checks",
+    operation_id="check_job_run_admission",
+    tags=["runs"],
+    response_model=ResourceModel,
+)
 def check_job_run_admission(job_id: str, request: RunAdmissionCheck, _principal=Depends(require_auth)):
     current = public_value(_service().get_job(job_id))
     saved = current.get("resolved_configuration") or {}
@@ -671,7 +722,8 @@ def create_job_run(
                 relay = (repo_root, blueprint, blueprint_run_id, manifest_json, resolved_configuration, current)
         try:
             run = launch_run(
-                _service(), job_id,
+                _service(),
+                job_id,
                 run_id=run_id,
                 inputs=request.inputs,
                 idempotency_key=idempotency_key or "",
@@ -721,7 +773,10 @@ def create_job_run(
                 storage = load_submission_storage(RuntimeConfig.from_env().shared_storage_root, submission_id)
                 if storage.get("output_copy"):
                     start_background_run_relay(
-                        execution_id, execution_id, storage, config=resolved_configuration,
+                        execution_id,
+                        execution_id,
+                        storage,
+                        config=resolved_configuration,
                         grpc_target=getattr(runtime_config, "grpc_target", None),
                         grpc_auth_token=getattr(runtime_config, "grpc_auth_token", None),
                         grpc_timeout_seconds=getattr(runtime_config, "grpc_timeout_seconds", None),
@@ -755,9 +810,10 @@ def create_job_run_operation(
     if not idempotency_key:
         raise HTTPException(status_code=400, detail="Idempotency-Key is required for an asynchronous launch.")
     route = f"{API_PREFIX}/jobs/{job_id}/run-operations"
-    operation_id = "op-local-" + sha256(
-        json.dumps([principal, route, idempotency_key], separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
+    operation_id = (
+        "op-local-"
+        + sha256(json.dumps([principal, route, idempotency_key], separators=(",", ":")).encode("utf-8")).hexdigest()
+    )
     fingerprint = idempotency_records.fingerprint(request.model_dump())
 
     def launch(report_progress):
@@ -769,7 +825,9 @@ def create_job_run_operation(
                 percent=min(10 + attempt * 8, 85),
                 stage="submit",
                 label="Start run",
-                detail="Reconciling the Job and submitting its run." if attempt else "Submitting the run to MirrorNeuron.",
+                detail="Reconciling the Job and submitting its run."
+                if attempt
+                else "Submitting the run to MirrorNeuron.",
             )
             try:
                 response = create_job_run(job_id, request, idempotency_key, principal)
@@ -780,7 +838,7 @@ def create_job_run_operation(
             except grpc.RpcError as exc:
                 if exc.code() not in {grpc.StatusCode.DEADLINE_EXCEEDED, grpc.StatusCode.UNAVAILABLE} or attempt == 9:
                     raise
-                time.sleep(min(2 ** attempt, 30))
+                time.sleep(min(2**attempt, 30))
         raise RuntimeError("The run could not be submitted.")
 
     operation = start_local_operation(
@@ -805,11 +863,10 @@ def _all_runs() -> list[dict[str, Any]]:
         _history_reason(exc)
         jobs = []
     runs: dict[str, dict[str, Any]] = {
-        str(run["run_id"]): run
-        for run in list_local_runs()
-        if isinstance(run, dict) and run.get("run_id")
+        str(run["run_id"]): run for run in list_local_runs() if isinstance(run, dict) and run.get("run_id")
     }
     core_ids: set[str] = set()
+
     def job_runs(job):
         job_id = str(job.get("job_id") or "")
         if not job_id:
@@ -836,7 +893,10 @@ def _all_runs() -> list[dict[str, Any]]:
         if run_id not in core_ids:
             if "placement" in run:
                 run["placement"] = None
-            run["retry"] = {"available": False, "reason": "Recovery is unverified. Check Core availability and plan a retry."}
+            run["retry"] = {
+                "available": False,
+                "reason": "Recovery is unverified. Check Core availability and plan a retry.",
+            }
         if run_id not in core_ids and str(run.get("status") or "").lower() not in _TERMINAL | {"unknown"}:
             run["status"] = "unknown"
     return list(runs.values())
@@ -939,9 +999,14 @@ def get_run(run_id: str, _principal=Depends(require_auth)):
         missing = reason == "missing"
         recovered["control_status"] = "missing" if missing else "unavailable"
         recovered["placement"] = None
-        recovered["retry"] = {"available": False, "reason": (
-            "Stored history remains, but its Core control record is missing. Start a new run."
-            if missing else "Core is unavailable. Reconnect and plan a retry to check recovery.")}
+        recovered["retry"] = {
+            "available": False,
+            "reason": (
+                "Stored history remains, but its Core control record is missing. Start a new run."
+                if missing
+                else "Core is unavailable. Reconnect and plan a retry to check recovery."
+            ),
+        }
         return public_value(recovered)
 
 
@@ -958,7 +1023,9 @@ def update_run(run_id: str, request: RunUpdate, _principal=Depends(require_auth)
     try:
         result = _transition_observed(owner, run, run["job_id"], run_id, desired)
     except _TransitionConflict as exc:
-        raise HTTPException(status_code=409, detail=f"A {current or 'unknown'} run cannot transition to {desired}.") from exc
+        raise HTTPException(
+            status_code=409, detail=f"A {current or 'unknown'} run cannot transition to {desired}."
+        ) from exc
     return public_value(result)
 
 
@@ -968,22 +1035,41 @@ def plan_run_retry(run_id: str, request: RunRetryPlan, _principal=Depends(requir
         return public_value(_service().plan_run_retry(run_id, configuration_overrides=request.configuration_overrides))
     except grpc.RpcError as exc:
         if exc.code() == grpc.StatusCode.NOT_FOUND and stored_run(run_id) is not None:
-            return {"run_id": run_id, "record_source": "history", "eligible": False,
-                    "reason": "Stored history remains, but its Core control record is missing. Start a new run.",
-                    "preserved_steps": [], "retry_steps": []}
+            return {
+                "run_id": run_id,
+                "record_source": "history",
+                "eligible": False,
+                "reason": "Stored history remains, but its Core control record is missing. Start a new run.",
+                "preserved_steps": [],
+                "retry_steps": [],
+            }
         return handle_grpc_error(exc)
 
 
-@router.post("/runs/{run_id}/retries", status_code=status.HTTP_202_ACCEPTED,
-             operation_id="retry_run", tags=["runs"], response_model=ResourceModel)
-def retry_run(run_id: str, request: RunRetryCreate,
-              idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=255),
-              _principal=Depends(require_auth)):
+@router.post(
+    "/runs/{run_id}/retries",
+    status_code=status.HTTP_202_ACCEPTED,
+    operation_id="retry_run",
+    tags=["runs"],
+    response_model=ResourceModel,
+)
+def retry_run(
+    run_id: str,
+    request: RunRetryCreate,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=255),
+    _principal=Depends(require_auth),
+):
     try:
-        return public_value(_service().retry_run(
-            run_id, expected_attempt=request.expected_attempt, checkpoint_revision=request.checkpoint_revision,
-            configuration_overrides=request.configuration_overrides,
-            admission_policy=request.admission_policy, idempotency_key=idempotency_key))
+        return public_value(
+            _service().retry_run(
+                run_id,
+                expected_attempt=request.expected_attempt,
+                checkpoint_revision=request.checkpoint_revision,
+                configuration_overrides=request.configuration_overrides,
+                admission_policy=request.admission_policy,
+                idempotency_key=idempotency_key,
+            )
+        )
     except grpc.RpcError as exc:
         return handle_grpc_error(exc)
 
@@ -1031,12 +1117,21 @@ def list_schedules(owner_node: str = "", _principal=Depends(require_auth)):
 
 @router.get("/schedules/{schedule_id}", operation_id="get_schedule", tags=["schedules"], response_model=ResourceModel)
 def get_schedule(schedule_id: str, owner_node: str = "", _principal=Depends(require_auth)):
-    return resource_response(_service().get_schedule(schedule_id, **({"owner_node": owner_node} if owner_node else {})), etag=True)
+    return resource_response(
+        _service().get_schedule(schedule_id, **({"owner_node": owner_node} if owner_node else {})), etag=True
+    )
 
 
-@router.patch("/schedules/{schedule_id}", operation_id="update_schedule", tags=["schedules"], response_model=ResourceModel)
-def update_schedule(schedule_id: str, request: ScheduleUpdate, owner_node: str = "",
-                    if_match: str | None = Header(default=None, alias="If-Match"), _principal=Depends(require_auth)):
+@router.patch(
+    "/schedules/{schedule_id}", operation_id="update_schedule", tags=["schedules"], response_model=ResourceModel
+)
+def update_schedule(
+    schedule_id: str,
+    request: ScheduleUpdate,
+    owner_node: str = "",
+    if_match: str | None = Header(default=None, alias="If-Match"),
+    _principal=Depends(require_auth),
+):
     owner = {"owner_node": owner_node} if owner_node else {}
     current = _service().get_schedule(schedule_id, **owner)
     require_if_match(if_match, current)
@@ -1045,18 +1140,27 @@ def update_schedule(schedule_id: str, request: ScheduleUpdate, owner_node: str =
         attrs["enabled"] = request.desired_state == "running"
     if not attrs:
         raise HTTPException(status_code=422, detail="Provide schedule changes.")
-    return resource_response(_service().update_schedule(schedule_id, schedule=attrs,
-        expected_revision=int(current.get("revision") or 0), **owner), etag=True)
+    return resource_response(
+        _service().update_schedule(
+            schedule_id, schedule=attrs, expected_revision=int(current.get("revision") or 0), **owner
+        ),
+        etag=True,
+    )
 
 
 @router.delete("/schedules/{schedule_id}", operation_id="delete_schedule", tags=["schedules"])
-def delete_schedule(schedule_id: str, owner_node: str = "",
-                    if_match: str | None = Header(default=None, alias="If-Match"), _principal=Depends(require_auth)):
+def delete_schedule(
+    schedule_id: str,
+    owner_node: str = "",
+    if_match: str | None = Header(default=None, alias="If-Match"),
+    _principal=Depends(require_auth),
+):
     owner = {"owner_node": owner_node} if owner_node else {}
     current = _service().get_schedule(schedule_id, **owner)
     require_if_match(if_match, current)
-    return resource_response(_service().delete_schedule(schedule_id,
-        expected_revision=int(current.get("revision") or 0), **owner))
+    return resource_response(
+        _service().delete_schedule(schedule_id, expected_revision=int(current.get("revision") or 0), **owner)
+    )
 
 
 @router.get("/runs/{run_id}/monitor", operation_id="get_run_monitor", tags=["runs"], response_model=RunResource)
@@ -1070,11 +1174,19 @@ def get_run_monitor(run_id: str, _principal=Depends(require_auth)):
             raise
         canonical_run = {**canonical_run, "placement": None}
         progress = stored_progress(run_id) or {}
-        return _run_public({"job": canonical_run, "summary": canonical_run,
-                            "status": canonical_run.get("status"), "admission": canonical_run.get("admission"),
-                            "placement": None,
-                            "events": progress.get("recent_events") or [],
-                            "workflow_progress": progress}, run_id=run_id, runtime_run_id=run_id)
+        return _run_public(
+            {
+                "job": canonical_run,
+                "summary": canonical_run,
+                "status": canonical_run.get("status"),
+                "admission": canonical_run.get("admission"),
+                "placement": None,
+                "events": progress.get("recent_events") or [],
+                "workflow_progress": progress,
+            },
+            run_id=run_id,
+            runtime_run_id=run_id,
+        )
     # Reuse this request's canonical read; never retain mutable Run state
     # across requests. This also keeps status and output identity consistent.
     runtime_id = _runtime_output_id(run_id, run=canonical_run)
@@ -1193,7 +1305,8 @@ def list_run_events(
     if shared:
         merged = records(value, "items", "events", "data")
         seen = {
-            event.get("payload", {}).get("result_id") for event in merged
+            event.get("payload", {}).get("result_id")
+            for event in merged
             if isinstance(event, dict) and isinstance(event.get("payload"), dict)
         }
         for event in shared:
@@ -1346,7 +1459,9 @@ def list_run_human_requests(
 def create_run_human_response(run_id: str, request_id: str, request: HumanResponse, principal=Depends(require_auth)):
     runtime_id, output_location = _runtime_output_location(run_id)
     return _run_public(
-        runtime_run_routes.post_run_human_response(runtime_id, request_id, {"response": request.response}, principal, **output_location),
+        runtime_run_routes.post_run_human_response(
+            runtime_id, request_id, {"response": request.response}, principal, **output_location
+        ),
         run_id=run_id,
         runtime_run_id=runtime_id,
     )
@@ -1367,7 +1482,9 @@ def create_run_human_acknowledgement(
 ):
     runtime_id, output_location = _runtime_output_location(run_id)
     return _run_public(
-        runtime_run_routes.post_run_human_ack(runtime_id, request_id, request.model_dump(exclude_none=True), principal, **output_location),
+        runtime_run_routes.post_run_human_ack(
+            runtime_id, request_id, request.model_dump(exclude_none=True), principal, **output_location
+        ),
         run_id=run_id,
         runtime_run_id=runtime_id,
     )
@@ -1422,7 +1539,11 @@ def list_run_artifacts(
     response, runtime_id, output_location, _run = _run_file_location(run_id, request, "artifacts")
     if response is not None:
         return response
-    value = _run_public(runtime_run_routes.list_run_artifacts(runtime_id, principal, **output_location), run_id=run_id, runtime_run_id=runtime_id)
+    value = _run_public(
+        runtime_run_routes.list_run_artifacts(runtime_id, principal, **output_location),
+        run_id=run_id,
+        runtime_run_id=runtime_id,
+    )
     return _page_run_records(
         value,
         keys=("items", "artifacts"),
@@ -1439,7 +1560,9 @@ def download_run_artifact(run_id: str, artifact_path: str, request: Request, pri
     from urllib.parse import quote
 
     response, runtime_id, output_location, _run = _run_file_location(
-        run_id, request, "artifacts/" + quote(artifact_path, safe=""),
+        run_id,
+        request,
+        "artifacts/" + quote(artifact_path, safe=""),
     )
     if response is not None:
         return response
@@ -1457,7 +1580,11 @@ def list_run_outputs(
     response, runtime_id, output_location, _run = _run_file_location(run_id, request, "outputs")
     if response is not None:
         return response
-    value = _run_public(runtime_run_routes.list_run_outputs(runtime_id, principal, **output_location), run_id=run_id, runtime_run_id=runtime_id)
+    value = _run_public(
+        runtime_run_routes.list_run_outputs(runtime_id, principal, **output_location),
+        run_id=run_id,
+        runtime_run_id=runtime_id,
+    )
     return _page_run_records(
         value,
         keys=("items", "outputs"),
@@ -1497,12 +1624,16 @@ def get_run_snapshot(run_id: str, principal=Depends(require_auth)):
     return get_run_monitor(run_id, principal)
 
 
-@router.get("/runs/{run_id}/agent-graph", operation_id="get_run_agent_graph", tags=["runs"], response_model=ResourceModel)
+@router.get(
+    "/runs/{run_id}/agent-graph", operation_id="get_run_agent_graph", tags=["runs"], response_model=ResourceModel
+)
 def get_run_agent_graph(run_id: str, principal=Depends(require_auth)):
     runtime_id, output_location = _runtime_output_location(run_id)
     detail = runtime_job_routes._compact_job_detail(runtime_id)
     event_payload = runtime_run_routes.get_run_events(runtime_id, 5000, None, principal, **output_location)
-    graph = build_agent_graph(run_id, detail if isinstance(detail, dict) else {}, records(event_payload, "data", "events"))
+    graph = build_agent_graph(
+        run_id, detail if isinstance(detail, dict) else {}, records(event_payload, "data", "events")
+    )
     return _run_public(graph, run_id=run_id, runtime_run_id=runtime_id)
 
 
