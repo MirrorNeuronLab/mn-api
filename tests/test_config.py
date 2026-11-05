@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from mn_api.config import ApiConfig, ConfigError, WebUiConfig, safe_config_values, subprocess_environment
-from mn_api.config_env import load_config_source
+from mn_sdk.config import load_config_source
 
 
 class TestApiConfig(unittest.TestCase):

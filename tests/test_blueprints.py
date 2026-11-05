@@ -464,7 +464,7 @@ class TestBlueprintServices(unittest.TestCase):
         observed = {}
         fake_package = ModuleType("mn_cli")
         fake_package.__path__ = []
-        fake_server_cmds = ModuleType("mn_cli.server_cmds")
+        fake_server_cmds = ModuleType("mn_cli.runtime.server")
 
         def fake_ensure_context_engine_runtime(*, force=False, environment):
             observed["force"] = force
@@ -477,7 +477,7 @@ class TestBlueprintServices(unittest.TestCase):
         with (
             patch.dict(
                 sys.modules,
-                {"mn_cli": fake_package, "mn_cli.server_cmds": fake_server_cmds},
+                {"mn_cli": fake_package, "mn_cli.runtime.server": fake_server_cmds},
             ),
             patch.dict(
                 os.environ,

@@ -41,18 +41,8 @@ class TestStateClient(unittest.TestCase):
 
         state.Client = OldClient
 
-        state.get_client()
-
-        self.assertEqual(
-            calls,
-            [
-                {
-                    "target": "localhost:55051",
-                    "timeout": 10.0,
-                    "auth_token": "",
-                }
-            ],
-        )
+        with self.assertRaisesRegex(TypeError, "admin_token"):
+            state.get_client()
 
     def test_get_client_passes_admin_token_for_current_sdk(self):
         calls = []

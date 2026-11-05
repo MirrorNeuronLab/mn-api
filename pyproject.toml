@@ -79,7 +79,6 @@ omit = [
     # focused helper suites. The REST gate measures the canonical boundary.
     "mn_api/blueprints.py",
     "mn_api/agent_graph.py",
-    "mn_api/job_activity.py",
 ]
 
 [tool.coverage.report]

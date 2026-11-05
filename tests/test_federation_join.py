@@ -7,7 +7,7 @@ from mn_sdk.errors import AppError
 
 from mn_api import state
 from mn_api.app import create_app
-from mn_api.routes import system as legacy_system
+from mn_api.routes import system as system_service
 
 
 def _client(monkeypatch) -> TestClient:
@@ -17,7 +17,7 @@ def _client(monkeypatch) -> TestClient:
         "config",
         SimpleNamespace(api_token="", request_size_limit_bytes=1024 * 1024, cors_allow_origins=[]),
     )
-    monkeypatch.setattr(legacy_system, "detect_lan_ip", lambda: "10.0.0.1")
+    monkeypatch.setattr(system_service, "detect_lan_ip", lambda: "10.0.0.1")
     return TestClient(create_app())
 
 
@@ -33,7 +33,7 @@ def test_node_create_waits_on_shared_federation_orchestrator(monkeypatch):
             "peer": {"peer_auth_token": "must-not-escape"},
         }
 
-    monkeypatch.setattr(legacy_system, "join_federated_node", join)
+    monkeypatch.setattr(system_service, "join_federated_node", join)
     response = client.post(
         "/api/v1/nodes",
         json={"host": "node-b", "token": "one-time-join-token", "grpc_port": 55051},
@@ -58,7 +58,7 @@ def test_node_create_returns_sanitized_503_when_reciprocal_readiness_fails(monke
             http_status=503,
         )
 
-    monkeypatch.setattr(legacy_system, "join_federated_node", fail)
+    monkeypatch.setattr(system_service, "join_federated_node", fail)
     response = client.post(
         "/api/v1/nodes",
         json={"host": "node-b", "token": "one-time-join-token"},

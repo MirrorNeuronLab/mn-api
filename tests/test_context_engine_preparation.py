@@ -10,10 +10,10 @@ from mn_api import blueprints
 def install_launcher(monkeypatch, launcher):
     package = ModuleType("mn_cli")
     package.__path__ = []
-    module = ModuleType("mn_cli.server_cmds")
+    module = ModuleType("mn_cli.runtime.server")
     module.ensure_context_engine_runtime = launcher
     monkeypatch.setitem(sys.modules, "mn_cli", package)
-    monkeypatch.setitem(sys.modules, "mn_cli.server_cmds", module)
+    monkeypatch.setitem(sys.modules, "mn_cli.runtime.server", module)
     monkeypatch.setattr(blueprints, "runtime_process_environment", lambda: {})
 
 

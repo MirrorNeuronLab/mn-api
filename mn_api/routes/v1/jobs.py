@@ -200,17 +200,6 @@ def _runtime_output_id(run_id: str, *, run: dict[str, Any] | None = None) -> str
             value = reference.get("run_id") or reference.get("runtime_run_id")
             if value:
                 return str(value)
-    # Current Run records name their execution. Only a legacy record without
-    # that identity needs the progress projection to locate its output.
-    if run.get("run_id") == run_id:
-        return run_id
-    try:
-        snapshot = runtime_job_routes._workflow_progress_snapshot_for_run(run_id)
-        value = snapshot.get("run_id") if isinstance(snapshot, dict) else None
-        if value:
-            return str(value)
-    except Exception as exc:
-        _history_reason(exc)
     return run_id
 
 

@@ -1,5 +1,11 @@
 # MirrorNeuron API Specification
 
+## Current contracts
+
+The API requires the current SDK, including its admin-token constructor argument. Shared configuration and activity helpers are imported from their SDK owners. Run files require a current owner binding and, for enabled remote HTTP reads, the owner's current HTTP API advertisement. Historical output-progress lookup and forwarding modules are removed.
+
+Backward compatibility and automatic migration of obsolete state are unsupported.
+
 ## Local output observer ownership
 
 API-spawned output relays use the SDK installation fence and execution lock.
@@ -383,7 +389,7 @@ IDs may be returned for diagnosis.
 - `MN_API_REQUEST_SIZE_LIMIT_BYTES` bounds declared request body size.
 - CORS is disabled unless origins are explicitly configured.
 - Artifact and bundle paths must remain within their permitted roots.
-- `mn_api.config`, `mn_api.config_env`, and `mn_api.config_schema` remain
+- `mn_api.config`, `mn_sdk.config`, and `mn_api.config_schema` remain
   compatibility facades over SDK configuration loading and typed shared keys.
   API-only keys are composed locally. Precedence is `environment >
 .env.<profile> > .env > defaults`, including explicit blank environment

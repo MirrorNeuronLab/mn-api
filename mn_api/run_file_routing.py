@@ -61,7 +61,7 @@ def _binding(run, owner):
 
 
 def owner_file_response(run_id, run, request, resource):
-    """Return a peer response, or let local/legacy owners use verified storage.
+    """Return a peer response, or read verified storage for a current local owner.
 
     Core selects the owner and endpoint. Only the existing authenticated run
     resources call this helper; callers cannot supply a target URL or host path.
@@ -72,7 +72,7 @@ def owner_file_response(run_id, run, request, resource):
     if not owner:
         if hop is not None:
             raise HTTPException(409, "The run's file owner changed. Try again.")
-        return None
+        raise HTTPException(503, "The run has no current file-owner binding.")
     if run.get("run_id") != run_id:
         raise HTTPException(502, "The runtime returned a different run.")
     if hop not in (None, "1"):
@@ -97,10 +97,9 @@ def owner_file_response(run_id, run, request, resource):
         return None
     hardware = node.get("hardware")
     endpoint = hardware.get("http_api") if isinstance(hardware, dict) else None
-    # Older owners and deliberately disabled HTTP services retain the existing
-    # exact-binding replica reader. An advertised enabled endpoint must work;
-    # its failure never substitutes a possibly stale local copy.
-    if endpoint is None or (isinstance(endpoint, dict) and endpoint.get("enabled") is False):
+    if endpoint is None:
+        raise HTTPException(503, "The run owner has no current HTTP API advertisement.")
+    if isinstance(endpoint, dict) and endpoint.get("enabled") is False:
         return None
     base = node_api_base_url(node)
     url = f"{base}/runs/{urllib.parse.quote(run_id, safe='')}/{resource}"

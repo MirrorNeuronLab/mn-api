@@ -69,9 +69,18 @@ class CanonicalRuntime:
             {"items": [{"job_id": job_id, "run_id": "run-1", "status": "completed"}], "next_page_token": None}
         )
 
+    def get_system_summary(self):
+        return json.dumps({"nodes": [{"name": "local@test", "self?": True}]})
+
     def get_run(self, run_id):
         return json.dumps(
-            {"job_id": "job-1", "run_id": run_id, "status": self.run_status, "runtime_run_id": "runtime-1"}
+            {
+                "owner_node": "local@test",
+                "job_id": "job-1",
+                "run_id": run_id,
+                "status": self.run_status,
+                "runtime_run_id": "runtime-1",
+            }
         )
 
     def pause_run(self, run_id):
@@ -924,30 +933,30 @@ def _patch_canonical_projections(monkeypatch):
     monkeypatch.setattr(blueprints, "load_blueprint_catalog", lambda _config: (None, [blueprint]))
     monkeypatch.setattr(blueprints, "find_blueprint", lambda _config, _id: (None, blueprint))
     monkeypatch.setattr(
-        blueprints.legacy_blueprints,
+        blueprints.blueprint_launch,
         "validate_blueprint_inputs",
         lambda *_args, **_kwargs: {"ok": True, "issues": []},
     )
     monkeypatch.setattr(
-        blueprints.legacy_blueprints,
+        blueprints.blueprint_launch,
         "resolve_async_blueprint_run_request",
         lambda _id, request: request,
     )
     monkeypatch.setattr(
-        blueprints.legacy_blueprints,
+        blueprints.blueprint_launch,
         "run_blueprint_record",
         lambda *_args, **_kwargs: {"job_id": "job-blueprint", "run_id": "run-blueprint", "status": "pending"},
     )
     system_payload = {"status": "ok", "nodes": [{"node_name": "node-1"}]}
-    monkeypatch.setattr(system.legacy_system, "runtime_status", lambda **_kwargs: system_payload)
-    monkeypatch.setattr(system.legacy_system, "runtime_health", lambda **_kwargs: system_payload)
-    monkeypatch.setattr(system.legacy_system, "runtime_doctor", lambda **_kwargs: system_payload)
-    monkeypatch.setattr(system.legacy_system, "get_resource", lambda **_kwargs: {"cpu": 4})
-    monkeypatch.setattr(system.legacy_system, "get_system_summary", lambda **_kwargs: system_payload)
-    monkeypatch.setattr(system.legacy_system, "get_metrics", lambda **_kwargs: {"jobs": 1})
-    monkeypatch.setattr(system.legacy_system, "get_nodes", lambda **_kwargs: system_payload)
-    monkeypatch.setattr(system.legacy_system, "add_cluster_node", lambda *_args, **_kwargs: {"node_name": "node-2"})
-    monkeypatch.setattr(system.legacy_system, "normalize_node_name", lambda value: value)
+    monkeypatch.setattr(system.system_service, "runtime_status", lambda **_kwargs: system_payload)
+    monkeypatch.setattr(system.system_service, "runtime_health", lambda **_kwargs: system_payload)
+    monkeypatch.setattr(system.system_service, "runtime_doctor", lambda **_kwargs: system_payload)
+    monkeypatch.setattr(system.system_service, "get_resource", lambda **_kwargs: {"cpu": 4})
+    monkeypatch.setattr(system.system_service, "get_system_summary", lambda **_kwargs: system_payload)
+    monkeypatch.setattr(system.system_service, "get_metrics", lambda **_kwargs: {"jobs": 1})
+    monkeypatch.setattr(system.system_service, "get_nodes", lambda **_kwargs: system_payload)
+    monkeypatch.setattr(system.system_service, "add_cluster_node", lambda *_args, **_kwargs: {"node_name": "node-2"})
+    monkeypatch.setattr(system.system_service, "normalize_node_name", lambda value: value)
 
     monitor = {"job": {"job_id": "runtime-1", "status": "completed"}, "events": []}
     monkeypatch.setattr(jobs.runtime_job_routes, "_compact_job_detail", lambda _id: monitor)
@@ -1024,7 +1033,7 @@ def _patch_canonical_projections(monkeypatch):
         lambda _config, blueprint_id, **_kwargs: {"added": True, "blueprint": {"id": blueprint_id}},
     )
     monkeypatch.setattr(
-        blueprints.legacy_blueprints,
+        blueprints.blueprint_launch,
         "uninstall_blueprints",
         lambda request, **_kwargs: {"removed": True, "blueprint_id": request.blueprint_id},
     )
@@ -1045,9 +1054,9 @@ def test_blueprint_run_forwards_secret_environment(monkeypatch):
         captured["request"] = request
         return request
 
-    monkeypatch.setattr(blueprints.legacy_blueprints, "resolve_async_blueprint_run_request", resolve)
+    monkeypatch.setattr(blueprints.blueprint_launch, "resolve_async_blueprint_run_request", resolve)
     monkeypatch.setattr(
-        blueprints.legacy_blueprints,
+        blueprints.blueprint_launch,
         "run_blueprint_record",
         lambda *_args, **_kwargs: {"job_id": "job-blueprint", "run_id": "run-blueprint", "status": "pending"},
     )
@@ -1073,12 +1082,12 @@ def test_blueprint_run_preserves_launch_error_response(monkeypatch):
     blueprint = {"id": "worker-1", "name": "Worker", "installed": True}
     monkeypatch.setattr(blueprints, "find_blueprint", lambda _config, _id: (None, blueprint))
     monkeypatch.setattr(
-        blueprints.legacy_blueprints,
+        blueprints.blueprint_launch,
         "resolve_async_blueprint_run_request",
         lambda _blueprint_id, request: request,
     )
     monkeypatch.setattr(
-        blueprints.legacy_blueprints,
+        blueprints.blueprint_launch,
         "run_blueprint_record",
         lambda *_args, **_kwargs: JSONResponse(
             status_code=409,
@@ -1124,12 +1133,12 @@ def test_job_run_reports_scheduler_rejection_without_accepting_a_run(monkeypatch
 
 
 def test_async_blueprint_requests_preserve_federated_owner_node():
-    run_request = blueprints.legacy_blueprints.resolve_async_blueprint_run_request(
+    run_request = blueprints.blueprint_launch.resolve_async_blueprint_run_request(
         "worker-1",
         blueprints.BlueprintRunRequest(owner_node="mirror_neuron@spark"),
     )
-    launch_request = blueprints.legacy_blueprints.resolve_async_blueprint_launch_request(
-        blueprints.legacy_blueprints.BlueprintLaunchRequest(
+    launch_request = blueprints.blueprint_launch.resolve_async_blueprint_launch_request(
+        blueprints.blueprint_launch.BlueprintLaunchRequest(
             source="catalog",
             blueprint_id="worker-1",
             owner_node="mirror_neuron@spark",
@@ -1141,7 +1150,7 @@ def test_async_blueprint_requests_preserve_federated_owner_node():
 
 
 def test_hardware_preflight_selects_unique_owner_node():
-    selected = blueprints.legacy_blueprints.single_hardware_owner_node(
+    selected = blueprints.blueprint_launch.single_hardware_owner_node(
         {
             "results": [
                 {
@@ -1157,7 +1166,7 @@ def test_hardware_preflight_selects_unique_owner_node():
 
 
 def test_blueprint_output_relay_polls_execution_run_id(monkeypatch, tmp_path):
-    legacy = blueprints.legacy_blueprints
+    legacy = blueprints.blueprint_launch
     bundle = tmp_path / "worker-1"
     bundle.mkdir()
     (bundle / "manifest.json").write_text("{}", encoding="utf-8")
@@ -1593,6 +1602,7 @@ def test_run_artifact_projection_uses_runtime_id_from_result_reference(monkeypat
     _patch_canonical_projections(monkeypatch)
     runtime.get_run = lambda run_id: json.dumps(
         {
+            "owner_node": "local@test",
             "job_id": "job-1",
             "run_id": run_id,
             "status": "completed",
@@ -1635,6 +1645,7 @@ def test_run_artifact_projection_resolves_staged_result_reference(monkeypatch, t
     }
     runtime.get_run = lambda run_id: json.dumps(
         {
+            "owner_node": "local@test",
             "job_id": "job-1",
             "run_id": run_id,
             "status": "completed",
@@ -1744,6 +1755,7 @@ def test_active_run_files_resolve_exact_submission_without_legacy_mapping(monkey
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "local-runs"))
     runtime.get_run = lambda run_id: json.dumps(
         {
+            "owner_node": "local@test",
             "job_id": "job-1",
             "run_id": run_id,
             "status": "completed",

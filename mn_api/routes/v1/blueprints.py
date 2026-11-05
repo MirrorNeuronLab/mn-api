@@ -26,7 +26,7 @@ from mn_api.launch_progress import public_progress_snapshot
 from mn_api.operations import complete_local_operation, start_local_operation, start_operation
 from mn_api.pagination import page
 from mn_api.public import idempotent_response, public_value
-from mn_api import blueprint_launch as legacy_blueprints
+from mn_api import blueprint_launch
 from mn_api.schemas import BlueprintRunRequest, BlueprintUninstallRequest
 
 
@@ -154,7 +154,7 @@ def create_blueprint_removal(
             label="Remove resources",
             detail="Removing blueprint-owned runtime resources.",
         )
-        result = legacy_blueprints.uninstall_blueprints(
+        result = blueprint_launch.uninstall_blueprints(
             BlueprintUninstallRequest(blueprint_id=blueprint_id, **payload.model_dump()),
             _auth=principal,
         )
@@ -185,7 +185,7 @@ def create_blueprint_validation(
     blueprint_id: str, request: BlueprintValidation | None = None, _principal=Depends(require_auth)
 ):
     repo_root, blueprint = find_blueprint(_config(), blueprint_id)
-    result = legacy_blueprints.validate_blueprint_inputs(
+    result = blueprint_launch.validate_blueprint_inputs(
         repo_root,
         blueprint,
         config_overrides=(request.config_overrides if request else {}),
@@ -208,11 +208,11 @@ def create_blueprint_run(
     progress_id: str | None = Header(default=None, alias="X-Launch-Progress-ID", max_length=220),
 ):
     payload = request or BlueprintRunCreate()
-    progress_id = legacy_blueprints.validate_progress_id(progress_id if isinstance(progress_id, str) else None)
+    progress_id = blueprint_launch.validate_progress_id(progress_id if isinstance(progress_id, str) else None)
 
     def start():
         repo_root, blueprint = find_blueprint(_config(), blueprint_id)
-        resolved = legacy_blueprints.resolve_async_blueprint_run_request(
+        resolved = blueprint_launch.resolve_async_blueprint_run_request(
             blueprint_id,
             BlueprintRunRequest(
                 job_id=payload.job_id,
@@ -228,7 +228,7 @@ def create_blueprint_run(
                 progress_id=progress_id,
             ),
         )
-        run = legacy_blueprints.run_blueprint_record(repo_root, blueprint, resolved)
+        run = blueprint_launch.run_blueprint_record(repo_root, blueprint, resolved)
         if isinstance(run, dict):
             run.setdefault("status", "pending")
         return run

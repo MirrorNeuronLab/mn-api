@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from mn_api.config import config_string
-from mn_api.config_env import load_config_source, parse_dotenv_line, profile_name, read_dotenv
+from mn_sdk.config import load_config_source, parse_dotenv_line, profile_name, read_dotenv
 from mn_api.config_schema import (
     ConfigError,
     parse_bool,

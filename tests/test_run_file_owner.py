@@ -161,7 +161,7 @@ def test_queued_admission_owns_the_same_canonical_file_binding(remote_run):
 
 
 @pytest.mark.parametrize("kind", ["local", "legacy", "http_disabled", "no_owner"])
-def test_local_and_legacy_owners_keep_verified_replica_reads(remote_run, kind):
+def test_only_current_owners_can_read_verified_replicas(remote_run, kind):
     remote = remote_run
     if kind == "local":
         remote.node["self?"] = True
@@ -174,6 +174,9 @@ def test_local_and_legacy_owners_keep_verified_replica_reads(remote_run, kind):
     remote.directory.mkdir(parents=True)
     (remote.directory / "report.md").write_bytes(b"verified local bytes")
     response = remote.client.get("/api/v1/runs/run-1/artifacts/report.md")
+    if kind in {"legacy", "no_owner"}:
+        assert response.status_code == 503, response.text
+        return
     assert response.status_code == 200, response.text
     assert response.content == b"verified local bytes"
     assert remote.calls == []

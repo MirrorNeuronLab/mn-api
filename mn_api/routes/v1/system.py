@@ -20,7 +20,7 @@ from mn_api.dependencies import require_auth
 from mn_api.operations import start_operation
 from mn_api.pagination import page
 from mn_api.public import public_value, resource_response
-from mn_api.routes import system as legacy_system
+from mn_api.routes import system as system_service
 from mn_api.schemas import ClusterNodeAddRequest
 
 
@@ -39,24 +39,24 @@ def health():
 
 @router.get("/runtime/status", operation_id="get_runtime_status", tags=["runtime"], response_model=ResourceModel)
 def runtime_status(timeout: float = 3.0, _principal=Depends(require_auth)):
-    return public_value(legacy_system.runtime_status(timeout=timeout, _auth=_principal))
+    return public_value(system_service.runtime_status(timeout=timeout, _auth=_principal))
 
 
 @router.get("/runtime/health", operation_id="get_runtime_health", tags=["runtime"], response_model=ResourceModel)
 def runtime_health(timeout: float = 3.0, _principal=Depends(require_auth)):
-    return public_value(legacy_system.runtime_health(timeout=timeout, _auth=_principal))
+    return public_value(system_service.runtime_health(timeout=timeout, _auth=_principal))
 
 
 @router.get(
     "/runtime/diagnostics", operation_id="get_runtime_diagnostics", tags=["runtime"], response_model=ResourceModel
 )
 def runtime_diagnostics(timeout: float = 3.0, _principal=Depends(require_auth)):
-    return public_value(legacy_system.runtime_doctor(timeout=timeout, _auth=_principal))
+    return public_value(system_service.runtime_doctor(timeout=timeout, _auth=_principal))
 
 
 @router.get("/runtime/resources", operation_id="get_runtime_resources", tags=["runtime"], response_model=ResourceModel)
 def runtime_resources(_principal=Depends(require_auth)):
-    return public_value(legacy_system.get_resource(_auth=_principal))
+    return public_value(system_service.get_resource(_auth=_principal))
 
 
 @router.put(
@@ -68,12 +68,12 @@ def replace_runtime_resources(request: RuntimeResources, _principal=Depends(requ
 
 @router.get("/system/summary", operation_id="get_system_summary", tags=["system"], response_model=ResourceModel)
 def system_summary(_principal=Depends(require_auth)):
-    return public_value(legacy_system.get_system_summary(_auth=_principal))
+    return public_value(system_service.get_system_summary(_auth=_principal))
 
 
 @router.get("/metrics", operation_id="get_metrics", tags=["system"], response_model=ResourceModel)
 def metrics(_principal=Depends(require_auth)):
-    return public_value(legacy_system.get_metrics(_auth=_principal))
+    return public_value(system_service.get_metrics(_auth=_principal))
 
 
 @router.get("/nodes", operation_id="list_nodes", tags=["nodes"], response_model=PageResponse)
@@ -82,7 +82,7 @@ def nodes(
     page_token: str | None = None,
     principal: str = Depends(require_auth),
 ):
-    summary = legacy_system.get_nodes(_auth=principal)
+    summary = system_service.get_nodes(_auth=principal)
     if isinstance(summary, dict) and isinstance(summary.get("nodes"), list):
         items = [public_value(item) for item in summary["nodes"] if isinstance(item, dict)]
     else:
@@ -108,7 +108,7 @@ def nodes(
     response_model=ResourceModel,
 )
 def create_node(request: NodeCreate, response: Response, _principal=Depends(require_auth)):
-    result = legacy_system.add_cluster_node(ClusterNodeAddRequest(**request.model_dump()), _auth=_principal)
+    result = system_service.add_cluster_node(ClusterNodeAddRequest(**request.model_dump()), _auth=_principal)
     node_id = str(result.get("node_name") or "") if isinstance(result, dict) else ""
     if node_id:
         response.headers["Location"] = f"{API_PREFIX}/nodes/{node_id}"

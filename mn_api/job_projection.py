@@ -50,9 +50,9 @@ from mn_api.blueprints import (
 from mn_api.dependencies import require_auth
 from mn_sdk.integrations.run_reads import history_reason
 from mn_api.errors import handle_grpc_error
-from mn_api.job_activity import compact_event as _compact_event
-from mn_api.job_activity import compact_value as _compact_value
-from mn_api.job_activity import enrich_workflow_progress_activity as _enrich_workflow_progress_activity
+from mn_sdk.activity_projection import compact_event as _compact_event
+from mn_sdk.activity_projection import compact_activity_value as _compact_value
+from mn_sdk.activity_projection import enrich_workflow_progress_activity as _enrich_workflow_progress_activity
 from mn_api.run_outputs import output_refs
 from mn_api.run_store import first_string as _first_string
 from mn_api.run_store import read_json_file as _read_json_file

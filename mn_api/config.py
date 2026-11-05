@@ -16,7 +16,7 @@ from mn_sdk.blueprint_source import resolve_blueprint_source_config
 from mn_sdk.runtime_config import RuntimeConfig
 from mn_sdk.config.types import MISSING
 
-from mn_api.config_env import ConfigSource, load_config_source, normalize_mn_env
+from mn_sdk.config import ConfigSource, load_config_source, normalize_mn_env
 from mn_api.config_schema import CONFIG_KEY_MAP, ConfigError, is_sensitive_key, redact_config_values
 from mn_api.path_utils import default_logs_root
 

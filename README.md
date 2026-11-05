@@ -1,5 +1,11 @@
 # MirrorNeuron API
 
+## Current contracts
+
+The API requires the current SDK, including its admin-token constructor argument. Shared configuration and activity helpers are imported from their SDK owners. Run files require a current owner binding and, for enabled remote HTTP reads, the owner's current HTTP API advertisement. Historical output-progress lookup and forwarding modules are removed.
+
+Backward compatibility and automatic migration of obsolete state are unsupported.
+
 API submission and CLI submission now share the SDK runner preparation step. Use matching SDK and Core builds on execution nodes when testing a blueprint that declares the v1 payload API.
 
 ## Output observer upgrades

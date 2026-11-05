@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import unittest
 
-from mn_api.job_activity import (
-    _activity_message,
+from mn_sdk.activity_projection import (
+    activity_message as _activity_message,
     compact_event,
-    compact_value,
+    compact_activity_value as compact_value,
     enrich_workflow_progress_activity,
 )
 from mn_api.job_projection import _progress_event_should_flush

@@ -1131,7 +1131,7 @@ def ensure_context_engine_for_blueprint(bundle_root: Path, *, force: bool = Fals
 
 def ensure_context_engine_runtime_direct(*, force: bool = False) -> dict[str, Any] | None:
     try:
-        from mn_cli.server_cmds import ensure_context_engine_runtime
+        from mn_cli.runtime.server import ensure_context_engine_runtime
     except Exception:
         return None
     try:

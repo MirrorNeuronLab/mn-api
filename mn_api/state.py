@@ -45,7 +45,7 @@ def refresh_config_from_env():
 
 def _client_kwargs() -> dict:
     current_config = refresh_config_from_env()
-    return runtime_client_kwargs(current_config, client_cls=Client, warn=logger.warning)
+    return runtime_client_kwargs(current_config)
 
 
 def get_client() -> Client:
