@@ -1503,6 +1503,41 @@ def test_blueprint_addition_exposes_structured_sanitized_failure(monkeypatch):
     assert "traceback" not in json.dumps(operation).lower()
 
 
+def test_blueprint_resources_preserve_manifest_tagline_and_description(monkeypatch, tmp_path):
+    from mn_sdk.blueprints.authoring import write_blueprint_definition
+
+    client, _runtime = _client(monkeypatch)
+    tagline = "Operate Mac apps and websites from a prompt"
+    description = "Operate apps and websites on your Mac from a general prompt, then verify the results."
+    write_blueprint_definition(
+        tmp_path / "worker",
+        {
+            "id": "worker",
+            "name": "Worker",
+            "tagline": tagline,
+            "description": description,
+            "workflow": {"steps": [{"id": "run"}]},
+            "agents": {},
+            "runtime": {},
+        },
+    )
+    (tmp_path / "index.json").write_text('["worker"]')
+    config = SimpleNamespace(
+        blueprint_source="local",
+        blueprint_repo="",
+        blueprint_local=str(tmp_path),
+        active_blueprint_location=str(tmp_path),
+    )
+    monkeypatch.setattr(blueprints, "_config", lambda: config)
+    for path in ("/api/v1/blueprints", "/api/v1/blueprints/worker"):
+        response = client.get(path)
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        record = payload["items"][0] if path == "/api/v1/blueprints" else payload
+        assert record["tagline"] == tagline
+        assert record["description"] == description
+
+
 def test_canonical_resource_happy_paths(monkeypatch):
     client, runtime = _client(monkeypatch)
     _patch_canonical_projections(monkeypatch)

@@ -222,6 +222,7 @@ class TestBlueprintServices(unittest.TestCase):
                 {
                     "id": "worker_two",
                     "name": "Worker Two",
+                    "tagline": "Do useful work",
                     "description": "Does useful work.",
                     "workflow": {"steps": [{"id": "run"}]},
                     "agents": {},
@@ -250,6 +251,8 @@ class TestBlueprintServices(unittest.TestCase):
         self.assertEqual(len(blueprints), 1)
         self.assertEqual(blueprints[0]["id"], "worker_two")
         self.assertEqual(blueprints[0]["name"], "Worker Two")
+        self.assertEqual(blueprints[0]["tagline"], "Do useful work")
+        self.assertEqual(blueprints[0]["description"], "Does useful work.")
         self.assertEqual(blueprints[0]["category_slug"], "engineering")
         self.assertEqual(blueprints[0]["rate_label"], "$12.5/run")
         self.assertEqual(blueprints[0]["runtime_features"], ["streams"])
