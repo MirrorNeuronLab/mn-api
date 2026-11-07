@@ -19,7 +19,6 @@ requests whose loading and inference cannot be separated. Their durable wait
 receipts never extend execution budgets and have no percentage. Upgrade Core,
 SDK/common, API, CLI and desktop together to consume this contract.
 
-
 ## Current contracts
 
 The API requires the current SDK, including its admin-token constructor argument. Shared configuration and activity helpers are imported from their SDK owners. Run files require a current owner binding and, for enabled remote HTTP reads, the owner's current HTTP API advertisement. Historical output-progress lookup and forwarding modules are removed.
