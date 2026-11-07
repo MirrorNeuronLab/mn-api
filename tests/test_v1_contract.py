@@ -2229,6 +2229,46 @@ def test_job_workflow_shape_views_and_progress_only(monkeypatch):
     assert empty_runtime_shape.json()["run_id"] == "run-1"
 
 
+def test_run_preparation_survives_rest_and_resumed_sse(monkeypatch):
+    from mn_sdk.workflow_progress import workflow_progress_snapshot
+
+    client, runtime = _client(monkeypatch)
+    snapshot = workflow_progress_snapshot(
+        {"workflow": {"steps": [{"id": "read"}]}},
+        [
+            {
+                "type": "runtime_preparation_progress",
+                "payload": {
+                    "step_id": "read",
+                    "preparation_id": "download",
+                    "kind": "model",
+                    "purpose": "ocr",
+                    "phase": "downloading",
+                    "percent": 10,
+                    "model": "PRIVATE MODEL",
+                    "message": "PRIVATE MODEL",
+                },
+            }
+        ],
+    )
+    snapshot["status"] = "running"
+    snapshots = iter([snapshot, snapshot, {**snapshot, "status": "completed", "steps": [], "preparations": []}])
+    monkeypatch.setattr(jobs.runtime_job_routes, "_workflow_progress_snapshot_for_run", lambda _: next(snapshots))
+    monkeypatch.setattr(jobs.time, "sleep", lambda _: None)
+    monkeypatch.setattr(jobs.runtime_run_routes, "get_run_events", lambda *a, **kw: {"data": []})
+    response = client.get("/api/v1/runs/run-1/workflow-progress")
+    assert response.status_code == 200
+    preparation = response.json()["steps"][0]["preparations"][0]
+    assert preparation["message"] == "Downloading the OCR model (10%)"
+    assert "PRIVATE" not in json.dumps(preparation)
+    stream = client.get("/api/v1/runs/run-1/events/stream", headers={"Last-Event-ID": "40"})
+    assert stream.status_code == 200
+    snapshots = [json.loads(line[6:]) for line in stream.text.splitlines() if line.startswith("data: ")]
+    update = next(value for value in snapshots if value["type"] == "run.snapshot")
+    assert update["data"]["steps"][0]["preparations"] == [preparation]
+    assert "id: 41" in stream.text
+
+
 def test_job_workflow_shape_missing_latest_run_and_empty_definition(monkeypatch):
     client, runtime = _client(monkeypatch)
     runtime.get_job = lambda job_id, **_kwargs: json.dumps({"job_id": job_id, "workflow_definition": {}})

@@ -107,6 +107,7 @@ _PROGRESS_FIELDS = {
     "failure",
     "progress",
     "progress_source",
+    "preparations",
     "items_done",
     "items_total",
     "tokens_used",

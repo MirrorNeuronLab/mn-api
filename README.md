@@ -1,5 +1,25 @@
 # MirrorNeuron API
 
+## Workflow preparation progress
+
+Active preparation is reported as `mn.preparation.v1` receipts in
+`preparations` on workflow snapshots, public steps and agents. Receipts contain
+an opaque ID, step/agent/attempt identity, kind, generic purpose, phase, status,
+nullable percent (0–100) and safe message. Model names, repositories, artifacts,
+endpoints and raw backend messages are excluded from preparation presentation.
+Download percentages reflect measurements; unknown loading progress remains
+indeterminate and is separate from workflow completion.
+
+`runtime_preparation_started`, `runtime_preparation_progress` and
+`runtime_preparation_finished` share one identity and fixed timeout. Progress
+never renews that timeout. The owner ledger retains safe progress for reconnects;
+completion, cancellation and retries retire the active preparation.
+`runtime_model_wait_started` and `runtime_model_wait_finished` describe gateway
+requests whose loading and inference cannot be separated. Their durable wait
+receipts never extend execution budgets and have no percentage. Upgrade Core,
+SDK/common, API, CLI and desktop together to consume this contract.
+
+
 ## Current contracts
 
 The API requires the current SDK, including its admin-token constructor argument. Shared configuration and activity helpers are imported from their SDK owners. Run files require a current owner binding and, for enabled remote HTTP reads, the owner's current HTTP API advertisement. Historical output-progress lookup and forwarding modules are removed.

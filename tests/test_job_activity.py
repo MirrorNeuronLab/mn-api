@@ -12,7 +12,7 @@ from mn_api.job_projection import _progress_event_should_flush
 
 
 class TestJobActivity(unittest.TestCase):
-    def test_runtime_model_events_project_install_details_immediately(self):
+    def test_runtime_model_events_project_generic_preparation_immediately(self):
         event = {
             "type": "runtime_model_install_started",
             "payload": {
@@ -24,7 +24,7 @@ class TestJobActivity(unittest.TestCase):
 
         self.assertEqual(
             _activity_message(event),
-            "Installing nemotron-3.5-bolt-e4b:q4_k_m on mirror_neuron@local.",
+            "Preparing the model",
         )
         self.assertTrue(_progress_event_should_flush(event["type"]))
 
