@@ -10,7 +10,6 @@ measurements. Rates describe completed work with original recorded durations,
 including on replay; they never estimate unfinished work. Deploy the matching
 SDK to the API and workers and reprepare affected co-workers.
 
-
 ## Workflow preparation progress
 
 Active preparation is reported as `mn.preparation.v1` receipts in
