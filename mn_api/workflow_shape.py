@@ -108,6 +108,7 @@ _PROGRESS_FIELDS = {
     "progress",
     "progress_source",
     "preparations",
+    "processing",
     "items_done",
     "items_total",
     "tokens_used",
