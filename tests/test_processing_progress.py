@@ -37,6 +37,7 @@ def test_measured_speed_survives_rest_and_resumed_sse_without_private_payloads(m
     )
     terminal = {**snapshot, "status": "completed", "steps": [], "current_step": None, "processing": []}
     snapshots = iter([snapshot, snapshot, terminal])
+
     def progress_for_run(_):
         progress = next(snapshots)
         runtime.run_status = progress["status"]
