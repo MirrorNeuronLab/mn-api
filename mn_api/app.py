@@ -33,8 +33,10 @@ from mn_api.mcp_oauth import OAuthApp, router as oauth_router
 
 def create_app() -> FastAPI:
     from mn_sdk.client_install import is_client_install
+
     if is_client_install():
         from mn_api.client_app import create_client_app
+
         return create_client_app()
     job_mcp_servers, job_mcp_app = create_job_mcp()
     mcp_lifespan = job_mcp_lifespan(job_mcp_servers)

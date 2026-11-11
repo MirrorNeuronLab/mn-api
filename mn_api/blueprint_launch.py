@@ -1073,12 +1073,17 @@ def run_blueprint_record(
         stable_job_id = str(created.get("job_id") or stable_job_id)
         definition_committed = True
         if req.schedule is not None:
-            scheduled = json.loads(state.client.create_job_schedule(
-                stable_job_id, schedule=req.schedule, source={"api": "blueprint run"}
-            ))
+            scheduled = json.loads(
+                state.client.create_job_schedule(stable_job_id, schedule=req.schedule, source={"api": "blueprint run"})
+            )
             scheduled["job_id"] = stable_job_id
-            record_launch_progress(progress_id, "launch", "completed", "Remote job scheduled.",
-                                   {"job_id": stable_job_id, "schedule_id": scheduled.get("schedule_id")})
+            record_launch_progress(
+                progress_id,
+                "launch",
+                "completed",
+                "Remote job scheduled.",
+                {"job_id": stable_job_id, "schedule_id": scheduled.get("schedule_id")},
+            )
             return scheduled
         started = json.loads(
             state.client.start_run(

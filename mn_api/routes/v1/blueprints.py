@@ -242,7 +242,8 @@ def create_blueprint_run(
         call=start,
         status_code=status.HTTP_202_ACCEPTED,
         location=lambda result: (
-            f"{API_PREFIX}/schedules/{result['schedule_id']}" if result.get("schedule_id")
+            f"{API_PREFIX}/schedules/{result['schedule_id']}"
+            if result.get("schedule_id")
             else f"{API_PREFIX}/runs/{result.get('run_id') or result.get('id')}"
         ),
     )

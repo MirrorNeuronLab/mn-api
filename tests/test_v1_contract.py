@@ -2462,20 +2462,25 @@ def test_blueprint_addition_preserves_invocation_configuration(monkeypatch):
     assert "config_overrides" not in operation["options"]
 
 
-
 def test_catalog_schedule_contract_preserves_owner_and_returns_schedule_location(monkeypatch):
     client, _runtime = _client(monkeypatch)
     monkeypatch.setattr(blueprints, "find_blueprint", lambda *_args: (None, {"id": "worker-1"}))
     requests = []
+
     def scheduled(_repo, _blueprint, request):
         requests.append(request)
         return {"job_id": "job-scheduled", "schedule_id": "schedule-1", "status": "scheduled"}
+
     monkeypatch.setattr(blueprints.blueprint_launch, "run_blueprint_record", scheduled)
     response = client.post(
         "/api/v1/blueprints/worker-1/runs",
         headers={"Idempotency-Key": "scheduled-blueprint-1"},
-        json={"schedule": {"kind": "delayed", "delay_ms": 1000}, "owner_node": "worker@remote",
-              "job_id": "existing-job", "config_overrides": {"input": "/remote/file"}},
+        json={
+            "schedule": {"kind": "delayed", "delay_ms": 1000},
+            "owner_node": "worker@remote",
+            "job_id": "existing-job",
+            "config_overrides": {"input": "/remote/file"},
+        },
     )
     assert response.status_code == 202
     assert response.headers["location"] == "/api/v1/schedules/schedule-1"
