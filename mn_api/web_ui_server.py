@@ -11,7 +11,9 @@ from pathlib import Path
 from typing import Any
 
 import uvicorn
+from anyio import CancelScope
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
 from mn_api.config import WebUiConfig
@@ -115,6 +117,10 @@ def create_app(dist_dir: str | Path | None = None, api_url: str | None = None) -
 
 async def proxy_request(path: str, request: Request, upstream_api: str) -> Response:
     body = await request.body()
+    return await run_in_threadpool(_proxy_api_request, path, request, upstream_api, body)
+
+
+def _proxy_api_request(path: str, request: Request, upstream_api: str, body: bytes) -> Response:
     config = WebUiConfig.from_env()
     target_url = _target_url(path, request.url.query, upstream_api)
     proxy_headers = _proxy_headers(request.headers.items(), api_token=config.api_token)
@@ -128,7 +134,7 @@ async def proxy_request(path: str, request: Request, upstream_api: str) -> Respo
     try:
         upstream_response = urllib.request.urlopen(
             upstream_request,
-            timeout=WebUiConfig.from_env().proxy_timeout_seconds,
+            timeout=config.proxy_timeout_seconds,
         )
     except urllib.error.HTTPError as exc:
         return Response(
@@ -157,14 +163,7 @@ async def proxy_request(path: str, request: Request, upstream_api: str) -> Respo
     headers = _response_headers(upstream_response.headers.items())
     content_type = headers.get("content-type", "")
     if _is_streaming_content_type(content_type):
-        return StreamingResponse(
-            _stream_response(upstream_response)
-            if "text/event-stream" in content_type.lower()
-            else _stream_binary_response(upstream_response),
-            status_code=status_code,
-            headers=headers,
-            media_type=content_type,
-        )
+        return _ProxyStreamResponse(upstream_response, status_code, headers)
 
     try:
         payload = upstream_response.read()
@@ -223,21 +222,21 @@ def proxy_job_ui_request(
     headers = _remote_response_headers(upstream_response.headers.items())
     content_type = headers.get("content-type", "")
     if _is_streaming_content_type(content_type):
-        return StreamingResponse(
-            _stream_response(upstream_response)
-            if "text/event-stream" in content_type.lower()
-            else _stream_binary_response(upstream_response),
-            status_code=status_code,
-            headers=headers,
-            media_type=content_type,
-        )
+        return _ProxyStreamResponse(upstream_response, status_code, headers)
 
     try:
         payload = upstream_response.read()
     finally:
         upstream_response.close()
-    if "text/html" in content_type.lower() and not web_ui.get("transport"):
+    if (
+        method == "GET"
+        and status_code == 200
+        and "text/html" in content_type.lower()
+        and not headers.get("content-encoding")
+    ):
         payload = _inject_job_ui_proxy_config(payload, job_id)
+        headers.pop("etag", None)
+        headers.pop("last-modified", None)
     return Response(content=payload, status_code=status_code, headers=headers)
 
 
@@ -282,8 +281,9 @@ async def proxy_job_ui_websocket_request(
             open_timeout=WebUiConfig.from_env().proxy_timeout_seconds,
             max_size=None,
             additional_headers=relay_headers,
+            subprotocols=websocket.scope.get("subprotocols") or None,
         ) as upstream:
-            await websocket.accept()
+            await websocket.accept(subprotocol=upstream.subprotocol)
             await _bridge_websockets(websocket, upstream)
     except Exception:
         await _close_websocket(websocket, 1011)
@@ -427,6 +427,22 @@ def _response_headers(headers: Iterable[tuple[str, str]]) -> dict[str, str]:
 def _is_streaming_content_type(content_type: str) -> bool:
     normalized = str(content_type or "").lower()
     return "text/event-stream" in normalized or "multipart/" in normalized
+
+
+class _ProxyStreamResponse(StreamingResponse):
+    def __init__(self, upstream, status_code: int, headers: dict[str, str]):
+        self.upstream = upstream
+        media_type = headers["content-type"]
+        iterator = _stream_response if "text/event-stream" in media_type.lower() else _stream_binary_response
+        super().__init__(iterator(upstream), status_code=status_code, headers=headers, media_type=media_type)
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            # A downstream disconnect can stop iteration before it closes the upstream HTTP response.
+            with CancelScope(shield=True):
+                await run_in_threadpool(self.upstream.close)
 
 
 def _stream_response(upstream_response) -> Iterable[bytes]:

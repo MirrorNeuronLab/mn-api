@@ -205,5 +205,5 @@ async def relay_websocket(websocket: WebSocket, job_id: str, port: int, path: st
         if sender:
             sender.cancel()
         connection.close()
-        with suppress(RuntimeError):
+        with suppress(RuntimeError, WebSocketDisconnect):
             await websocket.close(code=close_code, reason=close_reason)
