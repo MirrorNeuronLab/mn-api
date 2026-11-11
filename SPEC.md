@@ -906,3 +906,35 @@ addition record. The operation reports a `prepare_skills` stage; a failed native
 setup returns a safe prerequisite issue and does not mark the co-worker added.
 Catalog reads and API/runtime startup never run these hooks. Computer Use uses
 this path to download its signed, notarized `mn computer use.app` from GAR.
+
+## Production client relay contract
+
+A binary client installation persists `install_role=client` in
+`MN_HOME/install_metadata.json`. `mn_api.main` selects the standalone relay before
+loading runtime state, local preparation or background workers. No services are
+started by installation. `mn-api` is a foreground command. Supported process
+settings are `MN_HOME`, `MN_API_HOST`, `MN_API_PORT`, `MN_API_TOKEN` and
+`MN_API_CORS_ALLOW_ORIGINS`; listener defaults are loopback port 54001. An absent
+or empty local token setting reads `MN_HOME/api.token`; authentication is always
+required except for local health.
+
+The shared private `client.json` stores `api_url`, remote `token`, and `node_name`.
+`POST /api/v1/nodes` accepts the existing host/token request shape, rejects
+`grpc_port`, validates the upstream health contract and authenticated identity,
+and atomically replaces that connection only after success. It does not join a
+cluster. `DELETE /api/v1/nodes/{node_name}` disconnects the configured connection
+and returns 409 for a different name. GET node routes are remote reads.
+
+Other `/api/v1` methods preserve upstream bodies/status, Problem Details, ETags,
+conditional/idempotency headers, streams, downloads and WebSocket traffic. The
+relay replaces local Authorization with the stored remote bearer token and
+strips hop-by-hop headers. It never follows upstream redirects with credentials
+or automatically retries. New requests use the latest committed connection.
+Existing streams retain their original upstream. Health reports the canonical
+contract and `auth: enabled`; responses identify `X-MN-Install-Role: client`,
+which prevents configuring a client relay as another client's runtime.
+
+`BlueprintRunCreate.schedule` is an optional schedule object. Remote preparation
+commits the job then creates a schedule, returning `schedule_id` with a schedule
+Location instead of starting a run. Queue admission and scheduling are mutually
+exclusive. Existing unscheduled launch behavior is unchanged.

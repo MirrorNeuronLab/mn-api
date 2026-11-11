@@ -68,6 +68,7 @@ class RestoreJobBackupRequest(BaseModel):
 
 
 class BlueprintRunRequest(BaseModel):
+    schedule: Optional[Dict[str, Any]] = None
     admission_policy: Literal["start_now", "enqueue_if_busy"] = "start_now"
     job_id: Optional[str] = None
     run_id: Optional[str] = None

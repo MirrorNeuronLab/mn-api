@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr, model_validator
 
 
 class StrictModel(BaseModel):
@@ -170,12 +170,19 @@ class RunCreate(StrictModel):
 
 
 class BlueprintRunCreate(RunCreate):
+    schedule: dict[str, Any] | None = None
     job_id: str | None = None
     secret_environment: dict[str, str] = Field(default_factory=dict)
     force: bool = False
     fake_llm: bool = False
     fake_skills: bool = False
     owner_node: str | None = None
+
+    @model_validator(mode="after")
+    def validate_scheduling(self):
+        if self.schedule is not None and self.admission_policy != "start_now":
+            raise ValueError("A scheduled launch cannot also enqueue a run.")
+        return self
 
 
 class RunUpdate(StrictModel):

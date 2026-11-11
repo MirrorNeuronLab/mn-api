@@ -215,6 +215,7 @@ def create_blueprint_run(
         resolved = blueprint_launch.resolve_async_blueprint_run_request(
             blueprint_id,
             BlueprintRunRequest(
+                schedule=payload.schedule,
                 job_id=payload.job_id,
                 admission_policy=payload.admission_policy,
                 run_id=payload.run_id,
@@ -240,7 +241,10 @@ def create_blueprint_run(
         body=payload.model_dump(),
         call=start,
         status_code=status.HTTP_202_ACCEPTED,
-        location=lambda result: f"{API_PREFIX}/runs/{result.get('run_id') or result.get('id')}",
+        location=lambda result: (
+            f"{API_PREFIX}/schedules/{result['schedule_id']}" if result.get("schedule_id")
+            else f"{API_PREFIX}/runs/{result.get('run_id') or result.get('id')}"
+        ),
     )
 
 

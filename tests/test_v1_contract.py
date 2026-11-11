@@ -7,6 +7,7 @@ import time
 from types import SimpleNamespace
 
 import grpc
+import pytest
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
@@ -1165,7 +1166,8 @@ def test_hardware_preflight_selects_unique_owner_node():
     assert selected == "mirror_neuron@spark"
 
 
-def test_blueprint_output_relay_polls_execution_run_id(monkeypatch, tmp_path):
+@pytest.mark.parametrize("schedule", [None, {"kind": "resource_wait"}])
+def test_blueprint_output_relay_polls_execution_run_id(monkeypatch, tmp_path, schedule):
     legacy = blueprints.blueprint_launch
     bundle = tmp_path / "worker-1"
     bundle.mkdir()
@@ -1178,8 +1180,15 @@ def test_blueprint_output_relay_polls_execution_run_id(monkeypatch, tmp_path):
             return json.dumps({"job_id": "job-stable"})
 
         def start_run(self, job_id, **_kwargs):
+            assert schedule is None
             assert job_id == "job-stable"
             return json.dumps({"run_id": "run-execution"})
+
+        def create_job_schedule(self, job_id, **kwargs):
+            assert job_id == "job-stable"
+            assert kwargs["schedule"] == schedule
+            captured["schedule"] = schedule
+            return json.dumps({"schedule_id": "schedule-1", "status": "scheduled"})
 
     monkeypatch.setattr(legacy, "record_launch_progress", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(legacy, "validate_progress_id", lambda value: value)
@@ -1238,10 +1247,15 @@ def test_blueprint_output_relay_polls_execution_run_id(monkeypatch, tmp_path):
     result = legacy.run_blueprint_record(
         tmp_path,
         {"id": "worker-1", "revision": "abc"},
-        legacy.BlueprintRunRequest(run_id="run-requested", force=True),
+        legacy.BlueprintRunRequest(run_id="run-requested", force=True, schedule=schedule),
     )
 
     assert result["job_id"] == "job-stable"
+    if schedule is not None:
+        assert result["schedule_id"] == "schedule-1"
+        assert "run_id" not in result
+        assert captured == {"owner_node": "mirror_neuron@spark", "schedule": schedule}
+        return
     assert result["run_id"] == "run-execution"
     assert captured == {
         "owner_node": "mirror_neuron@spark",
@@ -2446,3 +2460,33 @@ def test_blueprint_addition_preserves_invocation_configuration(monkeypatch):
     assert operation["status"] == "completed"
     assert seen == [("worker-1", overrides)]
     assert "config_overrides" not in operation["options"]
+
+
+
+def test_catalog_schedule_contract_preserves_owner_and_returns_schedule_location(monkeypatch):
+    client, _runtime = _client(monkeypatch)
+    monkeypatch.setattr(blueprints, "find_blueprint", lambda *_args: (None, {"id": "worker-1"}))
+    requests = []
+    def scheduled(_repo, _blueprint, request):
+        requests.append(request)
+        return {"job_id": "job-scheduled", "schedule_id": "schedule-1", "status": "scheduled"}
+    monkeypatch.setattr(blueprints.blueprint_launch, "run_blueprint_record", scheduled)
+    response = client.post(
+        "/api/v1/blueprints/worker-1/runs",
+        headers={"Idempotency-Key": "scheduled-blueprint-1"},
+        json={"schedule": {"kind": "delayed", "delay_ms": 1000}, "owner_node": "worker@remote",
+              "job_id": "existing-job", "config_overrides": {"input": "/remote/file"}},
+    )
+    assert response.status_code == 202
+    assert response.headers["location"] == "/api/v1/schedules/schedule-1"
+    assert requests[0].schedule == {"kind": "delayed", "delay_ms": 1000}
+    assert requests[0].owner_node == "worker@remote"
+    assert requests[0].job_id == "existing-job"
+    assert requests[0].config_overrides == {"input": "/remote/file"}
+    bad = client.post(
+        "/api/v1/blueprints/worker-1/runs",
+        headers={"Idempotency-Key": "bad-scheduled-blueprint"},
+        json={"schedule": {"kind": "resource_wait"}, "admission_policy": "enqueue_if_busy"},
+    )
+    assert bad.status_code == 422
+    assert len(requests) == 1

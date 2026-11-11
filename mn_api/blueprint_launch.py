@@ -295,6 +295,7 @@ def resolve_async_blueprint_run_request(blueprint_id: str, req: BlueprintRunRequ
     validate_run_id(run_id)
     progress_id = validate_progress_id(req.progress_id) or create_blueprint_progress_id(run_id)
     return BlueprintRunRequest(
+        schedule=req.schedule,
         admission_policy=req.admission_policy,
         job_id=req.job_id,
         run_id=run_id,
@@ -1071,6 +1072,14 @@ def run_blueprint_record(
             )
         stable_job_id = str(created.get("job_id") or stable_job_id)
         definition_committed = True
+        if req.schedule is not None:
+            scheduled = json.loads(state.client.create_job_schedule(
+                stable_job_id, schedule=req.schedule, source={"api": "blueprint run"}
+            ))
+            scheduled["job_id"] = stable_job_id
+            record_launch_progress(progress_id, "launch", "completed", "Remote job scheduled.",
+                                   {"job_id": stable_job_id, "schedule_id": scheduled.get("schedule_id")})
+            return scheduled
         started = json.loads(
             state.client.start_run(
                 stable_job_id,

@@ -85,6 +85,12 @@ API_CONFIG_KEYS: tuple[ConfigKey, ...] = (
 SUPPORTED_CONFIG_KEYS = compose_config_keys(SDK_CONFIG_KEYS, API_CONFIG_KEYS)
 CONFIG_KEY_MAP = {key.name: key for key in SUPPORTED_CONFIG_KEYS}
 
+# Client role is selected only by MN_HOME/install_metadata.json, never by an
+# environment switch that could turn an installed client into a runtime host.
+# The relay reads these process settings without loading runtime configuration.
+CLIENT_API_DEFAULTS = {"MN_API_HOST": "127.0.0.1", "MN_API_PORT": "54001"}
+CLIENT_CONFIG_KEYS = frozenset({"MN_HOME", "MN_API_HOST", "MN_API_PORT", "MN_API_TOKEN", "MN_API_CORS_ALLOW_ORIGINS"})
+
 
 def is_sensitive_key(name: str) -> bool:
     return sdk_is_sensitive_key(name, CONFIG_KEY_MAP)
