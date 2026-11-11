@@ -75,21 +75,42 @@ API_CONFIG_KEYS: tuple[ConfigKey, ...] = (
         default="30",
         description="Web UI proxy timeout.",
     ),
-    ConfigKey("MN_MEMBRANE_PROJECT_PATH", parse_path, default=""),
-    ConfigKey("MN_MEMBRANE_SDK_PATH", parse_path, default=""),
-    ConfigKey("MN_PROCESS_CLEANUP_TIMEOUT_SECONDS", parse_float, default="5"),
-    ConfigKey("OPENSHELL_CONFIG_DIR", parse_path, default="~/.config/openshell"),
-    ConfigKey("OPENSHELL_GATEWAY", parse_string, default=""),
 )
 
-SUPPORTED_CONFIG_KEYS = compose_config_keys(SDK_CONFIG_KEYS, API_CONFIG_KEYS)
-CONFIG_KEY_MAP = {key.name: key for key in SUPPORTED_CONFIG_KEYS}
 
 # Client role is selected only by MN_HOME/install_metadata.json, never by an
 # environment switch that could turn an installed client into a runtime host.
-# The relay reads these process settings without loading runtime configuration.
+# Both full and client surfaces use the shared native connection profile.
 CLIENT_API_DEFAULTS = {"MN_API_HOST": "127.0.0.1", "MN_API_PORT": "54001"}
-CLIENT_CONFIG_KEYS = frozenset({"MN_HOME", "MN_API_HOST", "MN_API_PORT", "MN_API_TOKEN", "MN_API_CORS_ALLOW_ORIGINS"})
+SURFACE_CONFIG_KEYS = frozenset(
+    {
+        "MN_ENV",
+        "MN_HOME",
+        "MN_API_HOST",
+        "MN_API_PORT",
+        "MN_API_TOKEN",
+        "MN_API_BASE_URL",
+        "MN_API_CORS_ALLOW_ORIGINS",
+        "MN_API_REQUEST_SIZE_LIMIT_BYTES",
+        "MN_API_BLUEPRINT_UPLOAD_LIMIT_BYTES",
+        "MN_API_LOG_PATH",
+        "MN_LOG_LEVEL",
+        "MN_LOGS_ROOT",
+        "MN_LOG_MAX_BYTES",
+        "MN_LOG_BACKUP_COUNT",
+        "MN_WEB_UI_HOST",
+        "MN_WEB_UI_PORT",
+        "MN_WEB_UI_API_BASE_URL",
+        "MN_WEB_UI_DIST_DIR",
+        "MN_WEB_UI_PROXY_TIMEOUT_SECONDS",
+    }
+)
+
+
+SUPPORTED_CONFIG_KEYS = tuple(
+    key for key in compose_config_keys(SDK_CONFIG_KEYS, API_CONFIG_KEYS) if key.name in SURFACE_CONFIG_KEYS
+)
+CONFIG_KEY_MAP = {key.name: key for key in SUPPORTED_CONFIG_KEYS}
 
 
 def is_sensitive_key(name: str) -> bool:

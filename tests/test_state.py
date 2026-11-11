@@ -1,229 +1,47 @@
-from __future__ import annotations
-
-import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock
 
 from mn_api import state
-from mn_api.config import ApiConfig
 
 
-class TestStateClient(unittest.TestCase):
-    def setUp(self):
-        self.original_config = state.config
-        self.original_client = state._client
-        self.original_client_class = state.Client
-        state._client = None
-        state.config = SimpleNamespace(
-            grpc_target="localhost:55051",
-            grpc_timeout_seconds=10.0,
-            grpc_auth_token="",
-            grpc_admin_token="admin-secret",
-        )
+def test_surface_client_is_lazy_and_never_receives_internal_credentials(monkeypatch):
+    monkeypatch.setattr(state, "_client", None)
+    factory = Mock(return_value=SimpleNamespace(channel=SimpleNamespace(close=Mock())))
+    monkeypatch.setattr(state, "Client", factory)
+    one = state.get_client()
+    assert state.get_client() is one
+    factory.assert_called_once_with()
+    state.close_client()
+    one.channel.close.assert_called_once()
+    assert state._client is None
 
-    def tearDown(self):
-        state.config = self.original_config
-        state._client = self.original_client
-        state.Client = self.original_client_class
 
-    def test_get_client_omits_admin_token_for_older_sdk(self):
-        calls = []
+def test_bad_config_refresh_preserves_prior_config(monkeypatch):
+    before = state.config
 
-        class OldClient:
-            def __init__(self, target=None, timeout=None, auth_token=None):
-                calls.append(
-                    {
-                        "target": target,
-                        "timeout": timeout,
-                        "auth_token": auth_token,
-                    }
-                )
+    def invalid():
+        raise ValueError("invalid configuration")
 
-        state.Client = OldClient
+    monkeypatch.setattr(state.ApiConfig, "from_env", invalid)
+    assert state.refresh_config_from_env() is before
 
-        with self.assertRaisesRegex(TypeError, "admin_token"):
-            state.get_client()
 
-    def test_get_client_passes_admin_token_for_current_sdk(self):
-        calls = []
+def test_client_facade_reads_shared_profile_for_each_request(monkeypatch):
+    from mn_sdk.runtime_connection import RuntimeConnection, save_connection
+    from mn_sdk.runtime_control import RuntimeControlClient
+    from mn_sdk.surface_client import SurfaceRuntimeClient
 
-        class CurrentClient:
-            def __init__(
-                self,
-                target=None,
-                timeout=None,
-                auth_token=None,
-                admin_token=None,
-            ):
-                calls.append(
-                    {
-                        "target": target,
-                        "timeout": timeout,
-                        "auth_token": auth_token,
-                        "admin_token": admin_token,
-                    }
-                )
+    seen = []
 
-        state.Client = CurrentClient
+    def read(self, action, args):
+        seen.append((self.connection.target, self.connection.token, action, args))
+        return "{}"
 
-        state.get_client()
-
-        self.assertEqual(
-            calls,
-            [
-                {
-                    "target": "localhost:55051",
-                    "timeout": 10.0,
-                    "auth_token": "",
-                    "admin_token": "admin-secret",
-                }
-            ],
-        )
-
-    def test_get_client_refreshes_grpc_tokens_from_runtime_env(self):
-        calls = []
-
-        state.config = ApiConfig(
-            env="dev",
-            host="localhost",
-            port=54001,
-            grpc_target="localhost:55051",
-            grpc_timeout_seconds=10.0,
-            grpc_auth_token="",
-            grpc_admin_token="",
-            api_token="",
-            request_size_limit_bytes=1024 * 1024,
-            cors_allow_origins=[],
-            blueprint_source="local",
-            blueprint_repo="",
-            blueprint_local="/tmp/blueprints",
-            active_blueprint_location="/tmp/blueprints",
-        )
-        refreshed = ApiConfig(
-            env="dev",
-            host="localhost",
-            port=54001,
-            grpc_target="localhost:55051",
-            grpc_timeout_seconds=10.0,
-            grpc_auth_token="auth-from-state",
-            grpc_admin_token="admin-from-state",
-            api_token="",
-            request_size_limit_bytes=1024 * 1024,
-            cors_allow_origins=[],
-            blueprint_source="local",
-            blueprint_repo="",
-            blueprint_local="/tmp/blueprints",
-            active_blueprint_location="/tmp/blueprints",
-        )
-
-        class CurrentClient:
-            def __init__(
-                self,
-                target=None,
-                timeout=None,
-                auth_token=None,
-                admin_token=None,
-            ):
-                calls.append(
-                    {
-                        "target": target,
-                        "timeout": timeout,
-                        "auth_token": auth_token,
-                        "admin_token": admin_token,
-                    }
-                )
-
-        state.Client = CurrentClient
-
-        with patch.object(state.ApiConfig, "from_env", return_value=refreshed):
-            state.get_client()
-
-        self.assertEqual(
-            calls,
-            [
-                {
-                    "target": "localhost:55051",
-                    "timeout": 10.0,
-                    "auth_token": "auth-from-state",
-                    "admin_token": "admin-from-state",
-                }
-            ],
-        )
-
-    def test_get_client_rebuilds_existing_client_when_grpc_tokens_change(self):
-        calls = []
-        closed = []
-
-        state.config = ApiConfig(
-            env="dev",
-            host="localhost",
-            port=54001,
-            grpc_target="localhost:55051",
-            grpc_timeout_seconds=10.0,
-            grpc_auth_token="",
-            grpc_admin_token="old-admin",
-            api_token="",
-            request_size_limit_bytes=1024 * 1024,
-            cors_allow_origins=[],
-            blueprint_source="local",
-            blueprint_repo="",
-            blueprint_local="/tmp/blueprints",
-            active_blueprint_location="/tmp/blueprints",
-        )
-        refreshed = ApiConfig(
-            env="dev",
-            host="localhost",
-            port=54001,
-            grpc_target="localhost:55051",
-            grpc_timeout_seconds=10.0,
-            grpc_auth_token="",
-            grpc_admin_token="new-admin",
-            api_token="",
-            request_size_limit_bytes=1024 * 1024,
-            cors_allow_origins=[],
-            blueprint_source="local",
-            blueprint_repo="",
-            blueprint_local="/tmp/blueprints",
-            active_blueprint_location="/tmp/blueprints",
-        )
-
-        class ExistingChannel:
-            def close(self):
-                closed.append(True)
-
-        state._client = SimpleNamespace(channel=ExistingChannel())
-
-        class CurrentClient:
-            def __init__(
-                self,
-                target=None,
-                timeout=None,
-                auth_token=None,
-                admin_token=None,
-            ):
-                calls.append(
-                    {
-                        "target": target,
-                        "timeout": timeout,
-                        "auth_token": auth_token,
-                        "admin_token": admin_token,
-                    }
-                )
-
-        state.Client = CurrentClient
-
-        with patch.object(state.ApiConfig, "from_env", return_value=refreshed):
-            state.get_client()
-
-        self.assertEqual(closed, [True])
-        self.assertEqual(
-            calls,
-            [
-                {
-                    "target": "localhost:55051",
-                    "timeout": 10.0,
-                    "auth_token": "",
-                    "admin_token": "new-admin",
-                }
-            ],
-        )
+    monkeypatch.setattr(RuntimeControlClient, "read", read)
+    facade = SurfaceRuntimeClient()
+    save_connection(RuntimeConnection("first:55051", "private-one", "first", "one"))
+    facade.get_job("job")
+    save_connection(RuntimeConnection("second:55052", "private-two", "second", "two"))
+    facade.get_job("job")
+    assert [row[:2] for row in seen] == [("first:55051", "private-one"), ("second:55052", "private-two")]
+    assert all(row[2] == "core.get_job" for row in seen)

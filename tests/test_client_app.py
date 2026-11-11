@@ -1,289 +1,280 @@
-import asyncio
+"""The REST surface adapts a native runtime connection without hosting it."""
+
+import json
 import os
+from contextlib import contextmanager
+from dataclasses import replace
 import subprocess
 import sys
-from contextlib import asynccontextmanager
+from types import SimpleNamespace
 
-import httpx
 import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from mn_api.client_app import create_client_app
-from mn_sdk.client_install import RemoteConnection, save_connection
+from mn_api import state
+from mn_api.app import create_app
+from mn_sdk.errors import AppError
+from mn_sdk.proto import runtime_control_pb2 as wire
+from mn_sdk.runtime_connection import REQUIRED_CAPABILITIES, RuntimeConnection, load_connection, save_connection
+from mn_sdk.runtime_control import RuntimeControlClient
+from mn_sdk.job_ui_proxy import close_frame
 
 
-class Stream(httpx.AsyncByteStream):
-    def __init__(self, *chunks):
-        self.chunks = chunks
-        self.closed = False
-
-    async def __aiter__(self):
-        for chunk in self.chunks:
-            yield chunk
-
-    async def aclose(self):
-        self.closed = True
+def reply(value=None, status=200, **headers):
+    return wire.RuntimeReply(version=1, status=status, value_json=json.dumps(value), metadata=headers)
 
 
 @pytest.fixture
-def home(tmp_path, monkeypatch):
+def native(tmp_path, monkeypatch):
     monkeypatch.setenv("MN_HOME", str(tmp_path))
-    monkeypatch.delenv("MN_API_TOKEN", raising=False)
+    monkeypatch.setenv("MN_API_TOKEN", "local-secret")
     (tmp_path / "install_metadata.json").write_text('{"install_role":"client"}')
-    (tmp_path / "api.token").write_text("local-secret")
-    return tmp_path
+    monkeypatch.setattr(state, "config", replace(state.config, api_token="local-secret"))
+    calls, closed = [], []
+    config = SimpleNamespace(response=reply({"items": []}), frames=None, error=None, ui=None)
+
+    def init(self, connection=None, **kwargs):
+        self.connection = connection or load_connection()
+        self.channel = SimpleNamespace(close=lambda: closed.append("channel"))
+
+    def call(self, method, action, arguments=None, **kwargs):
+        calls.append((method, action, arguments or {}, kwargs, self.connection))
+        assert self.connection.token != "local-secret"
+        if self.connection.token == "bad":
+            raise AppError("MN_RUNTIME_UNAUTHENTICATED", "The runtime credential was rejected.", http_status=401)
+        if action == "runtime.capabilities":
+            return reply(
+                {
+                    "runtime_control_version": 1,
+                    "runtime_id": "runtime-one",
+                    "node_name": "node@remote",
+                    "capabilities": sorted(REQUIRED_CAPABILITIES),
+                }
+            )
+        if action == "node.remove":
+            if arguments["node_name"] == "busy@remote":
+                raise AppError("MN_NODE_DRAIN_REQUIRED", "Drain this node first.", http_status=409)
+            return reply({"status": "removed"})
+        if config.error:
+            raise config.error
+        return config.response
+
+    @contextmanager
+    def stream(self, method, action, arguments):
+        calls.append((method, action, arguments, {}, self.connection))
+        try:
+            yield iter(config.frames or [])
+        finally:
+            closed.append("stream")
+
+    def upload(self, action, arguments, chunks):
+        calls.append(("Upload", action, arguments, b"".join(chunks), self.connection))
+        return config.response
+
+    @contextmanager
+    def job_ui(self, frames):
+        def incoming():
+            metadata = next(frames)
+            values = json.loads(metadata.request.arguments_json)
+            calls.append(("JobUi", metadata.request.action, values, {}, self.connection))
+            assert "authorization" not in values["headers"]
+            if values.get("websocket"):
+                yield wire.RuntimeFrame(
+                    version=1,
+                    kind="accepted",
+                    reply=reply(None, 101, subprotocol="chat" if "chat" in values.get("subprotocols", []) else ""),
+                )
+                for frame in frames:
+                    if frame.kind == "close":
+                        return
+                    if frame.data == b"close-worker":
+                        yield close_frame(4001, "worker finished")
+                        return
+                    yield frame
+            else:
+                yield wire.RuntimeFrame(
+                    version=1,
+                    kind="headers",
+                    reply=reply(
+                        None,
+                        206,
+                        **{
+                            "content-type": "application/octet-stream",
+                            "content-range": "bytes 2-5/10",
+                            "x-mn-set-cookies": json.dumps(["one=1; HttpOnly", "two=2"]),
+                        },
+                    ),
+                )
+                body = b"".join(frame.data for frame in frames)
+                yield wire.RuntimeFrame(version=1, kind="data", data=body or b"2345")
+
+        try:
+            yield incoming()
+        finally:
+            closed.append("ui")
+
+    for name, func in [
+        ("__init__", init),
+        ("call", call),
+        ("stream", stream),
+        ("upload_reply", upload),
+        ("job_ui", job_ui),
+    ]:
+        monkeypatch.setattr(RuntimeControlClient, name, func)
+    return SimpleNamespace(home=tmp_path, calls=calls, closed=closed, config=config)
 
 
 def connected():
-    save_connection(RemoteConnection("https://remote/api/v1", "remote-secret", "node@remote"))
+    save_connection(RuntimeConnection("remote:55051", "remote-secret", "node@remote", "runtime-one"))
 
 
-def client(**kwargs):
-    return TestClient(create_client_app(**kwargs), headers={"Authorization": "Bearer local-secret"})
+def client():
+    return TestClient(create_app(), headers={"Authorization": "Bearer local-secret"})
 
 
-def test_health_and_connections_are_local_and_private(home):
-    forwarded = []
-
-    def handshake(request):
-        forwarded.append(request)
-        if request.headers["authorization"] != "Bearer remote-secret":
-            return httpx.Response(401)
-        payload = (
-            {"api_contract": "mirrorneuron.rest.v1"}
-            if request.url.path.endswith("/health")
-            else {"identity": {"actual": "node@remote", "valid": True}}
-        )
-        return httpx.Response(200, json=payload)
-
-    with client(connection_transport=httpx.MockTransport(handshake)) as api:
-        assert api.get("/api/v1/health", headers={"Authorization": ""}).json() == {
-            "status": "ok",
-            "api_contract": "mirrorneuron.rest.v1",
-            "auth": "enabled",
-        }
-        assert not forwarded
+def test_health_and_connection_credentials_are_local(native):
+    with client() as api:
+        assert api.get("/api/v1/health", headers={"Authorization": ""}).json()["status"] == "ok"
+        assert not native.calls
         assert api.get("/api/v1/jobs", headers={"Authorization": "Bearer remote-secret"}).status_code == 401
         assert api.get("/api/v1/jobs").status_code == 503
-        added = api.post("/api/v1/nodes", json={"host": "https://remote", "token": "remote-secret"})
-        assert added.status_code == 201
-        assert "remote-secret" not in added.text
-        assert len(forwarded) == 2
-        before = (home / "client.json").read_bytes()
-        assert api.post("/api/v1/nodes", json={"host": "https://bad", "token": "bad"}).status_code == 401
-        assert (home / "client.json").read_bytes() == before
-        assert api.delete("/api/v1/nodes/wrong").status_code == 409
-        assert api.delete("/api/v1/nodes/node@remote").json()["status"] == "disconnected"
-        assert not (home / "client.json").exists()
-        assert all(r.method == "GET" for r in forwarded)  # No federation POST/DELETE.
+        added = api.post("/api/v1/nodes", json={"host": "remote", "token": "remote-secret"})
+        assert added.status_code == 201 and "remote-secret" not in added.text
+        assert added.headers["location"] == "/api/v1/nodes/node@remote"
+        before = (native.home / "client.json").read_bytes()
+        assert api.post("/api/v1/nodes", json={"host": "replacement", "token": "bad"}).status_code == 401
+        assert (native.home / "client.json").read_bytes() == before
+        assert api.delete("/api/v1/nodes/busy@remote").status_code == 409
+        assert (native.home / "client.json").read_bytes() == before
+        assert api.delete("/api/v1/nodes/node@remote").status_code == 200
+        assert not (native.home / "client.json").exists()
+    assert all(call[4].token != "local-secret" for call in native.calls)
+
+
+@pytest.mark.parametrize("status", [202, 400, 401, 409, 412, 422, 503])
+def test_structured_reply_status_headers_and_request_options(native, status):
+    connected()
+    native.config.response = reply(
+        {"run_id": "r1"} if status < 400 else {"code": "conflict", "detail": "Check the operation."},
+        status,
+        **{
+            "content-type": "application/json" if status < 400 else "application/problem+json",
+            "etag": '"rev-3"',
+            "location": "/api/v1/runs/r1",
+            "retry-after": "2",
+        },
+    )
+    with client() as api:
+        response = api.post(
+            "/api/v1/blueprints/bp/runs",
+            json={"admission_policy": "enqueue_if_busy", "owner_node": "worker", "job_id": "j1"},
+            headers={"Idempotency-Key": "submission-1"},
+        )
+        assert response.status_code == status and response.json() == json.loads(native.config.response.value_json)
+        assert response.headers["etag"] == '"rev-3"' and response.headers["location"] == "/api/v1/runs/r1"
+        assert response.headers["retry-after"] == "2"
+    method, action, args, kw, connection = native.calls[-1]
+    assert method == "Prepare" and action == "create_blueprint_run"
+    assert args["request"]["admission_policy"] == "enqueue_if_busy" and args["request"]["owner_node"] == "worker"
+    assert kw["request_id"] == "submission-1" and "authorization" not in args["_context"].get("headers", {})
 
 
 @pytest.mark.parametrize(
-    "status,content_type,body",
+    "path,content_type,data,status",
     [
-        (202, "application/json", b'{"run_id":"r1"}'),
-        (401, "application/problem+json", b'{"code":"unauthorized"}'),
-        (409, "application/problem+json", b'{"code":"conflict"}'),
-        (206, "application/octet-stream", b"\x00output\xff"),
-        (200, "text/event-stream", b'id: 1\ndata: {"status":"running"}\n\n'),
+        ("/runs/r1/events/stream", "text/event-stream", b"id: event-1\nevent: progress\ndata: {}\n\n", 200),
+        ("/runs/r1/outputs/0", "application/octet-stream", b"2345", 206),
     ],
 )
-def test_relay_preserves_contract_headers_body_and_status(home, status, content_type, body):
+def test_streaming_ranges_and_events_close_native_rpc(native, path, content_type, data, status):
     connected()
-    requests = []
-    stream = Stream(body[:3], body[3:])
+    native.config.frames = [
+        wire.RuntimeFrame(
+            version=1,
+            kind="headers",
+            reply=reply(
+                None, status, **{"content-type": content_type, "content-range": "bytes 2-5/10", "etag": '"rev"'}
+            ),
+        ),
+        wire.RuntimeFrame(version=1, kind="data", data=data),
+    ]
+    with client() as api:
+        response = api.get("/api/v1" + path, headers={"Range": "bytes=2-5", "Last-Event-ID": "event-0"})
+        assert response.status_code == status and response.content == data
+    assert "stream" in native.closed
+    if "events" in path:
+        assert native.calls[-1][2]["last_event_id"] == "event-0"
+    else:
+        assert native.calls[-1][2]["_stream"]["headers"]["range"] == "bytes=2-5"
 
-    async def remote(request):
-        requests.append(request)
-        assert request.headers["authorization"] == "Bearer remote-secret"
-        assert request.headers["idempotency-key"] == "submission-1"
-        assert request.headers["if-match"] == '"rev-2"'
-        assert request.headers["last-event-id"] == "1"
-        assert await request.aread() == b'{"admission_policy":"enqueue_if_busy"}'
-        return httpx.Response(
-            status,
-            stream=stream,
-            headers={
-                "Content-Type": content_type,
-                "ETag": '"rev-3"',
-                "Retry-After": "2",
-                "Content-Disposition": 'attachment; filename="result.zip"',
-                "Location": "https://remote/api/v1/runs/r1",
-                "X-Request-ID": "remote-request",
-            },
+
+def test_empty_stream_is_a_protocol_error_and_closes(native):
+    connected()
+    with client() as api:
+        response = api.get("/api/v1/runs/r1/outputs/0")
+        assert response.status_code == 502 and response.json()["code"] == "MN_RUNTIME_PROTOCOL_ERROR"
+    assert "stream" in native.closed
+
+
+def test_reconnection_changes_next_request_and_failure_is_not_retried(native):
+    connected()
+    with client() as api:
+        assert api.get("/api/v1/nodes").status_code == 200
+        save_connection(RuntimeConnection("new:55052", "new-token", "node@new", "new-runtime"))
+        assert api.get("/api/v1/nodes").status_code == 200
+        assert [call[4].target for call in native.calls] == ["remote:55051", "new:55052"]
+        native.config.error = AppError(
+            "MN_RUNTIME_UNAVAILABLE", "The runtime is unavailable.", internal_message="private-token", http_status=503
         )
-
-    with client(transport=httpx.MockTransport(remote)) as api:
-        response = api.post(
-            "/api/v1/blueprints/bp/runs?node=a%40b",
-            content=b'{"admission_policy":"enqueue_if_busy"}',
-            headers={"Idempotency-Key": "submission-1", "If-Match": '"rev-2"', "Last-Event-ID": "1"},
-        )
-        assert response.status_code == status
-        assert response.content == body
-        assert response.headers["content-type"] == content_type
-        assert response.headers["etag"] == '"rev-3"'
-        assert response.headers["location"] == "/api/v1/runs/r1"
-        assert response.headers["x-request-id"] == "remote-request"
-        assert response.headers["retry-after"] == "2"
-        assert response.headers["content-disposition"].endswith('"result.zip"')
-    assert requests[0].url.query == b"node=a%40b"
-    assert stream.closed
+        response = api.post("/api/v1/blueprints/bp/runs", json={})
+        assert response.status_code == 503 and "private-token" not in response.text
+    assert len(native.calls) == 3
 
 
-def test_live_reconnection_applies_to_next_request(home):
+def test_job_ui_http_and_websocket_preserve_transport(native):
     connected()
-    observed = []
-
-    async def remote(request):
-        observed.append((request.url.host, request.headers["authorization"]))
-        return httpx.Response(200, stream=Stream(b'{"items":[]}'))
-
-    with client(transport=httpx.MockTransport(remote)) as api:
-        api.get("/api/v1/nodes")
-        save_connection(RemoteConnection("https://new/api/v1", "new-token", "new-node"))
-        api.get("/api/v1/nodes")
-    assert observed == [("remote", "Bearer remote-secret"), ("new", "Bearer new-token")]
-
-
-def test_remote_failure_is_sanitized_and_never_retried(home):
-    connected()
-    calls = []
-
-    async def remote(request):
-        calls.append(request)
-        raise httpx.ConnectError("remote-secret failure", request=request)
-
-    with client(transport=httpx.MockTransport(remote)) as api:
-        result = api.post("/api/v1/blueprints/bp/runs", json={})
-        assert result.status_code == 503
-        assert "remote-secret" not in result.text
-        assert "before retrying" in result.json()["hint"]
-    assert len(calls) == 1
-
-
-def test_websocket_auth_and_bidirectional_job_ui(home):
-    connected()
-    observed = []
-
-    class Upstream:
-        subprotocol = None
-
-        def __init__(self):
-            self.messages = asyncio.Queue()
-
-        async def send(self, message):
-            await self.messages.put(message)
-
-        def __aiter__(self):
-            return self
-
-        async def __anext__(self):
-            return await self.messages.get()
-
-    @asynccontextmanager
-    async def connector(url, **kwargs):
-        observed.append((url, kwargs))
-        yield Upstream()
-
-    with client(websocket_connect=connector) as api:
+    with client() as api:
+        response = api.post("/api/v1/jobs/j/ui-proxy/8080/echo", content=b"hello", headers={"Range": "bytes=2-5"})
+        assert response.status_code == 206 and response.content == b"hello"
+        assert len(response.headers.get_list("set-cookie")) == 2
         with pytest.raises(WebSocketDisconnect):
-            with api.websocket_connect("/api/v1/jobs/j/ui/ws", headers={"Authorization": "Bearer remote-secret"}):
+            with api.websocket_connect(
+                "/api/v1/jobs/j/ui-proxy/8080/ws/chat", headers={"Authorization": "Bearer remote-secret"}
+            ):
                 pass
-        assert not observed
-        with api.websocket_connect("/api/v1/jobs/j/ui/ws?channel=screen") as ws:
+        with api.websocket_connect("/api/v1/jobs/j/ui-proxy/8080/ws/chat", subprotocols=["chat"]) as ws:
+            assert ws.accepted_subprotocol == "chat"
             ws.send_text("hello")
             assert ws.receive_text() == "hello"
             ws.send_bytes(b"frame")
             assert ws.receive_bytes() == b"frame"
-    assert observed[0][0] == "wss://remote/api/v1/jobs/j/ui/ws?channel=screen"
-    assert observed[0][1]["additional_headers"]["Authorization"] == "Bearer remote-secret"
+            ws.send_text("close-worker")
+            with pytest.raises(WebSocketDisconnect) as closed:
+                ws.receive_text()
+            assert closed.value.code == 4001 and closed.value.reason == "worker finished"
+    assert native.closed.count("ui") == 2
 
 
-def test_foreground_entrypoint_does_not_load_runtime_state(home):
+def test_foreground_entrypoint_starts_only_uvicorn(native):
     script = """
-import sys, subprocess
-def forbidden(*args, **kwargs): raise AssertionError("local subprocess")
-subprocess.run = subprocess.Popen = forbidden
+import importlib.abc, subprocess, sys
+class NoRuntime(importlib.abc.MetaPathFinder):
+    def find_spec(self,name,*args):
+        if name.split('.')[0] in {'mn_runtime','redis','docker'}: raise AssertionError(name)
+sys.meta_path.insert(0,NoRuntime())
+def forbidden(*args,**kwargs): raise AssertionError("host process")
+class ForbiddenProcess(subprocess.Popen):
+    __init__=forbidden
+subprocess.run=forbidden
+subprocess.Popen=ForbiddenProcess
 import mn_api.main as main
-assert "mn_api.state" not in sys.modules
-assert "mn_api.app" not in sys.modules
-assert "mn_api.mcp_server" not in sys.modules
-calls = []
-main.uvicorn.run = lambda *args, **kwargs: calls.append((args, kwargs))
+calls=[]
+main.uvicorn.run=lambda *a,**kw: calls.append((a,kw))
 main.start()
-assert len(calls) == 1
-assert calls[0][1]["host"] == "127.0.0.1"
-assert calls[0][1]["port"] == 54001
+assert len(calls)==1 and calls[0][0]==("mn_api.main:app",)
+assert calls[0][1]["host"] in {"localhost","127.0.0.1"} and calls[0][1]["port"]==54001
 """
     env = {k: v for k, v in os.environ.items() if k not in {"MN_API_HOST", "MN_API_PORT"}}
     result = subprocess.run([sys.executable, "-c", script], env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
-
-
-def test_cors_preflight_does_not_require_or_bypass_local_auth(home, monkeypatch):
-    monkeypatch.setenv("MN_API_CORS_ALLOW_ORIGINS", "https://desktop.example")
-    with TestClient(create_client_app()) as api:
-        headers = {
-            "Origin": "https://desktop.example",
-            "Access-Control-Request-Method": "POST",
-            "Access-Control-Request-Headers": "authorization,content-type",
-        }
-        response = api.options("/api/v1/nodes", headers=headers)
-        assert response.status_code == 200
-        assert response.headers["access-control-allow-origin"] == "https://desktop.example"
-        assert api.post("/api/v1/nodes", json={}).status_code == 401
-
-
-def test_relay_catalog_run_progress_cancel_and_results(home):
-    connected()
-    expected = [
-        ("GET", "/blueprints", b'{"items":[{"blueprint_id":"bp"}]}'),
-        ("POST", "/blueprints/bp/runs", b'{"run_id":"r","job_id":"j"}'),
-        ("GET", "/runs/r/workflow-progress", b'{"status":"running"}'),
-        ("PATCH", "/runs/r", b'{"status":"cancelled"}'),
-        ("GET", "/runs/r/artifacts/final", b'{"answer":42}'),
-        ("GET", "/runs/r/outputs/0", b"output data"),
-    ]
-    remaining = list(expected)
-
-    async def remote(request):
-        method, suffix, result = remaining.pop(0)
-        assert request.method == method
-        assert request.url.path == "/api/v1" + suffix
-        assert request.headers["authorization"] == "Bearer remote-secret"
-        if method == "PATCH":
-            assert await request.aread() == b'{"desired_state":"cancelled"}'
-        return httpx.Response(200, stream=Stream(result))
-
-    with client(transport=httpx.MockTransport(remote)) as api:
-        for method, suffix, payload in expected:
-            response = api.request(
-                method, "/api/v1" + suffix, content=b'{"desired_state":"cancelled"}' if method == "PATCH" else b""
-            )
-            assert response.status_code == 200
-            assert response.content == payload
-    assert not remaining
-
-
-def test_relay_keeps_multiple_job_ui_cookies_separate(home):
-    connected()
-
-    async def remote(_request):
-        return httpx.Response(
-            200,
-            stream=Stream(b"job ui"),
-            headers=[
-                ("Content-Type", "text/html"),
-                ("Set-Cookie", "session=remote-session; HttpOnly; Path=/api/v1/jobs/j/ui"),
-                ("Set-Cookie", "csrf=remote-csrf; Path=/api/v1/jobs/j/ui"),
-            ],
-        )
-
-    with client(transport=httpx.MockTransport(remote)) as api:
-        result = api.get("/api/v1/jobs/j/ui/proxy")
-        assert result.status_code == 200
-        assert len(result.headers.get_list("set-cookie")) == 2
-        assert result.headers.get_list("set-cookie")[0].startswith("session=")
-        assert result.headers.get_list("set-cookie")[1].startswith("csrf=")

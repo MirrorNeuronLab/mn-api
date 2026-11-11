@@ -1,36 +1,9 @@
+"""Public REST declarations over the shared SDK runtime client."""
+
 from __future__ import annotations
-
-import json
-import asyncio
-import threading
-import os
-import time
-from concurrent.futures import ThreadPoolExecutor
-from hashlib import sha256
-import grpc
-from pathlib import Path
-from typing import Any
-
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, Request, status
-from fastapi.responses import StreamingResponse
-from mn_sdk import RuntimeConfig, RuntimeService, generate_job_definition_submission_id, generate_stable_job_id
-from mn_sdk.integrations.run_reads import history_reason
-from mn_sdk.integrations.job_control import launch_run, _transition_observed, _TransitionConflict
-from mn_sdk.blueprint_support.shared_outputs import load_submission_storage
-from mn_sdk.blueprint_support.observability import list_runs as list_local_runs
-from mn_sdk.shared_run_store import shared_run_dir
-from mn_sdk.staged_artifacts import (
-    ArtifactIntegrityError,
-    ArtifactNotReadyError,
-    StagedArtifactError,
-    is_staged_artifact_ref,
-    resolve_json_reference,
-)
-
-from mn_api.errors import handle_grpc_error
+from mn_api.runtime_adapter import call_runtime
+from fastapi import APIRouter, Depends, Header, Query, Request, status
 from mn_api.job_analysis_models import JobAnalysis
-from mn_api import state
-from mn_api.agent_graph import build_agent_graph
 from mn_api.api_models import (
     HumanAcknowledgement,
     HumanResponse,
@@ -51,40 +24,10 @@ from mn_api.api_models import (
     WorkflowDag,
     WorkflowSteps,
 )
-from mn_api.blueprints import (
-    cleanup_blueprint_run_processes,
-    create_blueprint_run_id,
-    deep_merge,
-    find_blueprint,
-    load_blueprint_bundle,
-    local_blueprint_from_path,
-    start_background_event_relay_if_needed,
-    start_background_run_relay,
-    write_blueprint_job_mapping,
-)
-from mn_api.bundles import uploaded_bundle_root
 from mn_api.contracts import API_PREFIX, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 from mn_api.dependencies import require_auth
-from mn_api.errors import run_start_admission_error
-from mn_api.http_semantics import idempotency_records, require_if_match
-from mn_api.launch_progress import launch_activity, observe_submission, progress_reporter
-from mn_api.operations import encode_sse, sse_envelope, start_local_operation, start_operation
-from mn_api.pagination import page, page_tokens
-from mn_api.public import decode, idempotent_response, public_value, records, resource_response
-from mn_api.run_recovery import stored_progress, stored_run
-from mn_api.run_file_routing import HOP_HEADER as RUN_FILE_HOP_HEADER, owner_file_response
-from mn_api.run_store import shared_result_events
-from mn_api import job_projection as runtime_job_routes
-from mn_api import run_projection as runtime_run_routes
-from mn_api.workflow_shape import dag_view, definition_shape, latest_run_shape, progress_only, steps_view
-
 
 router = APIRouter(prefix=API_PREFIX)
-_TERMINAL = {"completed", "failed", "cancelled", "canceled", "deleted"}
-
-
-def _service() -> RuntimeService:
-    return RuntimeService(state.client)
 
 
 @router.post(
@@ -94,325 +37,39 @@ def _service() -> RuntimeService:
     tags=["jobs"],
     response_model=ResourceModel,
 )
-def relocate_job(job_id: str, request: JobRelocationCreate, principal=Depends(require_auth)):
-    operation_id = "op-local-" + sha256(json.dumps([principal, job_id, request.transfer_id]).encode()).hexdigest()
-    options = {"job_id": job_id, **request.model_dump()}
-
-    def work(progress):
-        progress(stage="transfer", label="Move co-worker", detail="Verifying data and transferring ownership.")
-        return _service().relocate_job(job_id, request.target_node, transfer_id=request.transfer_id)
-
-    operation = start_local_operation(
-        "relocate_job",
-        options,
-        work,
-        operation_id=operation_id,
-        request_fingerprint=idempotency_records.fingerprint(options),
-        durable=True,
-        retry_failed=True,
-    )
-    return resource_response(operation, status_code=202, location=f"{API_PREFIX}/operations/{operation_id}")
-
-
-def _sort_timestamp(resource: dict[str, Any]) -> str:
-    return str(
-        resource.get("created_at")
-        or resource.get("submitted_at")
-        or resource.get("started_at")
-        or resource.get("updated_at")
-        or ""
-    )
-
-
-def _revision(resource: dict[str, Any]) -> int:
-    try:
-        return int(resource.get("revision") or 0)
-    except (TypeError, ValueError):
-        return 0
-
-
-def _upstream_page(
-    *,
-    load,
-    collection_keys: tuple[str, ...],
-    route: str,
-    principal: str,
-    filters: dict[str, Any],
-    page_size: int,
-    page_token: str | None,
-    sort_key: str,
-) -> dict[str, Any]:
-    upstream_token = ""
-    if page_token:
-        cursor = page_tokens.resolve(
-            page_token,
-            route=route,
-            principal=principal,
-            filters=filters,
-            sort_key=sort_key,
-        )
-        upstream_token = cursor.upstream_token or ""
-    payload = decode(load(page_size, upstream_token))
-    items = records(payload, "items", *collection_keys, "data")
-    next_upstream = payload.get("next_page_token") if isinstance(payload, dict) else None
-    next_page_token = None
-    if next_upstream:
-        next_page_token = page_tokens.issue(
-            route=route,
-            principal=principal,
-            filters=filters,
-            sort_key=sort_key,
-            offset=0,
-            snapshot=(),
-            upstream_token=str(next_upstream),
-        )
-    return {"items": items, "next_page_token": next_page_token}
-
-
-def _history_reason(exc: Exception) -> str:
-    """Require a recoverable owner read before consulting replicated data."""
-    reason = history_reason(exc)
-    if isinstance(exc, HTTPException):
-        reason = {404: "missing", 503: "unavailable", 504: "unavailable"}.get(exc.status_code)
-    if reason is None:
-        raise exc
-    return reason
-
-
-def _runtime_output_id(run_id: str, *, run: dict[str, Any] | None = None) -> str:
-    if run is None:
-        try:
-            run = _service().get_run(run_id)
-        except Exception as exc:
-            _history_reason(exc)
-            if stored_run(run_id) is None:
-                raise
-            return run_id
-    if shared_run_dir(run_id) is not None:
-        return run_id
-    for key in ("runtime_run_id", "runtime_job_id", "output_run_id"):
-        value = run.get(key)
-        if value:
-            return str(value)
-    for ref_key in ("run_data_ref", "result_ref", "workflow_state_ref"):
-        reference = run.get(ref_key)
-        if isinstance(reference, dict):
-            value = reference.get("run_id") or reference.get("runtime_run_id")
-            if value:
-                return str(value)
-    return run_id
-
-
-def _runtime_output_location(
-    run_id: str,
-    *,
-    run: dict[str, Any] | None = None,
-) -> tuple[str, dict[str, Any]]:
-    """Carry Core's exact data binding into file readers without another RPC."""
-    if run is None:
-        try:
-            run = _service().get_run(run_id)
-        except Exception as exc:
-            _history_reason(exc)
-            if stored_run(run_id) is None:
-                raise
-            return run_id, {}
-    runtime_id = _runtime_output_id(run_id, run=run)
-    reference = run.get("run_data_ref")
-    if (
-        isinstance(reference, dict)
-        and reference.get("storage") == "syncthing"
-        and reference.get("run_id") == runtime_id
-    ):
-        return runtime_id, {"run_data_ref": reference}
-    return runtime_id, {}
-
-
-def _run_file_location(run_id: str, request: Request, resource: str):
-    """Resolve one canonical Run read for owner routing and local file access."""
-    try:
-        run = _service().get_run(run_id)
-    except Exception as exc:
-        _history_reason(exc)
-        if request.headers.get(RUN_FILE_HOP_HEADER) is not None:
-            raise HTTPException(503, "The run-file owner could not verify its storage binding.")
-        if stored_run(run_id) is None:
-            raise
-        return None, run_id, {}, {}
-    response = owner_file_response(run_id, run, request, resource)
-    if response is not None:
-        return response, "", {}, run
-    runtime_id, options = _runtime_output_location(run_id, run=run)
-    return None, runtime_id, options, run
-
-
-def _resolve_run_result_reference(run_id: str, *, run: dict[str, Any] | None = None) -> Any | None:
-    run = _service().get_run(run_id) if run is None else run
-    reference = run.get("result_ref")
-    if not is_staged_artifact_ref(reference):
-        result = run.get("result")
-        reference = result.get("result_ref") if isinstance(result, dict) else None
-    if not is_staged_artifact_ref(reference):
-        return None
-    resolution_env = dict(os.environ)
-    resolution_env.setdefault(
-        "MN_HOST_SHARED_STORAGE_ROOT",
-        RuntimeConfig.from_env().shared_storage_root,
-    )
-    return resolve_json_reference(reference, env=resolution_env)
-
-
-def _run_public(value: Any, *, run_id: str, runtime_run_id: str | None = None) -> Any:
-    runtime_id = runtime_run_id or _runtime_output_id(run_id)
-
-    def rewrite(item: Any) -> Any:
-        if isinstance(item, dict):
-            return {key: rewrite(child) for key, child in item.items()}
-        if isinstance(item, list):
-            return [rewrite(child) for child in item]
-        if isinstance(item, str) and item.startswith("/api/"):
-            suffix = item.split("/artifacts/", 1)
-            if len(suffix) == 2:
-                return f"{API_PREFIX}/runs/{run_id}/artifacts/{suffix[1]}"
-            suffix = item.split("/outputs/", 1)
-            if len(suffix) == 2:
-                return f"{API_PREFIX}/runs/{run_id}/outputs/{suffix[1]}"
-            return item
-        return item
-
-    result = public_value(rewrite(value))
-    if isinstance(result, dict):
-        result["run_id"] = run_id
-        if runtime_id != run_id:
-            result.setdefault("runtime_run_id", runtime_id)
-    return result
+async def relocate_job(job_id: str, request: JobRelocationCreate, principal=Depends(require_auth)):
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("relocate_job", locals())
 
 
 @router.post(
     "/jobs", status_code=status.HTTP_201_CREATED, operation_id="create_job", tags=["jobs"], response_model=ResourceModel
 )
-def create_job(
+async def create_job(
     request: JobCreate,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", max_length=255),
     principal: str = Depends(require_auth),
     progress_id: str | None = Header(default=None, alias="X-Launch-Progress-ID", max_length=220),
 ):
-    from mn_api.blueprint_launch import validate_progress_id
-
-    progress_id = validate_progress_id(progress_id if isinstance(progress_id, str) else None)
-    sources = int(bool(request.blueprint_id)) + int(bool(request.bundle_id))
-    if sources != 1:
-        raise HTTPException(status_code=422, detail="Exactly one of blueprint_id or bundle_id is required.")
-
-    def create():
-        if request.blueprint_id:
-            repo_root, blueprint = find_blueprint(state.refresh_config_from_env(), request.blueprint_id)
-        else:
-            bundle_root = uploaded_bundle_root(str(request.bundle_id), state.BUNDLE_UPLOAD_ROOT)
-            repo_root, blueprint = local_blueprint_from_path(str(bundle_root))
-        blueprint_id = str(blueprint["id"])
-        stable_job_id = request.job_id or generate_stable_job_id(blueprint_id)
-        owner_node = str(request.owner_node or "").strip()
-        env_overrides = {"MN_SELECTED_RUNTIME_NODE": owner_node} if owner_node else None
-        # Command validators must run at this trusted adapter boundary. Core
-        # safely rechecks declarative rules but refuses arbitrary commands.
-        manifest_json, payloads = load_blueprint_bundle(
-            repo_root,
-            blueprint,
-            create_blueprint_run_id(blueprint_id),
-            config_overrides=request.resolved_configuration,
-            env_overrides=env_overrides,
-            validate_inputs=True,
-            stable_job_id=stable_job_id,
-            submission_id=generate_job_definition_submission_id(stable_job_id),
-            progress_callback=progress_reporter(progress_id),
-        )
-        with launch_activity(
-            progress_reporter(progress_id, "submit"),
-            "Submit job definition.",
-            "Waiting for the runtime to acknowledge the prepared definition.",
-            stage="job_submission",
-        ):
-            return _service().create_job(
-                manifest_json,
-                payloads,
-                job_id=stable_job_id,
-                resolved_configuration=request.resolved_configuration,
-                storage=request.storage,
-                idempotency_key=idempotency_key or "",
-                prepared=True,
-                owner_node=owner_node or None,
-            )
-
-    def observed_create():
-        with observe_submission(progress_id):
-            return create()
-
-    body = request.model_dump()
-    return idempotent_response(
-        principal=principal,
-        route=f"{API_PREFIX}/jobs",
-        key=idempotency_key,
-        body=body,
-        call=observed_create,
-        status_code=status.HTTP_201_CREATED,
-        location=lambda result: f"{API_PREFIX}/jobs/{result.get('job_id') or result.get('id')}",
-    )
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("create_job", locals())
 
 
 @router.get("/jobs", operation_id="list_jobs", tags=["jobs"], response_model=PageResponse)
-def list_jobs(
+async def list_jobs(
     include_archived: bool = False,
     page_size: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     page_token: str | None = None,
     principal: str = Depends(require_auth),
 ):
-    return _upstream_page(
-        load=lambda size, token: _service().list_jobs(
-            include_archived=include_archived,
-            page_size=size,
-            page_token=token,
-        ),
-        collection_keys=("jobs",),
-        route=f"{API_PREFIX}/jobs",
-        principal=principal,
-        filters={"include_archived": include_archived},
-        page_size=page_size,
-        page_token=page_token,
-        sort_key="created_at,job_id",
-    )
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("list_jobs", locals())
 
 
 @router.get("/jobs/{job_id}", operation_id="get_job", tags=["jobs"], response_model=ResourceModel)
-def get_job(job_id: str, _principal=Depends(require_auth)):
-    job = dict(_service().get_job(job_id))
-    job.pop("workflow_definition", None)
-    return resource_response(job, etag=True)
-
-
-def _job_workflow_shape(job_id: str, source: str) -> dict[str, Any]:
-    job = _service().get_job(job_id, include_workflow_definition=True)
-    if source == "definition":
-        definition = job.get("workflow_definition")
-        shape = definition_shape(job_id, definition if isinstance(definition, dict) else {})
-        shape["workflow_id"] = shape["workflow_id"] or str(job.get("graph_id") or "")
-        return shape
-    run_id = str(job.get("latest_run_id") or "").strip()
-    if not run_id:
-        raise HTTPException(status_code=404, detail="Job has no latest run.")
-    run = _service().get_run(run_id)
-    if str(run.get("job_id") or "") != job_id:
-        raise HTTPException(status_code=404, detail="Job has no latest run.")
-    snapshot = runtime_job_routes._workflow_progress_snapshot_for_run(run_id)
-    shape = latest_run_shape(job_id, run_id, snapshot)
-    if not shape["steps"]:
-        definition = job.get("workflow_definition")
-        saved = definition_shape(job_id, definition if isinstance(definition, dict) else {})
-        shape["steps"] = saved["steps"]
-        shape["edges"] = saved["edges"]
-        shape["layers"] = saved["layers"]
-        shape["workflow_id"] = shape["workflow_id"] or saved["workflow_id"] or str(job.get("graph_id") or "")
-    return shape
+async def get_job(job_id: str, _principal=Depends(require_auth)):
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("get_job", locals())
 
 
 @router.get(
@@ -421,8 +78,9 @@ def _job_workflow_shape(job_id: str, source: str) -> dict[str, Any]:
     tags=["jobs"],
     response_model=WorkflowDag,
 )
-def get_job_definition_dag(job_id: str, _principal=Depends(require_auth)):
-    return dag_view(_job_workflow_shape(job_id, "definition"))
+async def get_job_definition_dag(job_id: str, _principal=Depends(require_auth)):
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("get_job_definition_dag", locals())
 
 
 @router.get(
@@ -431,8 +89,9 @@ def get_job_definition_dag(job_id: str, _principal=Depends(require_auth)):
     tags=["jobs"],
     response_model=WorkflowSteps,
 )
-def get_job_definition_steps(job_id: str, _principal=Depends(require_auth)):
-    return steps_view(_job_workflow_shape(job_id, "definition"))
+async def get_job_definition_steps(job_id: str, _principal=Depends(require_auth)):
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("get_job_definition_steps", locals())
 
 
 @router.get(
@@ -441,8 +100,9 @@ def get_job_definition_steps(job_id: str, _principal=Depends(require_auth)):
     tags=["jobs"],
     response_model=WorkflowDag,
 )
-def get_job_latest_run_dag(job_id: str, _principal=Depends(require_auth)):
-    return dag_view(_job_workflow_shape(job_id, "latest_run"))
+async def get_job_latest_run_dag(job_id: str, _principal=Depends(require_auth)):
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("get_job_latest_run_dag", locals())
 
 
 @router.get(
@@ -451,148 +111,45 @@ def get_job_latest_run_dag(job_id: str, _principal=Depends(require_auth)):
     tags=["jobs"],
     response_model=WorkflowSteps,
 )
-def get_job_latest_run_steps(job_id: str, _principal=Depends(require_auth)):
-    return steps_view(_job_workflow_shape(job_id, "latest_run"))
+async def get_job_latest_run_steps(job_id: str, _principal=Depends(require_auth)):
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("get_job_latest_run_steps", locals())
 
 
 @router.get("/jobs/{job_id}/ui", operation_id="get_job_ui", tags=["jobs"], response_model=ResourceModel)
-def get_job_ui(job_id: str, principal=Depends(require_auth), check_readiness: bool = True):
-    # Confirm the durable definition exists before reading its host-visible
-    # shared UI handle. A UI belongs to the Job, not any individual Run.
-    _service().get_job(job_id)
-    return public_value(runtime_job_routes.get_job_ui(job_id, principal, check_readiness))
-
-
-def _prepare_catalog_job_update(
-    job_id: str,
-    current: dict[str, Any],
-    resolved_configuration: dict[str, Any],
-    *,
-    validate_inputs: bool,
-    blueprint_run_id: str | None = None,
-    catalog_entry: tuple[Path, dict[str, Any]] | None = None,
-) -> tuple[str, dict[str, bytes]]:
-    blueprint_id = str(current.get("blueprint_id") or "").strip()
-    if not blueprint_id:
-        raise HTTPException(
-            status_code=422,
-            detail="Catalog configuration overrides require a Job with a blueprint_id.",
-        )
-    repo_root, blueprint = (
-        catalog_entry if catalog_entry is not None else find_blueprint(state.refresh_config_from_env(), blueprint_id)
-    )
-    owner_node = str(current.get("owner_node") or "").strip()
-    return load_blueprint_bundle(
-        repo_root,
-        blueprint,
-        blueprint_run_id or create_blueprint_run_id(blueprint_id),
-        config_overrides=resolved_configuration,
-        env_overrides={"MN_SELECTED_RUNTIME_NODE": owner_node} if owner_node else None,
-        validate_inputs=validate_inputs,
-        stable_job_id=job_id,
-        submission_id=generate_job_definition_submission_id(job_id),
-    )
+async def get_job_ui(job_id: str, http_request: Request, principal=Depends(require_auth), check_readiness: bool = True):
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("get_job_ui", locals())
 
 
 @router.patch("/jobs/{job_id}", operation_id="update_job", tags=["jobs"], response_model=ResourceModel)
-def update_job(
+async def update_job(
     job_id: str,
     request: JobUpdate,
     if_match: str | None = Header(default=None, alias="If-Match"),
     _principal=Depends(require_auth),
 ):
-    current = public_value(_service().get_job(job_id))
-    require_if_match(if_match, current)
-    if request.status == "archived":
-        result = _service().archive_job(job_id, expected_revision=_revision(current))
-    else:
-        attrs = {
-            key: value
-            for key, value in request.model_dump(exclude_none=True).items()
-            if key not in {"status", "refresh_contract"}
-        }
-        if request.refresh_contract:
-            latest_run_id = current.get("latest_run_id")
-            if latest_run_id:
-                latest = _service().get_run(latest_run_id)
-                if latest.get("status") not in _TERMINAL:
-                    raise HTTPException(status_code=409, detail="Stop the active run before updating its MCP contract.")
-            attrs["resolved_configuration"] = (
-                request.resolved_configuration
-                if request.resolved_configuration is not None
-                else current.get("resolved_configuration", {})
-            )
-        if request.status:
-            attrs["status"] = request.status
-        if (
-            request.resolved_configuration is not None
-            and not request.refresh_contract
-            and isinstance(current.get("resolved_configuration"), dict)
-            and request.resolved_configuration == current["resolved_configuration"]
-        ):
-            # A repeated configuration sync must not rebuild the bundle or
-            # advance the revision while a run is preparing from this Job.
-            attrs.pop("resolved_configuration", None)
-            if not attrs:
-                return resource_response(current, etag=True)
-        if "resolved_configuration" in attrs:
-            manifest_json, payloads = _prepare_catalog_job_update(
-                job_id,
-                current,
-                attrs["resolved_configuration"],
-                validate_inputs=True,
-            )
-            result = _service().update_job(
-                job_id,
-                attrs,
-                manifest_json=manifest_json,
-                payloads=payloads,
-                expected_revision=_revision(current),
-            )
-        else:
-            result = _service().update_job(job_id, attrs, expected_revision=_revision(current))
-    return resource_response(result, etag=True)
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("update_job", locals())
 
 
 @router.put("/jobs/{job_id}/bundle", operation_id="replace_job_bundle", tags=["jobs"], response_model=ResourceModel)
-def replace_job_bundle(
+async def replace_job_bundle(
     job_id: str,
     request: JobBundleReplacement,
     if_match: str | None = Header(default=None, alias="If-Match"),
     _principal=Depends(require_auth),
 ):
-    current = public_value(_service().get_job(job_id))
-    require_if_match(if_match, current)
-    bundle_root = uploaded_bundle_root(request.bundle_id, state.BUNDLE_UPLOAD_ROOT)
-    repo_root, blueprint = local_blueprint_from_path(str(bundle_root))
-    manifest_json, payloads = load_blueprint_bundle(
-        repo_root,
-        blueprint,
-        create_blueprint_run_id(str(blueprint["id"])),
-        stable_job_id=job_id,
-        config_overrides=current.get("resolved_configuration"),
-    )
-    result = _service().update_job(
-        job_id,
-        {},
-        manifest_json=manifest_json,
-        payloads=payloads,
-        expected_revision=_revision(current),
-        replace_existing_run=request.replace_existing_run,
-    )
-    return resource_response(result, etag=True)
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("replace_job_bundle", locals())
 
 
 @router.delete("/jobs/{job_id}", status_code=status.HTTP_204_NO_CONTENT, operation_id="delete_job", tags=["jobs"])
-def delete_job(
-    job_id: str,
-    if_match: str | None = Header(default=None, alias="If-Match"),
-    _principal=Depends(require_auth),
+async def delete_job(
+    job_id: str, if_match: str | None = Header(default=None, alias="If-Match"), _principal=Depends(require_auth)
 ):
-    current = public_value(_service().get_job(job_id))
-    require_if_match(if_match, current)
-    _service().delete_job(job_id, confirmed=True, expected_revision=_revision(current))
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("delete_job", locals())
 
 
 @router.post(
@@ -602,20 +159,13 @@ def delete_job(
     tags=["jobs"],
     response_model=ResourceModel,
 )
-def create_job_data_reset(
+async def create_job_data_reset(
     job_id: str,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", max_length=255),
     principal: str = Depends(require_auth),
 ):
-    return idempotent_response(
-        principal=principal,
-        route=f"{API_PREFIX}/jobs/{job_id}/data-resets",
-        key=idempotency_key,
-        body={"job_id": job_id},
-        call=lambda: start_operation("reset_job_data", {"job_id": job_id}),
-        status_code=status.HTTP_202_ACCEPTED,
-        location=lambda result: f"{API_PREFIX}/operations/{result.get('operation_id') or result.get('id')}",
-    )
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("create_job_data_reset", locals())
 
 
 @router.post(
@@ -624,15 +174,9 @@ def create_job_data_reset(
     tags=["runs"],
     response_model=ResourceModel,
 )
-def check_job_run_admission(job_id: str, request: RunAdmissionCheck, _principal=Depends(require_auth)):
-    current = public_value(_service().get_job(job_id))
-    saved = current.get("resolved_configuration") or {}
-    if request.config_overrides and deep_merge(saved, request.config_overrides) != saved:
-        # A read-only check must never prepare containers or update a Job.
-        raise HTTPException(status_code=409, detail="Save the co-worker configuration before checking resources.")
-    if request.action != "start" and not request.run_id:
-        raise HTTPException(status_code=422, detail="run_id is required for resume or retry admission.")
-    return public_value(_service().check_run_admission(job_id, run_id=request.run_id or ""))
+async def check_job_run_admission(job_id: str, request: RunAdmissionCheck, _principal=Depends(require_auth)):
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("check_job_run_admission", locals())
 
 
 @router.post(
@@ -642,145 +186,14 @@ def check_job_run_admission(job_id: str, request: RunAdmissionCheck, _principal=
     tags=["runs"],
     response_model=ResourceModel,
 )
-def create_job_run(
+async def create_job_run(
     job_id: str,
     request: RunCreate,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", max_length=255),
     principal: str = Depends(require_auth),
 ):
-    def start():
-        run_id = request.run_id
-        relay = None
-        if request.replace_existing_run and not run_id:
-            raise HTTPException(
-                status_code=422,
-                detail="replace_existing_run requires a fresh explicit run_id",
-            )
-        current = public_value(_service().get_job(job_id))
-        blueprint_id = str(current.get("blueprint_id") or "").strip()
-        saved_configuration = current.get("resolved_configuration") or {}
-        resolved_configuration = deep_merge(saved_configuration, request.config_overrides or {})
-        # Starting a prepared durable Job is the same operation as `mn job start`.
-        # Rebuild only for an actual configuration change, not a status refresh.
-        if blueprint_id and resolved_configuration != saved_configuration:
-            repo_root, blueprint = find_blueprint(state.refresh_config_from_env(), blueprint_id)
-            blueprint_run_id = create_blueprint_run_id(blueprint_id)
-            manifest_json, payloads = _prepare_catalog_job_update(
-                job_id,
-                current,
-                resolved_configuration,
-                validate_inputs=True,
-                blueprint_run_id=blueprint_run_id,
-                catalog_entry=(repo_root, blueprint),
-            )
-            configuration_already_saved = False
-            if request.config_overrides:
-                # Preparing the bundle can take minutes. Status/context updates
-                # may advance the Job revision in that interval, so use the
-                # latest revision when its configuration is still unchanged.
-                for attempt in range(3):
-                    latest = public_value(_service().get_job(job_id))
-                    latest_configuration = latest.get("resolved_configuration") or {}
-                    if latest_configuration == resolved_configuration:
-                        # A concurrent configuration sync prepared this exact
-                        # Job while the run request was preparing its bundle.
-                        configuration_already_saved = True
-                        break
-                    if latest_configuration != saved_configuration:
-                        cleanup_blueprint_run_processes(blueprint_run_id, reason="launch_conflict")
-                        raise HTTPException(status_code=409, detail="Job configuration changed during run preparation.")
-                    try:
-                        _service().update_job(
-                            job_id,
-                            {"resolved_configuration": resolved_configuration},
-                            manifest_json=manifest_json,
-                            payloads=payloads,
-                            expected_revision=_revision(latest),
-                        )
-                        break
-                    except grpc.RpcError as exc:
-                        if (
-                            attempt == 2
-                            or exc.code() not in {grpc.StatusCode.ABORTED, grpc.StatusCode.FAILED_PRECONDITION}
-                            or "revision_mismatch" not in (exc.details() or "")
-                        ):
-                            raise
-            if configuration_already_saved:
-                cleanup_blueprint_run_processes(blueprint_run_id, reason="redundant_preparation")
-            else:
-                relay = (repo_root, blueprint, blueprint_run_id, manifest_json, resolved_configuration, current)
-        try:
-            run = launch_run(
-                _service(),
-                job_id,
-                run_id=run_id,
-                inputs=request.inputs,
-                idempotency_key=idempotency_key or "",
-                replace_existing_run=request.replace_existing_run,
-                admission_policy=request.admission_policy,
-            )
-        except Exception as exc:
-            if relay:
-                cleanup_blueprint_run_processes(relay[2], reason="launch_failed")
-            admission_error = run_start_admission_error(exc)
-            if admission_error is not None:
-                raise admission_error from exc
-            raise
-        run.setdefault("status", "pending")
-        if relay:
-            repo_root, blueprint, blueprint_run_id, manifest_json, resolved_configuration, current = relay
-            execution_id = str(run.get("run_id") or run.get("id") or "").strip()
-            if execution_id:
-                runtime_config = state.refresh_config_from_env()
-                write_blueprint_job_mapping(
-                    blueprint_run_id,
-                    job_id,
-                    execution_id,
-                    blueprint_id=str(current.get("blueprint_id") or "").strip() or None,
-                    blueprint_revision=str(blueprint.get("revision") or "").strip() or None,
-                    blueprint_source=getattr(runtime_config, "blueprint_source", None),
-                    blueprint_path=str(Path(repo_root) / str(blueprint.get("path") or blueprint["id"])),
-                    monitor_manifest=json.loads(manifest_json),
-                )
-                start_background_event_relay_if_needed(
-                    repo_root,
-                    blueprint,
-                    blueprint_run_id,
-                    execution_id,
-                    manifest_json,
-                    config_overrides=resolved_configuration,
-                    grpc_target=getattr(runtime_config, "grpc_target", None),
-                    grpc_auth_token=getattr(runtime_config, "grpc_auth_token", None),
-                    grpc_timeout_seconds=getattr(runtime_config, "grpc_timeout_seconds", None),
-                )
-        else:
-            execution_id = str(run.get("run_id") or run.get("id") or "").strip()
-            ownership = current.get("native_resource_ownership") or {}
-            submission_id = str(ownership.get("submission_id") or "").strip() if isinstance(ownership, dict) else ""
-            if execution_id and submission_id:
-                runtime_config = state.refresh_config_from_env()
-                storage = load_submission_storage(RuntimeConfig.from_env().shared_storage_root, submission_id)
-                if storage.get("output_copy"):
-                    start_background_run_relay(
-                        execution_id,
-                        execution_id,
-                        storage,
-                        config=resolved_configuration,
-                        grpc_target=getattr(runtime_config, "grpc_target", None),
-                        grpc_auth_token=getattr(runtime_config, "grpc_auth_token", None),
-                        grpc_timeout_seconds=getattr(runtime_config, "grpc_timeout_seconds", None),
-                    )
-        return run
-
-    return idempotent_response(
-        principal=principal,
-        route=f"{API_PREFIX}/jobs/{job_id}/runs",
-        key=idempotency_key,
-        body=request.model_dump(),
-        call=start,
-        status_code=status.HTTP_202_ACCEPTED,
-        location=lambda result: f"{API_PREFIX}/runs/{result.get('run_id') or result.get('id')}",
-    )
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("create_job_run", locals())
 
 
 @router.post(
@@ -790,249 +203,65 @@ def create_job_run(
     tags=["runs"],
     response_model=ResourceModel,
 )
-def create_job_run_operation(
+async def create_job_run_operation(
     job_id: str,
     request: RunCreate,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", max_length=255),
     principal: str = Depends(require_auth),
 ):
-    if not idempotency_key:
-        raise HTTPException(status_code=400, detail="Idempotency-Key is required for an asynchronous launch.")
-    route = f"{API_PREFIX}/jobs/{job_id}/run-operations"
-    operation_id = (
-        "op-local-"
-        + sha256(json.dumps([principal, route, idempotency_key], separators=(",", ":")).encode("utf-8")).hexdigest()
-    )
-    fingerprint = idempotency_records.fingerprint(request.model_dump())
-
-    def launch(report_progress):
-        # A Core deadline can arrive after UpdateJob committed. The next attempt
-        # reads the Job first, skips an already committed configuration, and
-        # starts the Run with the same Core idempotency key.
-        for attempt in range(10):
-            report_progress(
-                percent=min(10 + attempt * 8, 85),
-                stage="submit",
-                label="Start run",
-                detail="Reconciling the Job and submitting its run."
-                if attempt
-                else "Submitting the run to MirrorNeuron.",
-            )
-            try:
-                response = create_job_run(job_id, request, idempotency_key, principal)
-                result = json.loads(response.body)
-                if not isinstance(result, dict) or not result.get("run_id"):
-                    raise RuntimeError("MirrorNeuron did not return the started Run ID.")
-                return result
-            except grpc.RpcError as exc:
-                if exc.code() not in {grpc.StatusCode.DEADLINE_EXCEEDED, grpc.StatusCode.UNAVAILABLE} or attempt == 9:
-                    raise
-                time.sleep(min(2**attempt, 30))
-        raise RuntimeError("The run could not be submitted.")
-
-    operation = start_local_operation(
-        "create_job_run",
-        {"job_id": job_id},
-        launch,
-        operation_id=operation_id,
-        request_fingerprint=fingerprint,
-        durable=True,
-    )
-    return resource_response(
-        operation,
-        status_code=status.HTTP_202_ACCEPTED,
-        location=f"{API_PREFIX}/operations/{operation_id}",
-    )
-
-
-def _all_runs() -> list[dict[str, Any]]:
-    try:
-        jobs = records(_service().list_jobs(include_archived=True), "items", "jobs", "data")
-    except Exception as exc:
-        _history_reason(exc)
-        jobs = []
-    runs: dict[str, dict[str, Any]] = {
-        str(run["run_id"]): run for run in list_local_runs() if isinstance(run, dict) and run.get("run_id")
-    }
-    core_ids: set[str] = set()
-
-    def job_runs(job):
-        job_id = str(job.get("job_id") or "")
-        if not job_id:
-            return []
-        try:
-            return records(_service().list_runs(job_id), "items", "runs", "data")
-        except Exception as exc:
-            _history_reason(exc)
-            return []
-
-    # Bound fan-out so one slow owner does not serialize every other Job.
-    # Merge on this thread in input order, preserving existing precedence.
-    with ThreadPoolExecutor(max_workers=8, thread_name_prefix="mn-run-list") as executor:
-        for result in executor.map(job_runs, jobs):
-            for run in result:
-                run_id = str(run.get("run_id") or "")
-                if run_id:
-                    core_ids.add(run_id)
-                    runs[run_id] = {**runs.get(run_id, {}), **run}
-                    if "placement" in runs[run_id]:
-                        runs[run_id]["placement"] = run.get("placement")
-    for run_id, run in runs.items():
-        run["record_source"] = "runtime" if run_id in core_ids else "history"
-        if run_id not in core_ids:
-            if "placement" in run:
-                run["placement"] = None
-            run["retry"] = {
-                "available": False,
-                "reason": "Recovery is unverified. Check Core availability and plan a retry.",
-            }
-        if run_id not in core_ids and str(run.get("status") or "").lower() not in _TERMINAL | {"unknown"}:
-            run["status"] = "unknown"
-    return list(runs.values())
-
-
-def _page_runs(
-    items: list[dict[str, Any]],
-    *,
-    route: str,
-    principal: str,
-    filters: dict[str, Any],
-    page_size: int,
-    page_token: str | None,
-):
-    return page(
-        items,
-        route=route,
-        principal=principal,
-        filters=filters,
-        page_size=page_size,
-        page_token=page_token,
-        sort_key="-created_at,-run_id",
-        key=lambda item: (_sort_timestamp(item), str(item.get("run_id") or "")),
-        identity=lambda item: str(item.get("run_id") or ""),
-        reverse=True,
-    )
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("create_job_run_operation", locals())
 
 
 @router.get("/jobs/{job_id}/analysis", operation_id="get_job_analysis", tags=["jobs"], response_model=JobAnalysis)
 async def get_job_analysis(job_id: str, request: Request, principal=Depends(require_auth)):
-    cancelled = threading.Event()
-    task = asyncio.create_task(asyncio.to_thread(_service().analyze_job, job_id, cancelled=cancelled.is_set))
-    try:
-        while not task.done():
-            if await request.is_disconnected():
-                cancelled.set()
-                raise HTTPException(status_code=499, detail="Analysis request cancelled")
-            await asyncio.wait({task}, timeout=0.1)
-        return await task
-    except grpc.RpcError as error:
-        return handle_grpc_error(error)
-    except TimeoutError:
-        raise HTTPException(status_code=504, detail="Job analysis timed out. Try again.") from None
-    finally:
-        cancelled.set()
-        if not task.done():
-            task.cancel()
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("get_job_analysis", locals())
 
 
 @router.get("/jobs/{job_id}/runs", operation_id="list_job_runs", tags=["runs"], response_model=PageResponse)
-def list_job_runs(
+async def list_job_runs(
     job_id: str,
     include_terminal: bool = True,
     page_size: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     page_token: str | None = None,
     principal: str = Depends(require_auth),
 ):
-    return _upstream_page(
-        load=lambda size, token: _service().list_runs(job_id, page_size=size, page_token=token),
-        collection_keys=("runs",),
-        route=f"{API_PREFIX}/jobs/{job_id}/runs",
-        principal=principal,
-        filters={"include_terminal": include_terminal},
-        page_size=page_size,
-        page_token=page_token,
-        sort_key="created_at,run_id",
-    )
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("list_job_runs", locals())
 
 
 @router.get("/runs", operation_id="list_runs", tags=["runs"], response_model=PageResponse)
-def list_runs(
+async def list_runs(
     include_terminal: bool = True,
     page_size: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     page_token: str | None = None,
     principal: str = Depends(require_auth),
 ):
-    items = _all_runs()
-    if not include_terminal:
-        items = [item for item in items if str(item.get("status") or "").lower() not in _TERMINAL]
-    return _page_runs(
-        items,
-        route=f"{API_PREFIX}/runs",
-        principal=principal,
-        filters={"include_terminal": include_terminal},
-        page_size=page_size,
-        page_token=page_token,
-    )
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("list_runs", locals())
 
 
 @router.get("/runs/{run_id}", operation_id="get_run", tags=["runs"], response_model=RunResource)
-def get_run(run_id: str, _principal=Depends(require_auth)):
-    try:
-        result = _service().get_run(run_id)
-        return public_value({**result, "record_source": "runtime"})
-    except Exception as exc:
-        reason = _history_reason(exc)
-        recovered = stored_run(run_id)
-        if recovered is None:
-            raise
-        missing = reason == "missing"
-        recovered["control_status"] = "missing" if missing else "unavailable"
-        recovered["placement"] = None
-        recovered["retry"] = {
-            "available": False,
-            "reason": (
-                "Stored history remains, but its Core control record is missing. Start a new run."
-                if missing
-                else "Core is unavailable. Reconnect and plan a retry to check recovery."
-            ),
-        }
-        return public_value(recovered)
+async def get_run(run_id: str, _principal=Depends(require_auth)):
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("get_run", locals())
 
 
 @router.patch("/runs/{run_id}", operation_id="update_run", tags=["runs"], response_model=ResourceModel)
-def update_run(run_id: str, request: RunUpdate, _principal=Depends(require_auth)):
-    owner = _service()
-    run = owner.get_run(run_id)
-    current = str(run.get("status") or "").lower()
-    desired = request.desired_state
-    if request.queued_only:
-        if desired != "cancelled" or current != "queued":
-            raise HTTPException(status_code=409, detail="This queued start has already changed. Refresh its status.")
-        return public_value(owner.cancel_run(run_id, queued_only=True))
-    try:
-        result = _transition_observed(owner, run, run["job_id"], run_id, desired)
-    except _TransitionConflict as exc:
-        raise HTTPException(
-            status_code=409, detail=f"A {current or 'unknown'} run cannot transition to {desired}."
-        ) from exc
-    return public_value(result)
+async def update_run(
+    run_id: str,
+    request: RunUpdate,
+    _principal=Depends(require_auth),
+):
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("update_run", locals())
 
 
 @router.post("/runs/{run_id}/retry-plans", operation_id="plan_run_retry", tags=["runs"], response_model=ResourceModel)
-def plan_run_retry(run_id: str, request: RunRetryPlan, _principal=Depends(require_auth)):
-    try:
-        return public_value(_service().plan_run_retry(run_id, configuration_overrides=request.configuration_overrides))
-    except grpc.RpcError as exc:
-        if exc.code() == grpc.StatusCode.NOT_FOUND and stored_run(run_id) is not None:
-            return {
-                "run_id": run_id,
-                "record_source": "history",
-                "eligible": False,
-                "reason": "Stored history remains, but its Core control record is missing. Start a new run.",
-                "preserved_steps": [],
-                "retry_steps": [],
-            }
-        return handle_grpc_error(exc)
+async def plan_run_retry(run_id: str, request: RunRetryPlan, _principal=Depends(require_auth)):
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("plan_run_retry", locals())
 
 
 @router.post(
@@ -1042,31 +271,20 @@ def plan_run_retry(run_id: str, request: RunRetryPlan, _principal=Depends(requir
     tags=["runs"],
     response_model=ResourceModel,
 )
-def retry_run(
+async def retry_run(
     run_id: str,
     request: RunRetryCreate,
     idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=255),
     _principal=Depends(require_auth),
 ):
-    try:
-        return public_value(
-            _service().retry_run(
-                run_id,
-                expected_attempt=request.expected_attempt,
-                checkpoint_revision=request.checkpoint_revision,
-                configuration_overrides=request.configuration_overrides,
-                admission_policy=request.admission_policy,
-                idempotency_key=idempotency_key,
-            )
-        )
-    except grpc.RpcError as exc:
-        return handle_grpc_error(exc)
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("retry_run", locals())
 
 
 @router.delete("/runs/{run_id}", status_code=status.HTTP_204_NO_CONTENT, operation_id="delete_run", tags=["runs"])
-def delete_run(run_id: str, _principal=Depends(require_auth)):
-    _service().delete_run(run_id, confirmed=True)
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+async def delete_run(run_id: str, _principal=Depends(require_auth)):
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("delete_run", locals())
 
 
 @router.post(
@@ -1076,122 +294,57 @@ def delete_run(run_id: str, _principal=Depends(require_auth)):
     tags=["schedules"],
     response_model=ResourceModel,
 )
-def create_job_schedule(
+async def create_job_schedule(
     job_id: str,
     request: ScheduleCreate,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", max_length=255),
     principal: str = Depends(require_auth),
 ):
-    return idempotent_response(
-        principal=principal,
-        route=f"{API_PREFIX}/jobs/{job_id}/schedules",
-        key=idempotency_key,
-        body=request.model_dump(),
-        call=lambda: _service().create_job_schedule(
-            job_id,
-            schedule=request.schedule,
-            source=request.source,
-            idempotency_key=idempotency_key or "",
-        ),
-        status_code=status.HTTP_201_CREATED,
-        location=f"{API_PREFIX}/jobs/{job_id}",
-    )
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("create_job_schedule", locals())
 
 
 @router.get("/schedules", operation_id="list_schedules", tags=["schedules"], response_model=PageResponse)
-def list_schedules(owner_node: str = "", _principal=Depends(require_auth)):
-    result = _service().list_schedules(**({"owner_node": owner_node} if owner_node else {}))
-    return {"items": public_value(records(result, "items", "schedules", "data")), "next_page_token": None}
+async def list_schedules(owner_node: str = "", _principal=Depends(require_auth)):
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("list_schedules", locals())
 
 
 @router.get("/schedules/{schedule_id}", operation_id="get_schedule", tags=["schedules"], response_model=ResourceModel)
-def get_schedule(schedule_id: str, owner_node: str = "", _principal=Depends(require_auth)):
-    return resource_response(
-        _service().get_schedule(schedule_id, **({"owner_node": owner_node} if owner_node else {})), etag=True
-    )
+async def get_schedule(schedule_id: str, owner_node: str = "", _principal=Depends(require_auth)):
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("get_schedule", locals())
 
 
 @router.patch(
     "/schedules/{schedule_id}", operation_id="update_schedule", tags=["schedules"], response_model=ResourceModel
 )
-def update_schedule(
+async def update_schedule(
     schedule_id: str,
     request: ScheduleUpdate,
     owner_node: str = "",
     if_match: str | None = Header(default=None, alias="If-Match"),
     _principal=Depends(require_auth),
 ):
-    owner = {"owner_node": owner_node} if owner_node else {}
-    current = _service().get_schedule(schedule_id, **owner)
-    require_if_match(if_match, current)
-    attrs = dict(request.schedule or {})
-    if request.desired_state is not None:
-        attrs["enabled"] = request.desired_state == "running"
-    if not attrs:
-        raise HTTPException(status_code=422, detail="Provide schedule changes.")
-    return resource_response(
-        _service().update_schedule(
-            schedule_id, schedule=attrs, expected_revision=int(current.get("revision") or 0), **owner
-        ),
-        etag=True,
-    )
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("update_schedule", locals())
 
 
 @router.delete("/schedules/{schedule_id}", operation_id="delete_schedule", tags=["schedules"])
-def delete_schedule(
+async def delete_schedule(
     schedule_id: str,
     owner_node: str = "",
     if_match: str | None = Header(default=None, alias="If-Match"),
     _principal=Depends(require_auth),
 ):
-    owner = {"owner_node": owner_node} if owner_node else {}
-    current = _service().get_schedule(schedule_id, **owner)
-    require_if_match(if_match, current)
-    return resource_response(
-        _service().delete_schedule(schedule_id, expected_revision=int(current.get("revision") or 0), **owner)
-    )
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("delete_schedule", locals())
 
 
 @router.get("/runs/{run_id}/monitor", operation_id="get_run_monitor", tags=["runs"], response_model=RunResource)
-def get_run_monitor(run_id: str, _principal=Depends(require_auth)):
-    try:
-        canonical_run = _service().get_run(run_id)
-    except Exception as exc:
-        _history_reason(exc)
-        canonical_run = stored_run(run_id)
-        if canonical_run is None:
-            raise
-        canonical_run = {**canonical_run, "placement": None}
-        progress = stored_progress(run_id) or {}
-        return _run_public(
-            {
-                "job": canonical_run,
-                "summary": canonical_run,
-                "status": canonical_run.get("status"),
-                "admission": canonical_run.get("admission"),
-                "placement": None,
-                "events": progress.get("recent_events") or [],
-                "workflow_progress": progress,
-            },
-            run_id=run_id,
-            runtime_run_id=run_id,
-        )
-    # Reuse this request's canonical read; never retain mutable Run state
-    # across requests. This also keeps status and output identity consistent.
-    runtime_id = _runtime_output_id(run_id, run=canonical_run)
-    reference = canonical_run.get("run_data_ref")
-    source_options = {"run_data_ref": reference} if isinstance(reference, dict) else {}
-    detail = dict(runtime_job_routes._compact_job_detail(run_id, **source_options))
-    detail["placement"] = canonical_run.get("placement")
-    canonical_status = str(canonical_run.get("status") or "").strip().lower()
-    if canonical_status:
-        detail["status"] = canonical_status
-        detail["admission"] = canonical_run.get("admission")
-        for key in ("job", "summary"):
-            projection = detail.get(key)
-            if isinstance(projection, dict):
-                detail[key] = {**projection, "status": canonical_status}
-    return _run_public(detail, run_id=run_id, runtime_run_id=runtime_id)
+async def get_run_monitor(run_id: str, _principal=Depends(require_auth)):
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("get_run_monitor", locals())
 
 
 @router.get(
@@ -1200,50 +353,13 @@ def get_run_monitor(run_id: str, _principal=Depends(require_auth)):
     tags=["runs"],
     response_model=ResourceModel,
 )
-def get_run_workflow_progress(run_id: str, _principal=Depends(require_auth)):
-    runtime_id = _runtime_output_id(run_id)
-    try:
-        snapshot = runtime_job_routes._workflow_progress_snapshot_for_run(run_id)
-    except Exception as exc:
-        _history_reason(exc)
-        snapshot = stored_progress(run_id)
-        if snapshot is None:
-            raise
-    return _run_public(progress_only(snapshot), run_id=run_id, runtime_run_id=runtime_id)
-
-
-def _page_run_records(
-    value: Any,
-    *,
-    keys: tuple[str, ...],
-    route: str,
-    principal: str,
-    filters: dict[str, Any],
-    page_size: int,
-    page_token: str | None,
-):
-    items = records(value, *keys)
-    return page(
-        items,
-        route=route,
-        principal=principal,
-        filters=filters,
-        page_size=page_size,
-        page_token=page_token,
-        sort_key="timestamp,id",
-        key=lambda item: (
-            str(item.get("occurred_at") or item.get("timestamp") or item.get("ts") or ""),
-            str(item.get("id") or item.get("request_id") or item.get("path") or item.get("index") or ""),
-        ),
-        identity=lambda item: (
-            str(item.get("id") or item.get("request_id") or item.get("path") or item.get("index") or ""),
-            str(item.get("occurred_at") or item.get("timestamp") or item.get("ts") or ""),
-        ),
-    )
+async def get_run_workflow_progress(run_id: str, _principal=Depends(require_auth)):
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("get_run_workflow_progress", locals())
 
 
 @router.get("/runs/{run_id}/logs", operation_id="list_run_logs", tags=["runs"], response_model=PageResponse)
-def list_run_logs(
+async def list_run_logs(
     run_id: str,
     level: str | None = None,
     since: str | None = None,
@@ -1251,191 +367,51 @@ def list_run_logs(
     page_token: str | None = None,
     principal: str = Depends(require_auth),
 ):
-    runtime_id, output_location = _runtime_output_location(run_id)
-    value = runtime_run_routes.get_run_logs(runtime_id, level, 5000, since, principal, **output_location)
-    return _page_run_records(
-        value,
-        keys=("items", "logs", "data"),
-        route=f"{API_PREFIX}/runs/{run_id}/logs",
-        principal=principal,
-        filters={"level": level, "since": since},
-        page_size=page_size,
-        page_token=page_token,
-    )
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("list_run_logs", locals())
 
 
 @router.get("/runs/{run_id}/events", operation_id="list_run_events", tags=["runs"], response_model=PageResponse)
-def list_run_events(
+async def list_run_events(
     run_id: str,
     channel: str | None = None,
     page_size: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     page_token: str | None = None,
     principal: str = Depends(require_auth),
 ):
-    runtime_id, output_location = _runtime_output_location(run_id)
-    missing = None
-    try:
-        value = runtime_run_routes.get_run_events(runtime_id, 5000, channel, principal, **output_location)
-    except HTTPException as exc:
-        if exc.status_code != 404:
-            raise
-        value = {"data": []}
-        missing = exc
-    try:
-        run = _service().get_run(run_id)
-    except Exception as exc:
-        _history_reason(exc)
-        run = {}
-    job = run.get("job") if isinstance(run.get("job"), dict) else {}
-    job_id = str(run.get("job_id") or job.get("job_id") or "")
-    shared = shared_result_events(job_id, runtime_id) if not channel or channel == "results" else []
-    if missing and not shared:
-        raise missing
-    if shared:
-        merged = records(value, "items", "events", "data")
-        seen = {
-            event.get("payload", {}).get("result_id")
-            for event in merged
-            if isinstance(event, dict) and isinstance(event.get("payload"), dict)
-        }
-        for event in shared:
-            result_id = event["payload"].get("result_id")
-            if result_id in seen:
-                continue
-            seen.add(result_id)
-            merged.append(event)
-        value = {"data": merged}
-    return _page_run_records(
-        value,
-        keys=("items", "events", "data"),
-        route=f"{API_PREFIX}/runs/{run_id}/events",
-        principal=principal,
-        filters={"channel": channel},
-        page_size=page_size,
-        page_token=page_token,
-    )
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("list_run_events", locals())
 
 
 @router.get("/runs/{run_id}/events/stream", operation_id="stream_run_events", tags=["runs"])
-def stream_run_events(
+async def stream_run_events(
     run_id: str,
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
     interval: float = Query(1.0, ge=0.25, le=30.0),
     principal: str = Depends(require_auth),
 ):
-    runtime_id, output_location = _runtime_output_location(run_id)
-    try:
-        resume_after = max(int(last_event_id or "0"), 0)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="Last-Event-ID must be an integer.") from exc
-
-    def source():
-        emitted = resume_after
-        seen: set[str] = set()
-        yield ": heartbeat\n\n"
-        while True:
-            try:
-                progress = runtime_job_routes._workflow_progress_snapshot_for_run(run_id)
-            except Exception as exc:
-                _history_reason(exc)
-                progress = stored_progress(run_id)
-                if progress is None:
-                    raise
-            emitted += 1
-            if emitted > resume_after:
-                yield encode_sse(
-                    sse_envelope(
-                        event_id=emitted,
-                        event_type="run.snapshot",
-                        resource=f"{API_PREFIX}/runs/{run_id}",
-                        data=_run_public(progress_only(progress), run_id=run_id, runtime_run_id=runtime_id),
-                    )
-                )
-            try:
-                payload = runtime_run_routes.get_run_events(runtime_id, 5000, None, principal, **output_location)
-            except HTTPException as exc:
-                if exc.status_code != 404:
-                    raise
-                payload = {"data": []}
-            for event in records(payload, "items", "events", "data"):
-                identity = json.dumps(event, sort_keys=True, separators=(",", ":"), default=str)
-                if identity in seen:
-                    continue
-                seen.add(identity)
-                emitted += 1
-                if emitted <= resume_after:
-                    continue
-                event_type = str(event.get("type") or event.get("channel") or "run.event")
-                yield encode_sse(
-                    sse_envelope(
-                        event_id=emitted,
-                        event_type=event_type,
-                        resource=f"{API_PREFIX}/runs/{run_id}",
-                        data=event,
-                    )
-                )
-            try:
-                snapshot = _service().get_run(run_id)
-            except Exception as exc:
-                _history_reason(exc)
-                snapshot = stored_run(run_id)
-                if snapshot is None:
-                    raise
-            if str(snapshot.get("status") or "").lower() in _TERMINAL | {"unknown"}:
-                emitted += 1
-                yield encode_sse(
-                    sse_envelope(
-                        event_id=emitted,
-                        event_type="run.unavailable" if snapshot.get("status") == "unknown" else "run.completed",
-                        resource=f"{API_PREFIX}/runs/{run_id}",
-                        data=snapshot,
-                    )
-                )
-                return
-            yield ": heartbeat\n\n"
-            time.sleep(interval)
-
-    return StreamingResponse(
-        source(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("stream_run_events", locals())
 
 
 @router.get("/runs/{run_id}/resources", operation_id="get_run_resources", tags=["runs"], response_model=ResourceModel)
-def get_run_resources(run_id: str, window: str = "24h", bucket: str = "1h", principal=Depends(require_auth)):
-    runtime_id, output_location = _runtime_output_location(run_id)
-    return _run_public(
-        runtime_run_routes.get_run_resources(runtime_id, window, bucket, principal, **output_location),
-        run_id=run_id,
-        runtime_run_id=runtime_id,
-    )
+async def get_run_resources(run_id: str, window: str = "24h", bucket: str = "1h", principal=Depends(require_auth)):
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("get_run_resources", locals())
 
 
 @router.get(
-    "/runs/{run_id}/human-requests",
-    operation_id="list_run_human_requests",
-    tags=["runs"],
-    response_model=PageResponse,
+    "/runs/{run_id}/human-requests", operation_id="list_run_human_requests", tags=["runs"], response_model=PageResponse
 )
-def list_run_human_requests(
+async def list_run_human_requests(
     run_id: str,
     request_status: str | None = Query(default=None, alias="status"),
     page_size: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     page_token: str | None = None,
     principal: str = Depends(require_auth),
 ):
-    runtime_id, output_location = _runtime_output_location(run_id)
-    value = runtime_run_routes.get_run_human_events(runtime_id, request_status, principal, **output_location)
-    return _page_run_records(
-        value,
-        keys=("items", "requests", "data"),
-        route=f"{API_PREFIX}/runs/{run_id}/human-requests",
-        principal=principal,
-        filters={"status": request_status},
-        page_size=page_size,
-        page_token=page_token,
-    )
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("list_run_human_requests", locals())
 
 
 @router.post(
@@ -1445,15 +421,11 @@ def list_run_human_requests(
     tags=["runs"],
     response_model=ResourceModel,
 )
-def create_run_human_response(run_id: str, request_id: str, request: HumanResponse, principal=Depends(require_auth)):
-    runtime_id, output_location = _runtime_output_location(run_id)
-    return _run_public(
-        runtime_run_routes.post_run_human_response(
-            runtime_id, request_id, {"response": request.response}, principal, **output_location
-        ),
-        run_id=run_id,
-        runtime_run_id=runtime_id,
-    )
+async def create_run_human_response(
+    run_id: str, request_id: str, request: HumanResponse, principal=Depends(require_auth)
+):
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("create_run_human_response", locals())
 
 
 @router.post(
@@ -1463,170 +435,80 @@ def create_run_human_response(run_id: str, request_id: str, request: HumanRespon
     tags=["runs"],
     response_model=ResourceModel,
 )
-def create_run_human_acknowledgement(
-    run_id: str,
-    request_id: str,
-    request: HumanAcknowledgement,
-    principal=Depends(require_auth),
+async def create_run_human_acknowledgement(
+    run_id: str, request_id: str, request: HumanAcknowledgement, principal=Depends(require_auth)
 ):
-    runtime_id, output_location = _runtime_output_location(run_id)
-    return _run_public(
-        runtime_run_routes.post_run_human_ack(
-            runtime_id, request_id, request.model_dump(exclude_none=True), principal, **output_location
-        ),
-        run_id=run_id,
-        runtime_run_id=runtime_id,
-    )
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("create_run_human_acknowledgement", locals())
 
 
 @router.get(
-    "/runs/{run_id}/artifacts/final",
-    operation_id="get_run_final_artifact",
-    tags=["runs"],
-    response_model=ResourceModel,
+    "/runs/{run_id}/artifacts/final", operation_id="get_run_final_artifact", tags=["runs"], response_model=ResourceModel
 )
-def get_run_final_artifact(run_id: str, request: Request, principal=Depends(require_auth)):
-    response, runtime_id, output_location, run = _run_file_location(run_id, request, "artifacts/final")
-    if response is not None:
-        return response
-    try:
-        value = runtime_run_routes.get_run_final_artifact(runtime_id, principal, **output_location)
-    except HTTPException as exc:
-        if exc.status_code != status.HTTP_404_NOT_FOUND:
-            raise
-        try:
-            value = _resolve_run_result_reference(run_id, run=run)
-        except ArtifactNotReadyError as resolve_exc:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail={"code": "artifact_not_ready", "retryable": True, "message": str(resolve_exc)},
-                headers={"Retry-After": "1"},
-            ) from resolve_exc
-        except ArtifactIntegrityError as resolve_exc:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"code": "artifact_integrity_error", "message": str(resolve_exc)},
-            ) from resolve_exc
-        except StagedArtifactError as resolve_exc:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"code": "artifact_resolution_error", "message": str(resolve_exc)},
-            ) from resolve_exc
-        if value is None:
-            raise exc
-    return _run_public(value, run_id=run_id, runtime_run_id=runtime_id)
+async def get_run_final_artifact(run_id: str, request: Request, principal=Depends(require_auth)):
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("get_run_final_artifact", locals())
 
 
 @router.get("/runs/{run_id}/artifacts", operation_id="list_run_artifacts", tags=["runs"], response_model=PageResponse)
-def list_run_artifacts(
+async def list_run_artifacts(
     run_id: str,
     request: Request,
     page_size: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     page_token: str | None = None,
     principal: str = Depends(require_auth),
 ):
-    response, runtime_id, output_location, _run = _run_file_location(run_id, request, "artifacts")
-    if response is not None:
-        return response
-    value = _run_public(
-        runtime_run_routes.list_run_artifacts(runtime_id, principal, **output_location),
-        run_id=run_id,
-        runtime_run_id=runtime_id,
-    )
-    return _page_run_records(
-        value,
-        keys=("items", "artifacts"),
-        route=f"{API_PREFIX}/runs/{run_id}/artifacts",
-        principal=principal,
-        filters={},
-        page_size=page_size,
-        page_token=page_token,
-    )
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("list_run_artifacts", locals())
 
 
 @router.get("/runs/{run_id}/artifacts/{artifact_path:path}", operation_id="download_run_artifact", tags=["runs"])
-def download_run_artifact(run_id: str, artifact_path: str, request: Request, principal=Depends(require_auth)):
-    from urllib.parse import quote
-
-    response, runtime_id, output_location, _run = _run_file_location(
-        run_id,
-        request,
-        "artifacts/" + quote(artifact_path, safe=""),
-    )
-    if response is not None:
-        return response
-    return runtime_run_routes.get_run_artifact(runtime_id, artifact_path, principal, **output_location)
+async def download_run_artifact(run_id: str, artifact_path: str, request: Request, principal=Depends(require_auth)):
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("download_run_artifact", locals())
 
 
 @router.get("/runs/{run_id}/outputs", operation_id="list_run_outputs", tags=["runs"], response_model=PageResponse)
-def list_run_outputs(
+async def list_run_outputs(
     run_id: str,
     request: Request,
     page_size: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     page_token: str | None = None,
     principal: str = Depends(require_auth),
 ):
-    response, runtime_id, output_location, _run = _run_file_location(run_id, request, "outputs")
-    if response is not None:
-        return response
-    value = _run_public(
-        runtime_run_routes.list_run_outputs(runtime_id, principal, **output_location),
-        run_id=run_id,
-        runtime_run_id=runtime_id,
-    )
-    return _page_run_records(
-        value,
-        keys=("items", "outputs"),
-        route=f"{API_PREFIX}/runs/{run_id}/outputs",
-        principal=principal,
-        filters={},
-        page_size=page_size,
-        page_token=page_token,
-    )
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("list_run_outputs", locals())
 
 
 @router.get("/runs/{run_id}/outputs/{output_index}", operation_id="download_run_output", tags=["runs"])
-def download_run_output(run_id: str, output_index: int, request: Request, principal=Depends(require_auth)):
-    response, runtime_id, output_location, _run = _run_file_location(run_id, request, f"outputs/{output_index}")
-    if response is not None:
-        return response
-    return runtime_run_routes.get_run_output(runtime_id, output_index, principal, **output_location)
+async def download_run_output(run_id: str, output_index: int, request: Request, principal=Depends(require_auth)):
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("download_run_output", locals())
 
 
 @router.get(
-    "/runs/{run_id}/observability",
-    operation_id="get_run_observability",
-    tags=["runs"],
-    response_model=ResourceModel,
+    "/runs/{run_id}/observability", operation_id="get_run_observability", tags=["runs"], response_model=ResourceModel
 )
-def get_run_observability(run_id: str, principal=Depends(require_auth)):
-    runtime_id, output_location = _runtime_output_location(run_id)
-    return _run_public(
-        runtime_run_routes.get_run_observability_summary(runtime_id, principal, **output_location),
-        run_id=run_id,
-        runtime_run_id=runtime_id,
-    )
+async def get_run_observability(run_id: str, principal=Depends(require_auth)):
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("get_run_observability", locals())
 
 
 @router.get("/runs/{run_id}/snapshots", operation_id="get_run_snapshot", tags=["runs"], response_model=ResourceModel)
-def get_run_snapshot(run_id: str, principal=Depends(require_auth)):
-    return get_run_monitor(run_id, principal)
+async def get_run_snapshot(run_id: str, principal=Depends(require_auth)):
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("get_run_snapshot", locals())
 
 
 @router.get(
     "/runs/{run_id}/agent-graph", operation_id="get_run_agent_graph", tags=["runs"], response_model=ResourceModel
 )
-def get_run_agent_graph(run_id: str, principal=Depends(require_auth)):
-    runtime_id, output_location = _runtime_output_location(run_id)
-    detail = runtime_job_routes._compact_job_detail(runtime_id)
-    event_payload = runtime_run_routes.get_run_events(runtime_id, 5000, None, principal, **output_location)
-    graph = build_agent_graph(
-        run_id, detail if isinstance(detail, dict) else {}, records(event_payload, "data", "events")
-    )
-    return _run_public(graph, run_id=run_id, runtime_run_id=runtime_id)
+async def get_run_agent_graph(run_id: str, principal=Depends(require_auth)):
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("get_run_agent_graph", locals())
 
 
 @router.get("/runs/{run_id}/export", operation_id="export_run", tags=["runs"])
-def export_run(run_id: str, format: str = "json", principal=Depends(require_auth)):
-    runtime_id, output_location = _runtime_output_location(run_id)
-    return runtime_run_routes.export_run(runtime_id, format, principal, **output_location)
+async def export_run(run_id: str, format: str = "json", principal=Depends(require_auth)):
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("export_run", locals())

@@ -1,38 +1,32 @@
 # MirrorNeuron API
 
-## Lightweight client relay
+## Application surface
 
-Binary `install.sh --no-runtime` installs CLI/API plus their Python libraries
-without a runtime or background services. Start `mn-api` manually in the foreground.
-A persisted `MN_HOME/install_metadata.json` with `install_role: "client"` selects
-a standalone relay before runtime state, MCP workers or preparation workers load.
-Defaults are `127.0.0.1:54001`; `MN_API_HOST` and `MN_API_PORT` override the listener.
+`mn-api` exposes REST `/api/v1` over the SDK's native runtime client in both full
+and client installations. It owns HTTP validation, authentication, streaming and
+MCP sessions. Catalog preparation, execution and durable observers run on runtime
+nodes and continue when this process stops.
 
-Every relay request except `GET /api/v1/health` requires a local bearer token:
-`MN_API_TOKEN` when nonempty, otherwise the private `MN_HOME/api.token` generated
-by installation. This is separate from the remote API credential. Process
-settings are read directly; runtime dotenv/configuration and gRPC are unused.
+```bash
+mn node add runtime.example --grpc-port 55051 --token "$RUNTIME_NODE_TOKEN"
+mn-api
+```
 
-`POST /api/v1/nodes` accepts `{"host":"https://remote:54001","token":"REMOTE_API_TOKEN"}`.
-It validates the remote REST contract and node identity, then atomically saves
-`MN_HOME/client.json`. No federation handshake or local node registration occurs.
-`grpc_port` is rejected in this mode. Failed reconnection preserves the old
-configuration. `DELETE /api/v1/nodes/{connected_node_name}` disconnects only the
-client. `GET /api/v1/nodes` and node inspection still query the remote cluster.
+Alternatively `POST /api/v1/nodes` accepts `host`, `token`, optional `grpc_port`,
+and local-only `runtime_home`. The first addition configures the shared private
+connection; subsequent additions federate runtime peers. Failed validation preserves
+the current profile. `DELETE /api/v1/nodes/{node_id}` requires drain/admission checks
+and removes membership; removing the entry node also disconnects this surface.
 
-All other `/api/v1` routes forward to the connected API using its stored bearer
-token. The relay preserves upstream status/errors, ETags, idempotency keys, SSE,
-byte downloads and job UI WebSockets. Absolute upstream Location headers for
-that API are rewritten locally. Health stays local, and missing connections or
-transport failures return sanitized Problem Details. Requests are never replayed
-automatically. The relay uses the latest connection for each new request; an
-existing stream finishes against its original connection. CORS uses
-`MN_API_CORS_ALLOW_ORIGINS`. The relay cannot be another client's upstream.
+The surface bearer token (`MN_API_TOKEN` or `MN_HOME/api.token`) is distinct from
+the runtime control token. It terminates at this process. Runtime owner streams
+carry SSE, artifacts, byte ranges and job UI HTTP/WebSockets without requiring an
+owner-node API. Old API-URL connection profiles require explicit native reconnection.
 
-Catalog launches accept `schedule` in addition to existing run options. A
-scheduled launch prepares the remote job, creates a schedule, returns its
-`schedule_id` and Location, and does not start a run immediately. Scheduling
-cannot be combined with `admission_policy: "enqueue_if_busy"`.
+`install.sh --no-runtime` installs only CLI/API and required Python libraries in
+`~/.mn-client` (or `MN_HOME`). Nothing starts automatically; `mn-api` runs in the
+foreground. Runtime-only installations contain neither surface package.
+See [installation roles](../mn-deploy/docs/installation-roles.md).
 
 ## Measured processing speed
 

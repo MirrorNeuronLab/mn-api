@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import sys
-import tempfile
 from pathlib import Path
 
 for parent in Path(__file__).resolve().parents:
@@ -10,8 +9,7 @@ for parent in Path(__file__).resolve().parents:
         sys.path.insert(0, str(sdk_path))
         break
 
-from mn_sdk import Client
-from mn_sdk.runtime_client import grpc_client_settings, runtime_client_kwargs
+from mn_sdk.surface_client import SurfaceRuntimeClient as Client
 
 from mn_api.config import ApiConfig
 from mn_api.logging_config import configure_logging
@@ -19,13 +17,8 @@ from mn_api.logging_config import configure_logging
 
 config = ApiConfig.from_env()
 logger = configure_logging()
-BUNDLE_UPLOAD_ROOT = Path(tempfile.gettempdir()) / "mirror_neuron_api_bundles"
 
 _client: Client | None = None
-
-
-def _grpc_client_settings(config_obj) -> tuple:
-    return grpc_client_settings(config_obj)
 
 
 def refresh_config_from_env():
@@ -37,22 +30,15 @@ def refresh_config_from_env():
     except Exception:
         logger.exception("Failed to refresh mn-api runtime configuration")
         return config
-    if _client is not None and _grpc_client_settings(refreshed) != _grpc_client_settings(config):
-        close_client()
     config = refreshed
     return config
-
-
-def _client_kwargs() -> dict:
-    current_config = refresh_config_from_env()
-    return runtime_client_kwargs(current_config)
 
 
 def get_client() -> Client:
     global _client
     refresh_config_from_env()
     if _client is None:
-        _client = Client(**_client_kwargs())
+        _client = Client()
     return _client
 
 

@@ -10,7 +10,7 @@ classifiers = [
 ]
 dependencies = [
     # Source checkouts use SCM versions; binary versions are pinned by the installer index.
-    "mirrorneuron-python-sdk[client,local-source]>=1.4.1.dev50,<2.0",
+    "mirrorneuron-python-sdk[client]>=1.4.1.dev65,<2.0",
     "mn-python-sdk-common>=1.3.61.dev12,<2.0",
     "mn-python-sdk-web-ui>=1.3.61.dev32,<2.0",
     "mn-python-sdk-mcp>=1.3.61.dev12,<2.0",

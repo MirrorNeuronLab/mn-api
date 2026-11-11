@@ -12,11 +12,10 @@ for parent in Path(__file__).resolve().parents:
         break
 
 from mn_sdk.blueprints.limits import MAX_PACKAGE_BYTES
-from mn_sdk.blueprint_source import resolve_blueprint_source_config
-from mn_sdk.runtime_config import RuntimeConfig
+from mn_sdk.runtime_config import resolve_mn_home
 from mn_sdk.config.types import MISSING
 
-from mn_sdk.config import ConfigSource, load_config_source, normalize_mn_env
+from mn_sdk.config import ConfigSource, load_config_source
 from mn_api.config_schema import CONFIG_KEY_MAP, ConfigError, is_sensitive_key, redact_config_values
 from mn_api.path_utils import default_logs_root
 
@@ -26,17 +25,9 @@ class ApiConfig:
     env: str
     host: str
     port: int
-    grpc_target: str
-    grpc_timeout_seconds: float | None
-    grpc_auth_token: str
-    grpc_admin_token: str
     api_token: str
     request_size_limit_bytes: int
     cors_allow_origins: list[str]
-    blueprint_source: str
-    blueprint_repo: str
-    blueprint_local: str
-    active_blueprint_location: str
     blueprint_upload_limit_bytes: int = MAX_PACKAGE_BYTES
 
     @classmethod
@@ -47,28 +38,14 @@ class ApiConfig:
         env_dir: str | Path | None = None,
     ) -> "ApiConfig":
         source = load_config_source(env=env, env_dir=env_dir)
-        try:
-            runtime_config = RuntimeConfig.from_env(env=source.effective_env, env_dir=env_dir)
-        except Exception as exc:
-            if exc.__class__.__name__ == "ConfigError":
-                raise ConfigError(str(exc)) from exc
-            raise
-        runtime_env = runtime_config.runtime_env
-        mn_env = normalize_mn_env(_first_string(source.effective_env.get("MN_ENV"), runtime_env.get("MN_ENV"), "dev"))
-        blueprint_source = resolve_blueprint_source_config(
-            env=source.effective_env,
-            runtime_env=runtime_env,
-            env_dir=env_dir,
-        )
+        runtime_env = {}
+        mn_env = source.mn_env
         config = cls(
             env=mn_env,
             host=config_string("MN_API_HOST", source=source, runtime_env=runtime_env, default="localhost"),
             port=config_int("MN_API_PORT", source=source, runtime_env=runtime_env, default=54001),
-            grpc_target=runtime_config.grpc_target,
-            grpc_timeout_seconds=runtime_config.grpc_timeout_seconds,
-            grpc_auth_token=runtime_config.grpc_auth_token,
-            grpc_admin_token=runtime_config.grpc_admin_token,
-            api_token=config_string("MN_API_TOKEN", source=source, runtime_env=runtime_env, default=""),
+            api_token=config_string("MN_API_TOKEN", source=source, runtime_env=runtime_env, default="")
+            or _read_token_file(resolve_mn_home(env=source.effective_env) / "api.token"),
             request_size_limit_bytes=config_int(
                 "MN_API_REQUEST_SIZE_LIMIT_BYTES",
                 source=source,
@@ -87,12 +64,12 @@ class ApiConfig:
                 runtime_env=runtime_env,
                 default=[],
             ),
-            blueprint_source=blueprint_source.source,
-            blueprint_repo=blueprint_source.repo,
-            blueprint_local=blueprint_source.local,
-            active_blueprint_location=blueprint_source.active_location,
         )
         config.validate()
+        from mn_sdk.runtime_connection import installation_role
+
+        if installation_role(resolve_mn_home(env=source.effective_env)) == "client" and not config.api_token:
+            raise ConfigError("Client mode requires MN_API_TOKEN or a private MN_HOME/api.token file.")
         return config
 
     @property
@@ -110,12 +87,6 @@ class ApiConfig:
             raise ConfigError(f"MN_API_BLUEPRINT_UPLOAD_LIMIT_BYTES must be between 1 and {MAX_PACKAGE_BYTES}")
         if self.prod and not self.api_token:
             raise ConfigError("MN_API_TOKEN is required when MN_ENV=prod or MN_ENV=production")
-        if self.blueprint_source not in {"github", "local"}:
-            raise ConfigError("MN_BLUEPRINT_SOURCE must be one of github or local")
-        if self.blueprint_source == "github" and not self.blueprint_repo:
-            raise ConfigError("MN_BLUEPRINT_REPO is required when MN_BLUEPRINT_SOURCE=github")
-        if self.blueprint_source == "local" and not self.blueprint_local:
-            raise ConfigError("MN_BLUEPRINT_LOCAL is required when MN_BLUEPRINT_SOURCE=local")
 
 
 @dataclass(frozen=True)
@@ -128,7 +99,7 @@ class LoggingConfig:
     @classmethod
     def from_env(cls, *, env: Mapping[str, str] | None = None, env_dir: str | Path | None = None) -> "LoggingConfig":
         source = load_config_source(env=env, env_dir=env_dir)
-        runtime_env = RuntimeConfig.from_env(env=source.effective_env, env_dir=env_dir).runtime_env
+        runtime_env = {}
         default_log_path = default_logs_root(env=source.effective_env) / "api.log"
         return cls(
             level=config_string("MN_LOG_LEVEL", source=source, runtime_env=runtime_env, default="INFO").upper(),
@@ -157,8 +128,7 @@ class WebUiConfig:
     @classmethod
     def from_env(cls, *, env: Mapping[str, str] | None = None, env_dir: str | Path | None = None) -> "WebUiConfig":
         source = load_config_source(env=env, env_dir=env_dir)
-        runtime_config = RuntimeConfig.from_env(env=source.effective_env, env_dir=env_dir)
-        runtime_env = runtime_config.runtime_env
+        runtime_env = {}
         api_base = config_string("MN_WEB_UI_API_BASE_URL", source=source, runtime_env=runtime_env, default="")
         if not api_base:
             api_base = config_string("MN_API_BASE_URL", source=source, runtime_env=runtime_env, default="")
@@ -166,7 +136,7 @@ class WebUiConfig:
         port = config_int("MN_API_PORT", source=source, runtime_env=runtime_env, default=54001)
         api_token = config_string("MN_API_TOKEN", source=source, runtime_env=runtime_env, default="")
         if not api_token:
-            api_token = _read_token_file(runtime_config.mn_home / "api.token")
+            api_token = _read_token_file(resolve_mn_home(env=source.effective_env) / "api.token")
         dist_dir = config_path(
             "MN_WEB_UI_DIST_DIR",
             source=source,
@@ -339,11 +309,6 @@ def _read_token_file(path: Path) -> str:
         return path.read_text(encoding="utf-8").strip()
     except OSError:
         return ""
-
-
-def runtime_env_values() -> dict[str, str]:
-    source = load_config_source()
-    return RuntimeConfig.from_env(env=source.effective_env).runtime_env
 
 
 def effective_env_values() -> dict[str, str]:

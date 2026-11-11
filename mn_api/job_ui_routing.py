@@ -1,70 +1,13 @@
-"""Core-owned service placement for the bounded Job UI relay."""
+"""Browser routing to the connected surface; runtime owners never expose REST."""
 
-import json
 from urllib.parse import urlsplit
-
 from fastapi import HTTPException
-
-from mn_api import state
-from mn_api.node_api import node_api_base_url, registered_host as _registered_host
-
-EXECUTION_HEADER = "X-MN-UI-Execution"
-HOP_HEADER = "X-MN-UI-Hop"
-
-
-def _record(value):
-    if isinstance(value, (str, bytes)):
-        value = json.loads(value)
-    return value if isinstance(value, dict) else {}
-
-
-def placement(job_id, job=None):
-    job = _record(state.client.get_job(job_id)) if job is None else job
-    execution_id = str(job.get("latest_run_id") or "").strip()
-    owner = str(job.get("owner_node") or "").strip()
-    if not execution_id or not owner:
-        raise HTTPException(409, "The job has no current UI service placement.")
-    summary = _record(state.client.get_system_summary())
-    node = next((node for node in summary.get("nodes", []) if node.get("name") == owner), None)
-    if not node:
-        raise HTTPException(503, "The computer hosting this Web UI is unavailable.")
-    # Only Core membership may select the peer, never a handle or query value.
-    host = _registered_host(node)
-    local = node.get("self?") is True or node.get("self") is True
-    return {
-        "execution_id": execution_id,
-        "owner_node": owner,
-        "local": local,
-        "host": host,
-        **({"api_base_url": node_api_base_url(node)} if not local else {}),
-    }
-
-
-def routed_handle(handle):
-    ui = dict(handle["web_ui"])
-    # Transport authority is generated here, never accepted from a registration,
-    # including when an idle Job has no placement yet.
-    ui.pop("transport", None)
-    job = _record(state.client.get_job(handle["job_id"]))
-    if not str(job.get("owner_node") or "").strip():
-        return {**handle, "web_ui": ui}
-    location = placement(handle["job_id"], job)
-    metadata = ui.get("metadata") or {}
-    if metadata.get("execution_id") and metadata["execution_id"] != location["execution_id"]:
-        ui["status"] = "stopped"
-        ui["metadata"] = {**metadata, "readiness": {"ready": False, "reason": "stale_execution"}}
-    if not location["local"]:
-        ui["transport"] = {
-            "schema_version": "mn.web_ui.transport.v1",
-            "owner_api_url": location["api_base_url"],
-            "execution_id": location["execution_id"],
-        }
-    return {**handle, "web_ui": ui}
+from mn_sdk.job_ui_proxy import EXECUTION_HEADER as EXECUTION_HEADER, HOP_HEADER as HOP_HEADER
 
 
 def relay_target(web_ui, job_id, port, path, query, *, websocket=False):
     """Return an owner relay target after the ordinary port/lifecycle checks."""
-    from mn_api.web_ui_server import _safe_proxy_path
+    from mn_sdk.job_ui_proxy import _safe_proxy_path
 
     transport = web_ui.get("transport")
     if not isinstance(transport, dict):
@@ -85,7 +28,12 @@ def relay_target(web_ui, job_id, port, path, query, *, websocket=False):
         raise HTTPException(502, "The job UI transport is invalid.")
     from urllib.parse import quote
 
-    suffix = ("ws/" if websocket else "") + _safe_proxy_path(path)
+    from mn_sdk.job_ui_proxy import JobUiProxyError
+
+    try:
+        suffix = ("ws/" if websocket else "") + _safe_proxy_path(path)
+    except JobUiProxyError as exc:
+        raise HTTPException(exc.status_code, exc.detail) from exc
     target = f"{base}/jobs/{quote(job_id, safe='-._')}/ui-proxy/{port}/{suffix}"
     if websocket:
         target = ("wss" if parsed.scheme == "https" else "ws") + target[target.index(":") :]

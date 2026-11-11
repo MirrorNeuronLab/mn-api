@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from contextlib import asynccontextmanager
 import uuid
 
@@ -20,8 +19,7 @@ from mn_api.errors import (
     unexpected_exception_handler,
 )
 from mn_api.job_mcp import create_job_mcp, job_mcp_lifespan
-from mn_api.host_output_delivery import host_output_delivery_loop
-from mn_api.run_file_routing import BINDING_HEADER
+from mn_sdk.runtime_contract.files import BINDING_HEADER
 from mn_sdk.errors import AppError
 from mn_api.routes import bundles
 from mn_api.routes.v1 import job_backups, job_preparations
@@ -32,27 +30,13 @@ from mn_api.mcp_oauth import OAuthApp, router as oauth_router
 
 
 def create_app() -> FastAPI:
-    from mn_sdk.client_install import is_client_install
-
-    if is_client_install():
-        from mn_api.client_app import create_client_app
-
-        return create_client_app()
     job_mcp_servers, job_mcp_app = create_job_mcp()
     mcp_lifespan = job_mcp_lifespan(job_mcp_servers)
 
     @asynccontextmanager
     async def runtime_lifespan(app: FastAPI):
         async with mcp_lifespan(app):
-            delivery_task = asyncio.create_task(host_output_delivery_loop())
-            try:
-                yield
-            finally:
-                delivery_task.cancel()
-                try:
-                    await delivery_task
-                except asyncio.CancelledError:
-                    pass
+            yield
 
     app = FastAPI(
         title="MirrorNeuron API",

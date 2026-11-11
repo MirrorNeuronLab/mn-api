@@ -1,8 +1,8 @@
+"""Public REST declarations over the shared SDK runtime client."""
+
 from __future__ import annotations
-
+from mn_api.runtime_adapter import call_runtime
 from fastapi import APIRouter, Depends, Header, Query, status
-
-from mn_api import state
 from mn_api.api_models import (
     BlueprintAdd,
     BlueprintPageResponse,
@@ -13,28 +13,10 @@ from mn_api.api_models import (
     CleanupCreate,
     ResourceModel,
 )
-from mn_api.blueprint_additions import add_catalog_blueprint, blueprint_public_projection
-from mn_api.blueprints import (
-    filter_blueprints_by_category,
-    find_blueprint,
-    load_blueprint_catalog,
-    refresh_blueprint_catalog,
-)
 from mn_api.contracts import API_PREFIX, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 from mn_api.dependencies import require_auth
-from mn_api.launch_progress import public_progress_snapshot
-from mn_api.operations import complete_local_operation, start_local_operation, start_operation
-from mn_api.pagination import page
-from mn_api.public import idempotent_response, public_value
-from mn_api import blueprint_launch
-from mn_api.schemas import BlueprintRunRequest, BlueprintUninstallRequest
-
 
 router = APIRouter(prefix=API_PREFIX)
-
-
-def _config():
-    return state.refresh_config_from_env()
 
 
 @router.get(
@@ -43,8 +25,9 @@ def _config():
     tags=["blueprints"],
     response_model=ResourceModel,
 )
-def get_launch_progress(progress_id: str, _principal=Depends(require_auth)):
-    return public_progress_snapshot(progress_id)
+async def get_launch_progress(progress_id: str, _principal=Depends(require_auth)):
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("get_launch_progress", locals())
 
 
 @router.get(
@@ -54,25 +37,14 @@ def get_launch_progress(progress_id: str, _principal=Depends(require_auth)):
     response_model=BlueprintPageResponse,
     response_model_exclude_unset=True,
 )
-def list_blueprints(
+async def list_blueprints(
     category: str | None = None,
     page_size: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     page_token: str | None = None,
     principal: str = Depends(require_auth),
 ):
-    _repo_root, blueprints = load_blueprint_catalog(_config())
-    items = [blueprint_public_projection(item) for item in filter_blueprints_by_category(blueprints, category)]
-    return page(
-        items,
-        route=f"{API_PREFIX}/blueprints",
-        principal=principal,
-        filters={"category": category},
-        page_size=page_size,
-        page_token=page_token,
-        sort_key="id",
-        key=lambda item: str(item.get("id") or item.get("blueprint_id") or ""),
-        identity=lambda item: str(item.get("id") or item.get("blueprint_id") or ""),
-    )
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("list_blueprints", locals())
 
 
 @router.get(
@@ -82,9 +54,9 @@ def list_blueprints(
     response_model=BlueprintResource,
     response_model_exclude_unset=True,
 )
-def get_blueprint(blueprint_id: str, _principal=Depends(require_auth)):
-    _repo_root, blueprint = find_blueprint(_config(), blueprint_id)
-    return blueprint_public_projection(blueprint)
+async def get_blueprint(blueprint_id: str, _principal=Depends(require_auth)):
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("get_blueprint", locals())
 
 
 @router.post(
@@ -94,36 +66,14 @@ def get_blueprint(blueprint_id: str, _principal=Depends(require_auth)):
     tags=["blueprints"],
     response_model=ResourceModel,
 )
-def create_blueprint_addition(
+async def create_blueprint_addition(
     blueprint_id: str,
     request: BlueprintAdd | None = None,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", max_length=255),
     principal: str = Depends(require_auth),
 ):
-    payload = request or BlueprintAdd()
-
-    def add():
-        return start_local_operation(
-            "add_blueprint",
-            {"blueprint_id": blueprint_id, "force": payload.force},
-            lambda report: add_catalog_blueprint(
-                _config(),
-                blueprint_id,
-                force=payload.force,
-                config_overrides=payload.config_overrides or None,
-                report_progress=report,
-            ),
-        )
-
-    return idempotent_response(
-        principal=principal,
-        route=f"{API_PREFIX}/blueprints/{blueprint_id}/additions",
-        key=idempotency_key,
-        body=payload.model_dump(),
-        call=add,
-        status_code=status.HTTP_202_ACCEPTED,
-        location=lambda result: f"{API_PREFIX}/operations/{result.get('operation_id') or result.get('id')}",
-    )
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("create_blueprint_addition", locals())
 
 
 @router.post(
@@ -133,45 +83,14 @@ def create_blueprint_addition(
     tags=["blueprints"],
     response_model=ResourceModel,
 )
-def create_blueprint_removal(
+async def create_blueprint_removal(
     blueprint_id: str,
     request: BlueprintRemove | None = None,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", max_length=255),
     principal: str = Depends(require_auth),
 ):
-    payload = request or BlueprintRemove()
-
-    def remove(report):
-        report(
-            percent=20,
-            stage="resolve_blueprint",
-            label="Resolve blueprint",
-            detail="Locating the added blueprint record.",
-        )
-        report(
-            percent=55,
-            stage="remove_resources",
-            label="Remove resources",
-            detail="Removing blueprint-owned runtime resources.",
-        )
-        result = blueprint_launch.uninstall_blueprints(
-            BlueprintUninstallRequest(blueprint_id=blueprint_id, **payload.model_dump()),
-            _auth=principal,
-        )
-        report(percent=90, stage="record_removal", label="Record removal", detail="Finalizing the blueprint removal.")
-        return result
-
-    return idempotent_response(
-        principal=principal,
-        route=f"{API_PREFIX}/blueprints/{blueprint_id}/removals",
-        key=idempotency_key,
-        body=payload.model_dump(),
-        call=lambda: start_local_operation(
-            "remove_blueprint", {"blueprint_id": blueprint_id, **payload.model_dump()}, remove
-        ),
-        status_code=status.HTTP_202_ACCEPTED,
-        location=lambda result: f"{API_PREFIX}/operations/{result.get('operation_id') or result.get('id')}",
-    )
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("create_blueprint_removal", locals())
 
 
 @router.post(
@@ -181,16 +100,11 @@ def create_blueprint_removal(
     tags=["blueprints"],
     response_model=ResourceModel,
 )
-def create_blueprint_validation(
+async def create_blueprint_validation(
     blueprint_id: str, request: BlueprintValidation | None = None, _principal=Depends(require_auth)
 ):
-    repo_root, blueprint = find_blueprint(_config(), blueprint_id)
-    result = blueprint_launch.validate_blueprint_inputs(
-        repo_root,
-        blueprint,
-        config_overrides=(request.config_overrides if request else {}),
-    )
-    return {"blueprint_id": blueprint_id, "result": public_value(result)}
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("create_blueprint_validation", locals())
 
 
 @router.post(
@@ -200,53 +114,15 @@ def create_blueprint_validation(
     tags=["runs"],
     response_model=ResourceModel,
 )
-def create_blueprint_run(
+async def create_blueprint_run(
     blueprint_id: str,
     request: BlueprintRunCreate | None = None,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", max_length=255),
     principal: str = Depends(require_auth),
     progress_id: str | None = Header(default=None, alias="X-Launch-Progress-ID", max_length=220),
 ):
-    payload = request or BlueprintRunCreate()
-    progress_id = blueprint_launch.validate_progress_id(progress_id if isinstance(progress_id, str) else None)
-
-    def start():
-        repo_root, blueprint = find_blueprint(_config(), blueprint_id)
-        resolved = blueprint_launch.resolve_async_blueprint_run_request(
-            blueprint_id,
-            BlueprintRunRequest(
-                schedule=payload.schedule,
-                job_id=payload.job_id,
-                admission_policy=payload.admission_policy,
-                run_id=payload.run_id,
-                config_overrides=payload.config_overrides,
-                secret_environment=payload.secret_environment,
-                force=payload.force,
-                fake_llm=payload.fake_llm,
-                fake_skills=payload.fake_skills,
-                owner_node=payload.owner_node,
-                replace_existing_run=payload.replace_existing_run,
-                progress_id=progress_id,
-            ),
-        )
-        run = blueprint_launch.run_blueprint_record(repo_root, blueprint, resolved)
-        if isinstance(run, dict):
-            run.setdefault("status", "pending")
-        return run
-
-    return idempotent_response(
-        principal=principal,
-        route=f"{API_PREFIX}/blueprints/{blueprint_id}/runs",
-        key=idempotency_key,
-        body=payload.model_dump(),
-        call=start,
-        status_code=status.HTTP_202_ACCEPTED,
-        location=lambda result: (
-            f"{API_PREFIX}/schedules/{result['schedule_id']}"
-            if result.get("schedule_id")
-            else f"{API_PREFIX}/runs/{result.get('run_id') or result.get('id')}"
-        ),
-    )
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("create_blueprint_run", locals())
 
 
 @router.post(
@@ -256,26 +132,12 @@ def create_blueprint_run(
     tags=["blueprints"],
     response_model=ResourceModel,
 )
-def create_blueprint_catalog_refresh(
+async def create_blueprint_catalog_refresh(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", max_length=255),
     principal: str = Depends(require_auth),
 ):
-    def refresh():
-        repo_root, blueprints = refresh_blueprint_catalog(_config())
-        return complete_local_operation(
-            "refresh_blueprint_catalog",
-            result={"repo_root": str(repo_root), "blueprint_count": len(blueprints)},
-        )
-
-    return idempotent_response(
-        principal=principal,
-        route=f"{API_PREFIX}/blueprint-catalog-refreshes",
-        key=idempotency_key,
-        body={},
-        call=refresh,
-        status_code=status.HTTP_202_ACCEPTED,
-        location=lambda result: f"{API_PREFIX}/operations/{result.get('operation_id') or result.get('id')}",
-    )
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("create_blueprint_catalog_refresh", locals())
 
 
 @router.post(
@@ -285,18 +147,10 @@ def create_blueprint_catalog_refresh(
     tags=["blueprints"],
     response_model=ResourceModel,
 )
-def create_blueprint_cleanup(
+async def create_blueprint_cleanup(
     request: CleanupCreate | None = None,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", max_length=255),
     principal: str = Depends(require_auth),
 ):
-    options = (request or CleanupCreate()).model_dump()
-    return idempotent_response(
-        principal=principal,
-        route=f"{API_PREFIX}/blueprint-cleanups",
-        key=idempotency_key,
-        body=options,
-        call=lambda: start_operation("cleanup_blueprints", options),
-        status_code=status.HTTP_202_ACCEPTED,
-        location=lambda result: f"{API_PREFIX}/operations/{result.get('operation_id') or result.get('id')}",
-    )
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("create_blueprint_cleanup", locals())

@@ -130,7 +130,7 @@ class TestApiConfig(unittest.TestCase):
         self.assertEqual(web_config.port, 55180)
         self.assertEqual(child_env["MN_API_PORT"], "8010")
 
-    def test_local_token_files_override_stale_runtime_env(self):
+    def test_internal_runtime_tokens_are_not_surface_configuration(self):
         with tempfile.TemporaryDirectory() as tmp:
             state_dir = Path(tmp) / ".mn"
             state_dir.mkdir()
@@ -144,10 +144,10 @@ class TestApiConfig(unittest.TestCase):
             with patch.dict(os.environ, {"HOME": tmp}, clear=True):
                 config = ApiConfig.from_env()
 
-        self.assertEqual(config.grpc_auth_token, "auth-from-file")
-        self.assertEqual(config.grpc_admin_token, "admin-from-file")
+        self.assertFalse(hasattr(config, "grpc_auth_token"))
+        self.assertFalse(hasattr(config, "grpc_admin_token"))
 
-    def test_configured_token_files_override_stale_runtime_env(self):
+    def test_internal_token_file_overrides_are_ignored_by_surface(self):
         with tempfile.TemporaryDirectory() as tmp:
             state_dir = Path(tmp) / ".mn"
             state_dir.mkdir()
@@ -171,10 +171,10 @@ class TestApiConfig(unittest.TestCase):
             ):
                 config = ApiConfig.from_env()
 
-        self.assertEqual(config.grpc_auth_token, "auth-from-configured-file")
-        self.assertEqual(config.grpc_admin_token, "admin-from-configured-file")
+        self.assertNotIn("auth-from-configured-file", repr(config))
+        self.assertNotIn("admin-from-configured-file", repr(config))
 
-    def test_runtime_endpoints_override_stale_runtime_grpc_target(self):
+    def test_runtime_endpoint_file_does_not_override_shared_connection(self):
         with tempfile.TemporaryDirectory() as tmp:
             state_dir = Path(tmp) / ".mn"
             state_dir.mkdir()
@@ -190,7 +190,7 @@ class TestApiConfig(unittest.TestCase):
             with patch.dict(os.environ, {"HOME": tmp}, clear=True):
                 config = ApiConfig.from_env()
 
-        self.assertEqual(config.grpc_target, "192.168.4.20:55051")
+        self.assertFalse(hasattr(config, "grpc_target"))
 
 
 if __name__ == "__main__":

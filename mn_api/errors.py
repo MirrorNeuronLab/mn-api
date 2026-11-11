@@ -129,7 +129,7 @@ def app_error_response(
         extra["details"] = preparation
     if app_error.details and "blockers" in app_error.details:
         extra["details"] = {"blockers": sanitize_context(app_error.details)["blockers"]}
-    headers = {}
+    headers = dict(getattr(app_error, "headers", {}))
     if app_error.details and "accepted" in app_error.details:
         details = {
             key: app_error.details[key]

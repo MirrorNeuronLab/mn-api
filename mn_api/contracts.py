@@ -1,9 +1,10 @@
-from __future__ import annotations
+"""Shared contract exports."""
 
-API_PREFIX = "/api/v1"
-API_CONTRACT = "mirrorneuron.rest.v1"
-
-DEFAULT_PAGE_SIZE = 50
-MAX_PAGE_SIZE = 200
-PAGE_TOKEN_TTL_SECONDS = 24 * 60 * 60
-IDEMPOTENCY_TTL_SECONDS = 24 * 60 * 60
+from mn_sdk.runtime_contract.contracts import (
+    API_PREFIX as API_PREFIX,
+    API_CONTRACT as API_CONTRACT,
+    DEFAULT_PAGE_SIZE as DEFAULT_PAGE_SIZE,
+    MAX_PAGE_SIZE as MAX_PAGE_SIZE,
+    PAGE_TOKEN_TTL_SECONDS as PAGE_TOKEN_TTL_SECONDS,
+    IDEMPOTENCY_TTL_SECONDS as IDEMPOTENCY_TTL_SECONDS,
+)

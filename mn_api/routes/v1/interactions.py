@@ -1,57 +1,13 @@
-"""Authenticated HTTP/SSE adaptation. No process-local decision authority."""
+"""Public REST declarations over the shared SDK runtime client."""
 
 from __future__ import annotations
-
-import re
-import json
-import time
-import uuid
+from mn_api.runtime_adapter import call_runtime
 from typing import Annotated
-
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, Header, Request
 from pydantic import BaseModel, ConfigDict, Field
-from starlette.concurrency import run_in_threadpool
-
-from mn_api import state
 from mn_api.dependencies import require_auth
-from mn_sdk.interactions import InteractionClient, InteractionError, PRESETS, publish_example
 
 router = APIRouter(prefix="/api/v1", tags=["interactions"])
-
-
-def service():
-    return InteractionClient(state.get_client())
-
-
-def invoke(function, *args, **kwargs):
-    try:
-        return function(*args, **kwargs)
-    except InteractionError as error:
-        code = error.code
-        status = (
-            404
-            if code == "not_found"
-            else 426
-            if code == "upgrade_required"
-            else 503
-            if code == "store_unavailable"
-            else 409
-            if code
-            in {
-                "closed",
-                "expired",
-                "revision_conflict",
-                "identity_conflict",
-                "idempotency_conflict",
-                "session_closed",
-                "cursor_expired",
-            }
-            else 422
-        )
-        raise HTTPException(
-            status_code=status, detail={"code": code, "message": "Interaction could not be updated."}
-        ) from error
 
 
 class ResponseCommand(BaseModel):
@@ -66,8 +22,9 @@ class ExampleCommand(BaseModel):
 
 
 @router.get("/interactions")
-def list_interactions(_principal=Depends(require_auth)):
-    return invoke(service().snapshot)
+async def list_interactions(_principal=Depends(require_auth)):
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("list_interactions", locals())
 
 
 @router.get("/interactions/events/stream")
@@ -76,96 +33,51 @@ async def stream_interactions(
     last_event_id: Annotated[str, Header(alias="Last-Event-ID")] = "",
     _principal=Depends(require_auth),
 ):
-    if not re.fullmatch(r"[A-Za-z0-9_-]{1,8192}", last_event_id):
-        raise HTTPException(400, "Invalid interaction cursor.")
-    events = service().events(last_event_id)
-    sentinel = object()
-
-    async def source():
-        try:
-            yield ": heartbeat\n\n"
-            while not await request.is_disconnected():
-                try:
-                    event = await run_in_threadpool(next, events, sentinel)
-                except InteractionError as error:
-                    yield "event: interaction.resync\ndata: " + json.dumps({"code": error.code}) + "\n\n"
-                    return
-                if event is sentinel:
-                    return
-                if event.get("type") == "heartbeat":
-                    yield ": heartbeat\n\n"
-                else:
-                    yield f"id: {event['id']}\nevent: interaction.updated\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
-        finally:
-            # Closing the SDK iterator cancels its gRPC call.
-            events.close()
-
-    return StreamingResponse(
-        source(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
-    )
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("stream_interactions", locals())
 
 
 @router.get("/interactions/{interaction_id}")
-def get_interaction(interaction_id: str, _principal=Depends(require_auth)):
-    return invoke(service().get, interaction_id)
+async def get_interaction(interaction_id: str, _principal=Depends(require_auth)):
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("get_interaction", locals())
 
 
 @router.post("/interactions/{interaction_id}/responses")
-def respond(
+async def respond(
     interaction_id: str,
     body: ResponseCommand,
     idempotency_key: Annotated[str, Header(min_length=1, max_length=160)],
     _principal=Depends(require_auth),
 ):
-    return invoke(
-        service().respond,
-        interaction_id,
-        expected_revision=body.expected_revision,
-        command_id=idempotency_key,
-        answer=body.answer,
-    )
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("respond", locals())
 
 
 @router.post("/interactions/{interaction_id}/acknowledgements")
-def acknowledge(
+async def acknowledge(
     interaction_id: str,
     body: ResponseCommand,
     idempotency_key: Annotated[str, Header(min_length=1, max_length=160)],
     _principal=Depends(require_auth),
 ):
-    return invoke(
-        service().acknowledge, interaction_id, expected_revision=body.expected_revision, command_id=idempotency_key
-    )
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("acknowledge", locals())
 
 
 @router.post("/interaction-test-sessions", status_code=201)
-def create_session(_principal=Depends(require_auth)):
-    session_id = "test-" + uuid.uuid4().hex
-    record = invoke(
-        service().publish,
-        interaction_id=session_id,
-        scope={"session_id": session_id},
-        kind="session",
-        presentation={"widget": "context", "title": "Test conversation"},
-        blocking=False,
-        expires_at=int(time.time() * 1000) + 1800000,
-    )
-    return {"id": record["id"], "presets": PRESETS}
+async def create_session(_principal=Depends(require_auth)):
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("create_session", locals())
 
 
 @router.post("/interaction-test-sessions/{session_id}/examples")
-def example(session_id: str, body: ExampleCommand, _principal=Depends(require_auth)):
-    return invoke(publish_example, service(), session_id, body.preset)
+async def example(session_id: str, body: ExampleCommand, _principal=Depends(require_auth)):
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("example", locals())
 
 
 @router.delete("/interaction-test-sessions/{session_id}")
-def close_session(session_id: str, _principal=Depends(require_auth)):
-    client = service()
-    record = invoke(client.get, session_id)
-    if record.get("kind") != "session":
-        raise HTTPException(404, "Test session not found.")
-    if record["state"] == "pending":
-        invoke(
-            client.command, "cancel", id=session_id, expected_revision=record["revision"], command_id=uuid.uuid4().hex
-        )
-    return {"closed": True}
+async def close_session(session_id: str, _principal=Depends(require_auth)):
+    """Forward this operation to the connected runtime."""
+    return await call_runtime("close_session", locals())

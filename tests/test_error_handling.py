@@ -64,11 +64,9 @@ def test_structured_http_validation_keeps_rule_and_field_without_private_values(
 def test_http_and_operation_errors_share_identity_and_original_status(status, code, retryable):
     from fastapi import HTTPException
     from mn_api.errors import http_exception_problem
-    from mn_api.operations import _operation_error
 
     error = HTTPException(status, "private detail token=private-token")
     problem = http_exception_problem(error)
-    assert _operation_error(error) == problem
     assert problem["code"] == code
     assert problem["status"] == status
     assert problem["retryable"] is retryable

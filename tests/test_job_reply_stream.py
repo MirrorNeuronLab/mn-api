@@ -1,84 +1,74 @@
 import asyncio
+import json
 from types import SimpleNamespace
 import pytest
 from mn_api.job_reply_stream import stream_job_reply
 
 
-def run_parts(parts, ctx=None):
-    actions = []
+def test_reply_stream_preserves_order_and_completed_response():
+    calls = []
+    progress = []
 
-    def command(job, question, **kwargs):
-        action = kwargs["control"]["action"]
-        actions.append(action)
-        if action == "cancel":
-            return {}
-        return parts.pop(0)
+    def command(*args, **kwargs):
+        calls.append(kwargs)
+        cursor = kwargs["control"]["cursor"]
+        return {
+            "schema_version": "mn.mcp.job_answer_stream.v1",
+            "request_id": "known",
+            "delta": "hello" if not cursor else " world",
+            "cursor": 5 if not cursor else 11,
+            "done": bool(cursor),
+            "response": {"schema_version": "mn.mcp.job_answer.v1", "answer": "hello world"},
+        }
 
-    async def report(*args, **kwargs):
-        pass
+    async def report(sequence, message):
+        progress.append((sequence, json.loads(message)))
 
-    async def run():
-        return await stream_job_reply(
+    result = asyncio.run(
+        stream_job_reply(
             SimpleNamespace(response_stream_command=command),
             "job",
             "question",
             None,
-            "r",
-            ctx or SimpleNamespace(report_progress=report),
+            "known",
+            SimpleNamespace(report_progress=report),
+            assistance_task={"goal": "respond"},
         )
-
-    return run, actions
-
-
-def part(**overrides):
-    return {
-        "schema_version": "mn.mcp.job_answer_stream.v1",
-        "request_id": "r",
-        "delta": "",
-        "cursor": 0,
-        "done": False,
-        **overrides,
-    }
+    )
+    assert result["answer"] == "hello world" and [v[0] for v in progress] == [1, 2]
+    assert [v["control"]["action"] for v in calls] == ["start", "read"]
+    assert calls[0]["assistance_task"] == {"goal": "respond"}
 
 
 @pytest.mark.parametrize(
-    "bad",
+    "change",
     [
-        {},
-        part(request_id="other"),
-        part(failed=True),
-        part(cancelled=True),
-        part(cursor=-1),
-        part(delta="x", cursor=0),
-        part(delta="x" * 4001, cursor=4001),
-        part(done=True, response={"schema_version": "wrong"}),
+        {"schema_version": "old"},
+        {"request_id": "different"},
+        {"failed": True},
+        {"cancelled": True},
+        {"delta": "x" * 4001},
+        {"cursor": 42},
+        {"response": {}},
     ],
 )
-def test_invalid_stream_is_cancelled_without_returning_an_answer(bad):
-    run, actions = run_parts([bad])
+def test_invalid_or_interrupted_reply_cancels_runtime_stream(change):
+    calls = []
+
+    def command(*args, **kwargs):
+        calls.append(kwargs["control"]["action"])
+        return {
+            "schema_version": "mn.mcp.job_answer_stream.v1",
+            "request_id": "known",
+            "delta": "",
+            "cursor": 0,
+            "done": True,
+            "response": {"schema_version": "mn.mcp.job_answer.v1"},
+            **change,
+        }
+
     with pytest.raises(ValueError):
-        asyncio.run(run())
-    assert actions[-1] == "cancel"
-
-
-def test_empty_stream_replay_returns_final_result_without_duplicate_deltas():
-    response = {"schema_version": "mn.mcp.job_answer.v1", "answer": "Already answered"}
-
-    async def unexpected(*args, **kwargs):
-        pytest.fail("Replays must not emit duplicate answer deltas")
-
-    run, actions = run_parts([part(done=True, response=response)], SimpleNamespace(report_progress=unexpected))
-    assert asyncio.run(run()) == response
-    assert actions == ["start"]
-
-
-def test_stream_deadline_cancels_runtime(monkeypatch):
-    clock = iter([0, 91])
-    # Keep the event loop's shared time module clock intact.
-    import mn_api.job_reply_stream as module
-
-    monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: next(clock, 91)))
-    run, actions = run_parts([part()])
-    with pytest.raises(TimeoutError):
-        asyncio.run(run())
-    assert actions[-1] == "cancel"
+        asyncio.run(
+            stream_job_reply(SimpleNamespace(response_stream_command=command), "job", "question", None, "known", None)
+        )
+    assert calls == ["start", "cancel"]

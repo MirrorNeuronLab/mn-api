@@ -15,27 +15,14 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
 from mn_api.config import WebUiConfig
-from mn_api.job_ui_readiness import PROBE_HEADER
+from mn_sdk.job_ui_proxy import (
+    PROBE_HEADER,
+    HOP_BY_HOP_HEADERS,
+    JobUiProxyError,
+    _job_ui_target_url,
+    _remote_proxy_headers,
+)
 from mn_api.job_ui_routing import EXECUTION_HEADER, HOP_HEADER, relay_target
-
-
-HOP_BY_HOP_HEADERS = {
-    "connection",
-    "keep-alive",
-    "proxy-authenticate",
-    "proxy-authorization",
-    "te",
-    "trailers",
-    "transfer-encoding",
-    "upgrade",
-}
-
-
-class JobUiProxyError(Exception):
-    def __init__(self, status_code: int, detail: str):
-        super().__init__(detail)
-        self.status_code = status_code
-        self.detail = detail
 
 
 def resolve_dist_dir(value: str | None = None, cwd: Path | None = None) -> Path:
@@ -330,90 +317,6 @@ def _load_job_web_ui(job_id: str, *, upstream_api: str, api_token: str, check_re
     if not isinstance(web_ui, dict):
         raise JobUiProxyError(404, "No Web UI is registered for this job.")
     return web_ui
-
-
-def _job_ui_target_url(
-    web_ui: dict[str, Any],
-    *,
-    port: int,
-    path: str,
-    query: str,
-    websocket: bool = False,
-    check_readiness: bool = True,
-) -> str:
-    status = str(web_ui.get("status") or "").strip().lower()
-    metadata = web_ui.get("metadata")
-    readiness = metadata.get("readiness") if isinstance(metadata, dict) else None
-    if status not in {"running", "ready", "passing"} or (
-        check_readiness and isinstance(readiness, dict) and readiness.get("ready") is not True
-    ):
-        raise JobUiProxyError(409, "The job Web UI service is not running.")
-    raw_url = web_ui.get("url")
-    parsed = urllib.parse.urlsplit(str(raw_url or ""))
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
-        raise JobUiProxyError(404, "The job Web UI endpoint is invalid.")
-
-    try:
-        primary_port = parsed.port or (443 if parsed.scheme == "https" else 80)
-    except ValueError as exc:
-        raise JobUiProxyError(404, "The job Web UI endpoint is invalid.") from exc
-    allowed_ports = _allowed_job_ui_ports(web_ui, websocket=websocket, primary_port=primary_port)
-    if port not in allowed_ports:
-        raise JobUiProxyError(404, "That job Web UI connection is not declared.")
-
-    path = _safe_proxy_path(path)
-    scheme = "wss" if websocket and parsed.scheme == "https" else "ws" if websocket else parsed.scheme
-    host = parsed.hostname
-    display_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
-    target = f"{scheme}://{display_host}:{port}/{path}" if path else f"{scheme}://{display_host}:{port}/"
-    normalized_query = _normalize_proxy_query(query)
-    return f"{target}?{normalized_query}" if normalized_query else target
-
-
-def _allowed_job_ui_ports(web_ui: dict[str, Any], *, websocket: bool, primary_port: int) -> set[int]:
-    metadata = web_ui.get("metadata")
-    metadata = metadata if isinstance(metadata, dict) else {}
-    policy = metadata.get("proxy")
-    policy = policy if isinstance(policy, dict) else {}
-    key = "websocket_ports" if websocket else "http_ports"
-    ports = {_valid_port(item) for item in policy.get(key, []) if _valid_port(item) is not None}
-    if not websocket:
-        ports.add(primary_port)
-    return {port for port in ports if port is not None}
-
-
-def _valid_port(value: Any) -> int | None:
-    try:
-        port = int(value)
-    except (TypeError, ValueError):
-        return None
-    return port if 1 <= port <= 65535 else None
-
-
-def _safe_proxy_path(path: str) -> str:
-    parts = [part for part in str(path or "").split("/") if part]
-    if any(urllib.parse.unquote(part) in {".", ".."} for part in parts):
-        raise JobUiProxyError(404, "That job Web UI path is invalid.")
-    return "/".join(urllib.parse.quote(urllib.parse.unquote(part), safe=":@") for part in parts)
-
-
-def _normalize_proxy_query(query: str) -> str:
-    pairs = urllib.parse.parse_qsl(str(query or ""), keep_blank_values=True)
-    return urllib.parse.urlencode(pairs, doseq=True, safe="/")
-
-
-def _remote_proxy_headers(headers: Iterable[tuple[str, str]]) -> dict[str, str]:
-    excluded = HOP_BY_HOP_HEADERS | {
-        "host",
-        "authorization",
-        "cookie",
-        "accept-encoding",
-        "origin",
-        PROBE_HEADER.lower(),
-        EXECUTION_HEADER.lower(),
-        HOP_HEADER.lower(),
-    }
-    return {key: value for key, value in headers if key.lower() not in excluded}
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):

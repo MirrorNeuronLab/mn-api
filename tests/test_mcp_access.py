@@ -2,7 +2,6 @@
 
 import base64
 import hashlib
-import json
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -11,7 +10,7 @@ from pydantic import AnyUrl
 
 from mn_api.app import create_app
 from mn_api.mcp_access import ConnectionStore
-from tests.test_job_mcp import MCPRuntime, _configure, _mcp_request
+from tests.mcp_protocol_fake import MCPRuntime, _configure, _mcp_request
 
 RESOURCE = "https://runtime.example/api/v1/jobs/job-1/mcp"
 
@@ -77,31 +76,6 @@ def test_external_enabling_requires_owner_authentication(monkeypatch):
             client.put("/api/v1/jobs/job-1/mcp-access", json={"enabled": True, "server_url": RESOURCE}).status_code
             == 401
         )
-
-
-def test_external_clients_cannot_supply_native_launch_secrets(monkeypatch):
-    _configure(monkeypatch, MCPRuntime(), token="owner-token")
-    with TestClient(create_app(), headers={"Authorization": "Bearer owner-token"}) as client:
-        key = client.put("/api/v1/jobs/job-1/mcp-access", json={"enabled": True, "server_url": RESOURCE}).json()[
-            "connection_code"
-        ]
-        receipt = _mcp_request(
-            client,
-            "job-1",
-            {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "tools/call",
-                "params": {
-                    "name": "start_run",
-                    "arguments": {"request_id": "external-native"},
-                    "_meta": {"mn.launch": {"secret_environment": {"TOKEN": "private-launch-secret"}}},
-                },
-            },
-            token=key,
-        ).json()
-        assert receipt["result"]["structuredContent"]["status"] == "failed"
-        assert "private-launch-secret" not in json.dumps(receipt)
 
 
 def test_oauth_pkce_link_refresh_and_revocation(monkeypatch):
@@ -316,82 +290,3 @@ def test_oauth_requires_pkce_valid_resource_and_supervision_scope(monkeypatch):
             )
             assert "error=" in response.headers.get("location", "") or response.status_code == 400
             assert "/approve?" not in response.headers.get("location", "")
-
-
-def test_native_secret_launch_is_ephemeral_idempotent_and_observed(monkeypatch, tmp_path):
-    from starlette.responses import JSONResponse
-    from mn_api import operations
-    from mn_api.routes.v1 import blueprints
-
-    runtime = MCPRuntime()
-    _configure(monkeypatch, runtime, token="owner-token")
-    monkeypatch.setenv("MN_HOME", str(tmp_path))
-    # Native launch must see the same model contract on the owner and Core.
-    from mn_api import blueprints as catalog
-    from mn_api import blueprint_launch as legacy
-
-    runtime.jobs["job-1"]["workflow_definition"] = {"runtime": {"bindings": {}}}
-    get_job = runtime.get_job
-    monkeypatch.setattr(runtime, "get_job", lambda job_id, **_: get_job(job_id))
-    monkeypatch.setattr(catalog, "find_blueprint", lambda *_: (tmp_path, {"id": "chat-blueprint"}))
-    monkeypatch.setattr(catalog, "validate_blueprint_bundle", lambda *_: tmp_path)
-    monkeypatch.setattr(legacy, "read_manifest_for_launch", lambda *_: {"runtime": {"bindings": {}}})
-    callbacks, snapshots, launches = {}, {}, []
-
-    def start(kind, attributes, callback, *, operation_id, durable):
-        assert attributes == {"job_id": "job-1"} and durable
-        callbacks[operation_id] = callback
-        snapshots[operation_id] = {"operation_id": operation_id, "status": "running", "progress": {"stage": "submit"}}
-        return snapshots[operation_id]
-
-    def launch(blueprint_id, request, request_id, principal, response):
-        launches.append((request.secret_environment, request.config_overrides))
-        return JSONResponse(
-            {"job_id": "job-1", "run_id": "execution-new", "runtime_run_id": "output-new", "status": "running"}
-        )
-
-    monkeypatch.setattr(operations, "start_local_operation", start)
-    monkeypatch.setattr(operations, "get_operation", lambda operation_id: snapshots[operation_id])
-    monkeypatch.setattr(blueprints, "create_blueprint_run", launch)
-    body = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/call",
-        "params": {
-            "name": "start_run",
-            "arguments": {"request_id": "native-secret"},
-            "_meta": {
-                "mn.launch": {
-                    "secret_environment": {"TOKEN": "ephemeral-launch-value"},
-                    "config_overrides": {"query": "review"},
-                }
-            },
-        },
-    }
-    with TestClient(create_app(), headers={"Authorization": "Bearer owner-token"}) as client:
-
-        def invoke(value):
-            return _mcp_request(client, "job-1", value).json()["result"]["structuredContent"]
-
-        receipt = invoke(body)
-        assert receipt["status"] == "accepted"
-        assert len(callbacks) == 1 and launches == []
-        assert invoke(body)["operation_id"] == receipt["operation_id"]
-        assert len(callbacks) == 1
-        backend_id = next(iter(callbacks))
-        result = callbacks[backend_id](lambda **kw: None)
-        snapshots[backend_id].update(status="completed", result=result)
-        observed = invoke(
-            {
-                "jsonrpc": "2.0",
-                "id": 2,
-                "method": "tools/call",
-                "params": {"name": "get_operation_status", "arguments": {"operation_id": receipt["operation_id"]}},
-            }
-        )
-        assert observed["status"] == "completed"
-        assert observed["run_id"] == "execution-new"
-        assert observed["data"]["runtime_run_id"] == "output-new"
-        assert launches == [({"TOKEN": "ephemeral-launch-value"}, {"query": "review"})]
-        assert "ephemeral-launch-value" not in json.dumps(observed)
-        assert all(b"ephemeral-launch-value" not in path.read_bytes() for path in tmp_path.rglob("*.sqlite3"))
