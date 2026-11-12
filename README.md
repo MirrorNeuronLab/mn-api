@@ -1,5 +1,10 @@
 # MirrorNeuron API
 
+MCP supervision reports temporary native runtime interruptions as protocol error
+`-32000` with data `{ "code": "MN_RUNTIME_UNAVAILABLE", "retryable": true }`.
+Clients can reconnect and poll the same accepted operation. Terminal operation
+outcomes retain their existing receipts.
+
 ## Application surface
 
 `mn-api` exposes REST `/api/v1` over the SDK's native runtime client in both full

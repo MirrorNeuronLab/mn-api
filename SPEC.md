@@ -1,5 +1,10 @@
 # MirrorNeuron API Specification
 
+Native supervision maps `MN_RUNTIME_UNAVAILABLE` to MCP protocol error `-32000`
+with data `{ "code": "MN_RUNTIME_UNAVAILABLE", "retryable": true }` and a fixed
+safe message. It preserves accepted operation identities through status-read
+interruptions. Terminal operation failures retain their existing receipts.
+
 ## Measured processing speed
 
 Run workflow-progress responses and resumed SSE snapshots preserve optional

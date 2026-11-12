@@ -1,6 +1,7 @@
 """MCP sessions exercise only the shared native transport, never runtime imports."""
 
 import asyncio
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -143,6 +144,36 @@ def test_supervision_errors_keep_existing_mcp_contract(transport, status, error)
     transport.error = AppError("MN_REMOTE_REJECTED", "Rejected", http_status=status)
     with pytest.raises(error):
         BoundJobSupervision(JobContextProvider(), lambda: "job-1").identity()
+
+
+@pytest.mark.parametrize("method", ["identity", "declaration", "invoke"])
+def test_supervision_poll_interruption_is_a_retryable_protocol_error(transport, monkeypatch, method):
+    original = RuntimeControlClient.command
+
+    def interrupted(self, action, values, **kwargs):
+        if action == "mcp.supervision" and values["method"] == method:
+            raise AppError("MN_RUNTIME_UNAVAILABLE", "private upstream detail", http_status=503)
+        return original(self, action, values, **kwargs)
+
+    monkeypatch.setattr(RuntimeControlClient, "command", interrupted)
+    with TestClient(create_app()) as api:
+        response = _mcp_request(api, "job-1", {
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "get_operation_status", "arguments": {"operation_id": "accepted-operation"}},
+        }, token="surface-secret")
+    assert response.status_code == 200
+    text = response.text
+    if text.startswith("event:"):
+        payload = json.loads(next(line[6:] for line in text.splitlines() if line.startswith("data: ")))
+    else:
+        payload = response.json()
+    assert payload["error"] == {
+        "code": -32000,
+        "message": "The runtime connection is temporarily unavailable.",
+        "data": {"code": "MN_RUNTIME_UNAVAILABLE", "retryable": True},
+    }
+    assert "private upstream detail" not in text
+    assert "result" not in payload
 
 
 def test_native_context_rejects_unknown_methods_and_serializes_models(transport):

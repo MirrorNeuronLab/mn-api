@@ -3,6 +3,7 @@
 from contextvars import ContextVar
 
 import anyio
+from mcp.shared.exceptions import MCPError
 from mn_sdk.runtime_control import RuntimeControlClient
 from mn_api.runtime_mcp import wire_value
 
@@ -29,6 +30,12 @@ class BoundJobSupervision:
                     },
                 )
         except AppError as exc:
+            if exc.code == "MN_RUNTIME_UNAVAILABLE":
+                raise MCPError(
+                    -32000,
+                    "The runtime connection is temporarily unavailable.",
+                    data={"code": "MN_RUNTIME_UNAVAILABLE", "retryable": True},
+                ) from exc
             if exc.http_status == 404:
                 raise KeyError(exc.user_message) from exc
             if exc.http_status == 422:
