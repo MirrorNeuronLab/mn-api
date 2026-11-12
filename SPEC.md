@@ -245,6 +245,9 @@ No artificial completion percentage is inferred from elapsed time.
   over the SDK-owned `$MN_HOME/models/registry.json`; they do not restore the
   removed CLI proxy/manual-remote lifecycle or project legacy ledgers.
 - Collection responses contain `items` and an opaque `next_page_token`.
+- `GET /api/v1/blueprints` lists metadata using the SDK and the surface's
+  configured catalog. It works before runtime attachment. Blueprint detail
+  and preparation continue to use the execution node's catalog.
 - Streaming endpoints must terminate on completion, error, timeout, or client
   disconnect and must not leak background tasks.
 - Job workflow definition and latest-run shape endpoints expose public step

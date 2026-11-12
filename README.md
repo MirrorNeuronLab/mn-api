@@ -7,6 +7,12 @@ and client installations. It owns HTTP validation, authentication, streaming and
 MCP sessions. Catalog preparation, execution and durable observers run on runtime
 nodes and continue when this process stops.
 
+`GET /api/v1/blueprints` uses the SDK installed on the API computer to read
+its configured catalog. It is available before node attachment and keeps the
+same bearer authentication, category filtering, and pagination. Git catalog
+sources require Git. The execution node resolves individual blueprints for
+validation, addition, and execution from its own configured catalog.
+
 ```bash
 mn node add runtime.example --grpc-port 55051 --token "$RUNTIME_NODE_TOKEN"
 mn-api

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 from mn_api.runtime_adapter import call_runtime
-from fastapi import APIRouter, Depends, Header, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from mn_sdk.blueprint_catalog import list_catalog_blueprints
+from mn_sdk.runtime_contract.pagination import page
 from mn_api.api_models import (
     BlueprintAdd,
     BlueprintPageResponse,
@@ -37,14 +39,27 @@ async def get_launch_progress(progress_id: str, _principal=Depends(require_auth)
     response_model=BlueprintPageResponse,
     response_model_exclude_unset=True,
 )
-async def list_blueprints(
+def list_blueprints(
     category: str | None = None,
     page_size: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     page_token: str | None = None,
     principal: str = Depends(require_auth),
 ):
-    """Forward this operation to the connected runtime."""
-    return await call_runtime("list_blueprints", locals())
+    """Read the configured surface catalog, including before node attachment."""
+    items = list_catalog_blueprints(category)
+    try:
+        return page(
+            items,
+            route=f"{API_PREFIX}/blueprints",
+            principal=principal,
+            filters={"category": category},
+            page_size=page_size,
+            page_token=page_token,
+            sort_key="id",
+            key=lambda item: item["id"],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get(

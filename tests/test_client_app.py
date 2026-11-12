@@ -14,6 +14,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from mn_api import state
 from mn_api.app import create_app
+from mn_sdk.blueprints.authoring import write_blueprint_definition
 from mn_sdk.errors import AppError
 from mn_sdk.proto import runtime_control_pb2 as wire
 from mn_sdk.runtime_connection import REQUIRED_CAPABILITIES, RuntimeConnection, load_connection, save_connection
@@ -150,6 +151,57 @@ def test_health_and_connection_credentials_are_local(native):
         assert api.delete("/api/v1/nodes/node@remote").status_code == 200
         assert not (native.home / "client.json").exists()
     assert all(call[4].token != "local-secret" for call in native.calls)
+
+
+def test_catalog_is_readable_before_attachment(native, monkeypatch):
+    catalog = native.home / "catalog"
+    catalog.mkdir()
+    for identity in ("one", "two"):
+        write_blueprint_definition(
+            catalog / identity,
+            {
+                "apiVersion": "mn.workflow/v1",
+                "kind": "Workflow",
+                "id": identity,
+                "name": identity.title(),
+                "workflow": {"steps": [{"id": "finish"}]},
+                "agents": {},
+                "runtime": {},
+                "contract": {},
+            },
+        )
+    (catalog / "index.json").write_text('["two", "one"]')
+    monkeypatch.setenv("MN_BLUEPRINT_SOURCE", "local")
+    monkeypatch.setenv("MN_BLUEPRINT_LOCAL", str(catalog))
+    with client() as api:
+        assert api.get("/api/v1/blueprints", headers={"Authorization": ""}).status_code == 401
+        first = api.get("/api/v1/blueprints?page_size=1")
+        assert first.status_code == 200, first.text
+        assert [item["id"] for item in first.json()["items"]] == ["one"]
+        token = first.json()["next_page_token"]
+        second = api.get("/api/v1/blueprints", params={"page_size": 1, "page_token": token})
+        assert [item["id"] for item in second.json()["items"]] == ["two"]
+        assert second.json()["next_page_token"] is None
+        mismatch = api.get("/api/v1/blueprints", params={"category": "other", "page_token": token})
+        assert mismatch.status_code == 400
+        assert mismatch.json()["code"] == "bad_request"
+        assert not native.calls
+        for method, url in (("GET", "/blueprints/one"), ("POST", "/blueprints/one/additions")):
+            response = api.request(method, "/api/v1" + url)
+            assert response.status_code == 503
+            assert response.json()["code"] == "MN_CLIENT_NOT_CONNECTED"
+
+
+def test_catalog_error_does_not_expose_source_paths(native, monkeypatch):
+    catalog = native.home / "private-missing-catalog"
+    monkeypatch.setenv("MN_BLUEPRINT_SOURCE", "local")
+    monkeypatch.setenv("MN_BLUEPRINT_LOCAL", str(catalog))
+    with client() as api:
+        result = api.get("/api/v1/blueprints")
+        assert result.status_code == 503
+        assert result.headers["content-type"].startswith("application/problem+json")
+        assert result.json()["code"] == "MN_BLUEPRINT_CATALOG_UNAVAILABLE"
+        assert str(catalog) not in result.text and not native.calls
 
 
 @pytest.mark.parametrize("status", [202, 400, 401, 409, 412, 422, 503])
