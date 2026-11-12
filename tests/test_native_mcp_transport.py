@@ -157,10 +157,17 @@ def test_supervision_poll_interruption_is_a_retryable_protocol_error(transport, 
 
     monkeypatch.setattr(RuntimeControlClient, "command", interrupted)
     with TestClient(create_app()) as api:
-        response = _mcp_request(api, "job-1", {
-            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
-            "params": {"name": "get_operation_status", "arguments": {"operation_id": "accepted-operation"}},
-        }, token="surface-secret")
+        response = _mcp_request(
+            api,
+            "job-1",
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "get_operation_status", "arguments": {"operation_id": "accepted-operation"}},
+            },
+            token="surface-secret",
+        )
     assert response.status_code == 200
     text = response.text
     if text.startswith("event:"):
