@@ -1,5 +1,10 @@
 # MirrorNeuron API
 
+Archive waits for execution-owner cleanup before acknowledging completion.
+The SDK uses a 310-second Core deadline; REST and resource adapters share a
+330-second cleanup deadline for archive and Job/Run deletion. Ordinary reads
+retain their short deadlines. No mutation is replayed after a transport timeout.
+
 MCP supervision reports temporary native runtime interruptions as protocol error
 `-32000` with data `{ "code": "MN_RUNTIME_UNAVAILABLE", "retryable": true }`.
 Clients can reconnect and poll the same accepted operation. Terminal operation

@@ -14,7 +14,7 @@ from pydantic import BaseModel, SecretStr
 
 from mn_sdk.runtime_connection import connect, remove_node
 from mn_sdk.runtime_control import RuntimeControlClient, decode_reply
-from mn_sdk.runtime_contract.endpoints import OPERATIONS, rpc_method
+from mn_sdk.runtime_contract.endpoints import OPERATIONS, rpc_method, rpc_timeout
 
 STREAM_ACTIONS = {
     "stream_interactions",
@@ -92,7 +92,7 @@ async def call_runtime(action, values):
         return await stream(action, arguments, request)
 
     def invoke():
-        with RuntimeControlClient(timeout=3600 if rpc_method(item) == "Prepare" else 30) as client:
+        with RuntimeControlClient(timeout=rpc_timeout(item, arguments)) as client:
             arguments["_context"] = context_options(request)
             return client.call(rpc_method(item), action, arguments, request_id=arguments.get("idempotency_key") or "")
 
