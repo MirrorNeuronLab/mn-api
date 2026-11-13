@@ -738,6 +738,31 @@ raw events remain available for diagnostics.
 
 ## Standard Job MCP supervision
 
+`get_operation_status` accepts exactly one of `operation_id` or `request_id`.
+Both resolve the original Job-scoped journal record and validate its saved Job
+generation. Request lookup recovers a lost acceptance without repeating an
+effect. Runtime restart retains the original launch/transition binding; a
+missing or inaccessible journal is a typed unresolved result, never permission
+to submit another launch.
+
+Start, pause, resume and stop have no observation-only deadline. Individual
+network deadlines and actual execution/domain budgets remain bounded. Only
+authoritative operation receipts establish terminal outcomes; routing and
+connection interruptions (including identity and capability reads) are typed
+MCP protocol errors. Read-only routing compares Job, owner and data generation;
+ordinary Job revision remains a mutation precondition, not a read precondition.
+`stop_run({queued_only: true})` retains the existing atomic Core guard for
+cancelling a queued start without cancelling work that has already begun.
+Owner changes require a fresh route. Legacy run-control records marked timed
+out only by `operation_timed_out` are reconciled against their original saved
+binding; execution failures and execution timeouts remain terminal. Uncertain
+effects are never automatically replayed.
+
+Release matching SDK/common/MCP/runtime and API components before the desktop
+coordinator. Owner-local journals are not replicated by this contract. If an
+original receipt cannot be recovered, clients must keep the outcome unconfirmed
+and offer review rather than manufacture success or failure.
+
 The owner relay preserves `MCP-Protocol-Version`, `Mcp-Method` and `Mcp-Name`
 with the request body, session and event cursor headers. Modern discovery and
 named-tool calls must reach the owner with their matching method/name headers;

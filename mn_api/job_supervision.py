@@ -30,17 +30,21 @@ class BoundJobSupervision:
                     },
                 )
         except AppError as exc:
-            if exc.code == "MN_RUNTIME_UNAVAILABLE":
+            if exc.code in {"MN_RUNTIME_UNAVAILABLE", "MN_JOB_OWNER_CHANGED", "MN_JOB_UNAVAILABLE"}:
                 raise MCPError(
                     -32000,
                     "The runtime connection is temporarily unavailable.",
-                    data={"code": "MN_RUNTIME_UNAVAILABLE", "retryable": True},
+                    data={"code": exc.code, "retryable": True},
                 ) from exc
             if exc.http_status == 404:
                 raise KeyError(exc.user_message) from exc
             if exc.http_status == 422:
                 raise ValueError(exc.user_message) from exc
-            raise
+            raise MCPError(
+                -32000,
+                "The runtime could not confirm this request. Review its status.",
+                data={"code": exc.code, "retryable": False},
+            ) from exc
 
     def identity(self):
         return self._call("identity")

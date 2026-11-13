@@ -12,6 +12,7 @@ from mn_api.app import create_app
 from mn_api.job_supervision import BoundJobSupervision, native_launch_authority
 from mn_api.runtime_mcp import JobContextProvider, wire_value
 from mn_sdk.errors import AppError
+from mcp.shared.exceptions import MCPError
 from mn_sdk.runtime_control import RuntimeControlClient
 from tests.mcp_protocol_fake import MCPRuntime, _configure, _mcp_request
 
@@ -139,20 +140,21 @@ def test_supervision_preserves_ephemeral_launch_input_and_authority(transport):
     assert launch["arguments"] == {"node": "node-two"}
 
 
-@pytest.mark.parametrize("status, error", [(404, KeyError), (422, ValueError), (409, AppError)])
+@pytest.mark.parametrize("status, error", [(404, KeyError), (422, ValueError), (409, MCPError)])
 def test_supervision_errors_keep_existing_mcp_contract(transport, status, error):
     transport.error = AppError("MN_REMOTE_REJECTED", "Rejected", http_status=status)
     with pytest.raises(error):
         BoundJobSupervision(JobContextProvider(), lambda: "job-1").identity()
 
 
-@pytest.mark.parametrize("method", ["identity", "declaration", "invoke"])
-def test_supervision_poll_interruption_is_a_retryable_protocol_error(transport, monkeypatch, method):
+@pytest.mark.parametrize("method", ["identity", "declaration", "invoke", "capabilities"])
+@pytest.mark.parametrize("code,status", [("MN_RUNTIME_UNAVAILABLE", 503), ("MN_JOB_OWNER_CHANGED", 409)])
+def test_supervision_poll_interruption_is_a_retryable_protocol_error(transport, monkeypatch, method, code, status):
     original = RuntimeControlClient.command
 
     def interrupted(self, action, values, **kwargs):
         if action == "mcp.supervision" and values["method"] == method:
-            raise AppError("MN_RUNTIME_UNAVAILABLE", "private upstream detail", http_status=503)
+            raise AppError(code, "private upstream detail", http_status=status)
         return original(self, action, values, **kwargs)
 
     monkeypatch.setattr(RuntimeControlClient, "command", interrupted)
@@ -164,7 +166,10 @@ def test_supervision_poll_interruption_is_a_retryable_protocol_error(transport, 
                 "jsonrpc": "2.0",
                 "id": 1,
                 "method": "tools/call",
-                "params": {"name": "get_operation_status", "arguments": {"operation_id": "accepted-operation"}},
+                "params": {
+                    "name": "get_capabilities" if method == "capabilities" else "get_operation_status",
+                    "arguments": {} if method == "capabilities" else {"operation_id": "accepted-operation"},
+                },
             },
             token="surface-secret",
         )
@@ -177,7 +182,7 @@ def test_supervision_poll_interruption_is_a_retryable_protocol_error(transport, 
     assert payload["error"] == {
         "code": -32000,
         "message": "The runtime connection is temporarily unavailable.",
-        "data": {"code": "MN_RUNTIME_UNAVAILABLE", "retryable": True},
+        "data": {"code": code, "retryable": True},
     }
     assert "private upstream detail" not in text
     assert "result" not in payload
