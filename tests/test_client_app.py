@@ -55,8 +55,10 @@ def native(tmp_path, monkeypatch):
             )
         if action == "node.remove":
             if arguments["node_name"] == "busy@remote":
-                raise AppError("MN_NODE_DRAIN_REQUIRED", "Drain this node first.", http_status=409)
-            return reply({"status": "removed"})
+                raise AppError("MN_NODE_BUSY", "The node still owns admitted or queued work.", http_status=409)
+            if arguments["node_name"] == "unconfirmed@remote":
+                return reply({"status": "pending"})
+            return reply({"status": "removed", "node_name": arguments["node_name"]})
         if config.error:
             raise config.error
         return config.response
@@ -146,7 +148,13 @@ def test_health_and_connection_credentials_are_local(native):
         before = (native.home / "client.json").read_bytes()
         assert api.post("/api/v1/nodes", json={"host": "replacement", "token": "bad"}).status_code == 401
         assert (native.home / "client.json").read_bytes() == before
-        assert api.delete("/api/v1/nodes/busy@remote").status_code == 409
+        busy = api.delete("/api/v1/nodes/busy@remote")
+        assert busy.status_code == 409 and busy.json()["code"] == "MN_NODE_BUSY"
+        assert busy.headers["content-type"].startswith("application/problem+json")
+        assert (native.home / "client.json").read_bytes() == before
+        unconfirmed = api.delete("/api/v1/nodes/unconfirmed@remote")
+        assert unconfirmed.status_code == 502
+        assert unconfirmed.json()["code"] == "MN_NODE_REMOVAL_UNCONFIRMED"
         assert (native.home / "client.json").read_bytes() == before
         assert api.delete("/api/v1/nodes/node@remote").status_code == 200
         assert not (native.home / "client.json").exists()

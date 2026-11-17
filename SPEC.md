@@ -957,10 +957,12 @@ profiles are retained and rejected with explicit reconnection guidance.
 
 The first node addition attaches a surface; later additions ask the entry runtime
 to federate peers. Surfaces never register as compute nodes. Removing a node uses
-its authoritative completed-drain and idle-admission checks; removing the entry
-also disconnects the surface. Runtime control, surface API and federation tokens
-are distinct. No anonymous remote connection, HTTP fallback, automatic mutation
-retry or local runtime bootstrap is permitted.
+its authoritative idle-admission check, serialized with new reservations. Idle
+nodes require no separate drain; active, paused, queued or deferred work and
+native requests block removal. Removing the entry also disconnects the surface
+only after an exact successful removal receipt. Runtime control, surface API
+and federation tokens are distinct. No anonymous remote connection, HTTP
+fallback, automatic mutation retry or local runtime bootstrap is permitted.
 
 Catalog, preparation, durable operations and execution belong to runtime nodes.
 The independently installed `mirrorneuron-runtime` package owns host lifecycle,

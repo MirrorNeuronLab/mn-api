@@ -1,5 +1,13 @@
 # MirrorNeuron API
 
+Node removal through CLI or REST succeeds for an idle node without a separate
+manual drain. Active reservations, queued/deferred work and native requests
+block removal; jobs and runtime processes remain intact. Reciprocal removal
+must be acknowledged before success. Periodic federation advertisements only
+refresh existing members, and membership/state updates serialize together so a
+removed node stays absent through refresh and restart. Explicit node addition
+joins it again. Upgrade Core on both computers and the SDK together.
+
 Archive waits for execution-owner cleanup before acknowledging completion.
 The SDK uses a 310-second Core deadline; REST and resource adapters share a
 330-second cleanup deadline for archive and Job/Run deletion. Ordinary reads
@@ -31,7 +39,7 @@ mn-api
 Alternatively `POST /api/v1/nodes` accepts `host`, `token`, optional `grpc_port`,
 and local-only `runtime_home`. The first addition configures the shared private
 connection; subsequent additions federate runtime peers. Failed validation preserves
-the current profile. `DELETE /api/v1/nodes/{node_id}` requires drain/admission checks
+the current profile. `DELETE /api/v1/nodes/{node_id}` requires idle admission
 and removes membership; removing the entry node also disconnects this surface.
 
 The surface bearer token (`MN_API_TOKEN` or `MN_HOME/api.token`) is distinct from
