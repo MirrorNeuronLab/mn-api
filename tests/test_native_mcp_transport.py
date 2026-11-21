@@ -188,6 +188,19 @@ def test_supervision_poll_interruption_is_a_retryable_protocol_error(transport, 
     assert "result" not in payload
 
 
+@pytest.mark.parametrize("code", ["MN_JOB_OWNER_CHANGED", "MN_RUNTIME_UNAVAILABLE"])
+def test_only_routing_rejection_proves_the_control_was_not_dispatched(transport, code):
+    transport.error = AppError(code, "private detail", http_status=409 if code == "MN_JOB_OWNER_CHANGED" else 503)
+    supervision = BoundJobSupervision(JobContextProvider(), lambda: "job-1")
+    with pytest.raises(MCPError) as raised:
+        asyncio.run(supervision.invoke("start_run", {"request_id": "original"}, None))
+    expected = {"code": code, "retryable": True}
+    if code == "MN_JOB_OWNER_CHANGED":
+        expected["dispatched"] = False
+    assert raised.value.data == expected
+    assert "private detail" not in str(raised.value)
+
+
 def test_native_context_rejects_unknown_methods_and_serializes_models(transport):
     class Arguments(BaseModel):
         selection: tuple[str, ...]

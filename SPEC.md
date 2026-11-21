@@ -715,6 +715,12 @@ effect. Runtime restart retains the original launch/transition binding; a
 missing or inaccessible journal is a typed unresolved result, never permission
 to submit another launch.
 
+For lifecycle calls, a protocol error can include `data.dispatched: false`
+when a pre-dispatch check fails. The API also supplies this field when the
+owner rejects the invocation at its routing check. Clients can retry a
+transient rejection with the same request ID and inputs. An interrupted
+invocation with unknown dispatch status requires receipt lookup.
+
 Start, pause, resume and stop have no observation-only deadline. Individual
 network deadlines and actual execution/domain budgets remain bounded. Only
 authoritative operation receipts establish terminal outcomes; routing and
@@ -980,3 +986,13 @@ connection management stay on the surface. `POST /api/v1/nodes` accepts a host,
 runtime token, optional gRPC port, or local runtime home. Each request reads the
 latest committed connection; a stream pins its original connection. The API
 terminates its own bearer credential and never forwards it to a runtime or job UI.
+
+## Stable Job mailboxes
+
+Authenticated `GET /api/v1/jobs/{job_id}/mailbox` lists the Job's received
+messages. Optional filters are `after`, `limit`, `include_acknowledged`,
+`kind` and `reply_to`. `POST` to the same path sends as that Job. The body
+includes the recipient Job ID, subject and caller's retry-stable request ID.
+`PUT /api/v1/jobs/{job_id}/mailbox/{message_id}/acknowledgement` acknowledges
+a received message. These resources use the same runtime operations as the CLI.
+Core enforces current group membership and manager authority.

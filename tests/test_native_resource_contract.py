@@ -40,6 +40,13 @@ def test_public_reads_use_one_native_resource_and_preserve_status(native, item):
 @pytest.mark.parametrize(
     "method,path,body,action",
     [
+        (
+            "POST",
+            "/jobs/job/mailbox",
+            {"recipient_job_id": "peer", "request_id": "note-1", "subject": "Check"},
+            "send_job_mail",
+        ),
+        ("PUT", "/jobs/job/mailbox/" + "a" * 64 + "/acknowledgement", None, "acknowledge_job_mail"),
         ("POST", "/jobs", {"blueprint_id": "demo"}, "create_job"),
         ("PATCH", "/runs/run", {"desired_state": "cancelled"}, "update_run"),
         ("POST", "/jobs/job/runs", {}, "create_job_run"),

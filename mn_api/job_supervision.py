@@ -4,6 +4,7 @@ from contextvars import ContextVar
 
 import anyio
 from mcp.shared.exceptions import MCPError
+from mn_sdk_common.mcp import MUTATION_TOOLS
 from mn_sdk.runtime_control import RuntimeControlClient
 from mn_api.runtime_mcp import wire_value
 
@@ -31,10 +32,19 @@ class BoundJobSupervision:
                 )
         except AppError as exc:
             if exc.code in {"MN_RUNTIME_UNAVAILABLE", "MN_JOB_OWNER_CHANGED", "MN_JOB_UNAVAILABLE"}:
+                data = {"code": exc.code, "retryable": True}
+                # The native routing fence rejects the invocation before it
+                # reaches the Job supervisor. A transport loss has no such proof.
+                if (
+                    exc.code == "MN_JOB_OWNER_CHANGED"
+                    and method == "invoke"
+                    and arguments.get("name") in MUTATION_TOOLS
+                ):
+                    data["dispatched"] = False
                 raise MCPError(
                     -32000,
                     "The runtime connection is temporarily unavailable.",
-                    data={"code": exc.code, "retryable": True},
+                    data=data,
                 ) from exc
             if exc.http_status == 404:
                 raise KeyError(exc.user_message) from exc

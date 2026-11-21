@@ -753,6 +753,12 @@ effect. Runtime restart retains the original launch/transition binding; a
 missing or inaccessible journal is a typed unresolved result, never permission
 to submit another launch.
 
+For lifecycle calls, a protocol error can include `data.dispatched: false`
+when a pre-dispatch check fails. The API also supplies this field when the
+owner rejects the invocation at its routing check. Clients can retry a
+transient rejection with the same request ID and inputs. An interrupted
+invocation with unknown dispatch status requires receipt lookup.
+
 Start, pause, resume and stop have no observation-only deadline. Individual
 network deadlines and actual execution/domain budgets remain bounded. Only
 authoritative operation receipts establish terminal outcomes; routing and
