@@ -30,7 +30,7 @@ class JobContextProvider:
                         {"job_id": job_id, "method": name, "args": wire_value(args), "kwargs": wire_value(kwargs)},
                     )
             except AppError as exc:
-                from .job_mcp import JobMCPNotFoundError, JobMCPUnavailableError
+                from .job_mcp.context import JobMCPNotFoundError, JobMCPUnavailableError
 
                 if exc.http_status == 404:
                     raise JobMCPNotFoundError("The requested co-worker is unavailable.") from exc

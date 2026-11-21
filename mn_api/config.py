@@ -1,21 +1,14 @@
 from __future__ import annotations
 
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-for parent in Path(__file__).resolve().parents:
-    sdk_path = parent / "mn-python-sdk"
-    if (sdk_path / "mn_sdk" / "runtime_config.py").exists() and str(sdk_path) not in sys.path:
-        sys.path.insert(0, str(sdk_path))
-        break
-
 from mn_sdk.blueprints.limits import MAX_PACKAGE_BYTES
-from mn_sdk.runtime_config import resolve_mn_home
-from mn_sdk.config.types import MISSING
-
 from mn_sdk.config import ConfigSource, load_config_source
+from mn_sdk.config.types import MISSING
+from mn_sdk.runtime_config import resolve_mn_home
+
 from mn_api.config_schema import CONFIG_KEY_MAP, ConfigError, is_sensitive_key, redact_config_values
 from mn_api.path_utils import default_logs_root
 

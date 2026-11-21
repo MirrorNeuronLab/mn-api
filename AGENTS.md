@@ -20,8 +20,8 @@ apply only to `mn-api`.
 - `mn_api/dependencies.py`: authentication and request-size enforcement.
 - `mn_api/errors.py`: problem responses and SDK/gRPC error translation.
 - `mn_api/config*.py`: supported configuration, precedence, and validation.
-- `mn_api/blueprints.py`, `artifacts.py`, `run_outputs.py`, `run_store.py`:
-  transport-adjacent helpers for larger route families.
+- `mn_api/job_mcp/` owns job protocol sessions, authorization and tool registration.
+- `mn_api/routes/v1/jobs.py`, `runs.py`, `run_observations.py` and `schedules.py` own HTTP adapters for their respective resources.
 - `mn_api/state.py`: process-level configured clients and services. Tests replace
   these dependencies; do not make import-time network calls.
 - `tests/`: route, contract, configuration, error, and helper coverage.

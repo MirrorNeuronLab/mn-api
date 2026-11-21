@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
 import uuid
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from mn_sdk.errors import AppError
+from mn_sdk.runtime_contract.files import BINDING_HEADER
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from mn_api import state
@@ -19,14 +21,26 @@ from mn_api.errors import (
     unexpected_exception_handler,
 )
 from mn_api.job_mcp import create_job_mcp, job_mcp_lifespan
-from mn_sdk.runtime_contract.files import BINDING_HEADER
-from mn_sdk.errors import AppError
-from mn_api.routes import bundles
-from mn_api.routes.v1 import job_backups, job_preparations
-from mn_api.routes.v1 import job_ui_relay
-from mn_api.routes.v1 import assistance, blueprints, infrastructure, interactions, jobs, operations, system
-from mn_api.routes.v1 import mailbox, mcp_access, runtime_signals
 from mn_api.mcp_oauth import OAuthApp, router as oauth_router
+from mn_api.routes import bundles
+from mn_api.routes.v1 import (
+    assistance,
+    blueprints,
+    infrastructure,
+    interactions,
+    job_backups,
+    job_preparations,
+    job_ui_relay,
+    jobs,
+    mailbox,
+    mcp_access,
+    operations,
+    run_observations,
+    runs,
+    runtime_signals,
+    schedules,
+    system,
+)
 
 
 def create_app() -> FastAPI:
@@ -77,6 +91,9 @@ def create_app() -> FastAPI:
     app.include_router(blueprints.router)
     app.include_router(bundles.router)
     app.include_router(jobs.router)
+    app.include_router(runs.router)
+    app.include_router(schedules.router)
+    app.include_router(run_observations.router)
     app.include_router(job_ui_relay.router)
     app.include_router(job_backups.router)
     app.include_router(job_preparations.router)

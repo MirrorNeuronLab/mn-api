@@ -1,19 +1,9 @@
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-for parent in Path(__file__).resolve().parents:
-    sdk_path = parent / "mn-python-sdk"
-    if (sdk_path / "mn_sdk" / "client.py").exists() and str(sdk_path) not in sys.path:
-        sys.path.insert(0, str(sdk_path))
-        break
-
 from mn_sdk.surface_client import SurfaceRuntimeClient as Client
 
 from mn_api.config import ApiConfig
 from mn_api.logging_config import configure_logging
-
 
 config = ApiConfig.from_env()
 logger = configure_logging()
