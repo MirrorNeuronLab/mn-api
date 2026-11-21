@@ -179,11 +179,9 @@ without installing generation models. Launch preserves the `model_install`
 progress phase for compatibility and uses it to report this validation. The
 shared SDK selects the compatible local or cluster model, reuses an installed
 artifact or installs it if missing, and publishes its route on first actual
-model use. The `default` policy automatically selects medium → small → nano:
-Nemotron 3.5 Lightning (48 GB+ accelerator memory), Bonsai2 PTQ1_0 (24 GB+),
-then Nemotron 3.5 Bolt E4B Q4_K_M. The SDK automatically prepares Bonsai2's catalog-declared
-[Prism-backed DMR](../mn-docs/model-runtime.md#bonsai2-on-docker-model-runner)
-on the selected owner before downloading or reusing its model. Explicit model requirements
+model use. The `default` policy tries Nemotron 3.5 Lightning (`medium`, 48 GB+
+accelerator memory) and then MirrorNeuronLab's Nemotron 3.5 Bolt E4B Q4_K_M
+(`nano`). The `small` alias also selects Bolt. Explicit model requirements
 retain their catalog identity. Required context services keep their existing
 preparation lifecycle. Before runtime preflight, launch applies the SDK input
 validator and returns HTTP 422 for missing required inputs without preparing

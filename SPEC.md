@@ -180,12 +180,11 @@ artifacts and preserving both the automatic `default` policy and explicit
 model requirements. Required context services retain their existing
 preparation lifecycle. Explicit model-install routes remain eager.
 
-The SDK default policy is medium → small → nano: Nemotron 3.5 Lightning at
-48 GB accelerator memory, Bonsai2 27B PTQ1_0 at 24 GB, then Nemotron 3.5 Bolt E4B Q4_K_M.
-VRAM and integrated/shared GPU memory qualify; CPU RAM alone does not.
-Bonsai2's catalog `preparation` recipe makes the SDK automatically build/cache
-and start the pinned native Prism DMR backend on the selected model owner.
-The API adds no separate backend installation or endpoint-routing mechanism.
+The SDK default policy tries Nemotron 3.5 Lightning (`medium`) at 48 GB
+accelerator memory and then MirrorNeuronLab's Nemotron 3.5 Bolt E4B Q4_K_M
+(`nano`). The `small` alias also selects Bolt. Accelerators qualify by
+dedicated VRAM or integrated/shared GPU memory. The SDK owns model
+preparation and routing on the selected node.
 
 `GET /api/v1/models` defaults to the full merged catalog plus discovered
 installations; `installed_only=true` preserves the installed-only filter.
@@ -995,4 +994,6 @@ messages. Optional filters are `after`, `limit`, `include_acknowledged`,
 includes the recipient Job ID, subject and caller's retry-stable request ID.
 `PUT /api/v1/jobs/{job_id}/mailbox/{message_id}/acknowledgement` acknowledges
 a received message. These resources use the same runtime operations as the CLI.
-Core enforces current group membership and manager authority.
+Core verifies the sender and recipient on their respective computers and enforces
+current group membership and manager authority. A successful send confirms storage
+in the recipient's inbox. Clients can retry a failed delivery with its original request ID.
