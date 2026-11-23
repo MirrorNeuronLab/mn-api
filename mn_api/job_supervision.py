@@ -56,6 +56,9 @@ class BoundJobSupervision:
                 data={"code": exc.code, "retryable": False},
             ) from exc
 
+    def enabled_skill_bundles(self):
+        return self._call("enabled_skill_bundles")
+
     def identity(self):
         return self._call("identity")
 

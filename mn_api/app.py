@@ -30,6 +30,7 @@ from mn_api.routes.v1 import (
     interactions,
     job_backups,
     job_preparations,
+    job_integrations,
     job_ui_relay,
     jobs,
     mailbox,
@@ -97,6 +98,7 @@ def create_app() -> FastAPI:
     app.include_router(job_ui_relay.router)
     app.include_router(job_backups.router)
     app.include_router(job_preparations.router)
+    app.include_router(job_integrations.router)
     app.include_router(operations.router)
     app.include_router(runtime_signals.router)
     app.include_router(interactions.router)
