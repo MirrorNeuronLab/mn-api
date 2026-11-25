@@ -1,6 +1,6 @@
 """Shared contract exports."""
 
-from mn_sdk.runtime_contract.schemas import (
+from mn_sdk_shared.runtime_contract.schemas import (
     BaseModel as BaseModel,
     SubmitJobRequest as SubmitJobRequest,
     StableJobCreateRequest as StableJobCreateRequest,

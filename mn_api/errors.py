@@ -8,9 +8,9 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from mn_api import state
-from mn_sdk.admission_errors import run_start_admission_error
-from mn_sdk.errors import AppError, normalize_exception, sanitize_context
-from mn_sdk.openshell_errors import public_details as openshell_error_details
+from mn_sdk_shared.observability.admission_errors import run_start_admission_error
+from mn_sdk_shared.errors import AppError, normalize_exception, sanitize_context
+from mn_sdk_shared.openshell.errors import public_details as openshell_error_details
 
 
 def _public_text(value: Any, limit: int = 500) -> str:

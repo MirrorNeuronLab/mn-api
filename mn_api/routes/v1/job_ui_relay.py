@@ -9,10 +9,11 @@ import queue
 import anyio
 from fastapi import APIRouter, Depends, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
-from mn_sdk.errors import AppError
-from mn_sdk.job_ui_proxy import message_frames, MAX_UI_MESSAGE, close_frame, close_values, websocket_close
-from mn_sdk.proto import runtime_control_pb2 as wire
-from mn_sdk.runtime_control import RuntimeControlClient, request as runtime_request
+from mn_sdk_shared.errors import AppError
+from mn_sdk_shared.jobs.ui_proxy import message_frames, MAX_UI_MESSAGE, close_frame, close_values, websocket_close
+from mn_sdk_shared.proto import runtime_control_pb2 as wire
+from mn_surface import RuntimeControlClient
+from mn_sdk_shared.runtime.control import request as runtime_request
 from mn_api import state
 from mn_api.dependencies import require_auth
 

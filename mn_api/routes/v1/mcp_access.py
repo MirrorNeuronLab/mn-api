@@ -8,7 +8,7 @@ from mn_api import state
 from mn_api.dependencies import require_auth
 from mn_api.config import auth_enabled
 from mn_api.mcp_access import ConnectionStore, valid_server_url
-from mn_sdk import RuntimeService
+from mn_sdk_shared.runtime.json_response import json_object
 
 router = APIRouter(prefix="/api/v1", tags=["jobs"])
 
@@ -37,7 +37,7 @@ class McpSessionReceipt(BaseModel):
 
 
 def job(job_id, *, require_mcp=True):
-    value = RuntimeService(state.client).get_job(job_id)
+    value = json_object(state.client.get_job(job_id))
     if value.get("deleted") or value.get("deleted_at") or require_mcp and not value.get("mcp"):
         raise HTTPException(404, "Co-worker MCP is unavailable.")
     return value

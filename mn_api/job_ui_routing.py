@@ -2,12 +2,12 @@
 
 from urllib.parse import urlsplit
 from fastapi import HTTPException
-from mn_sdk.job_ui_proxy import EXECUTION_HEADER as EXECUTION_HEADER, HOP_HEADER as HOP_HEADER
+from mn_sdk_shared.jobs.ui_proxy import EXECUTION_HEADER as EXECUTION_HEADER, HOP_HEADER as HOP_HEADER
 
 
 def relay_target(web_ui, job_id, port, path, query, *, websocket=False):
     """Return an owner relay target after the ordinary port/lifecycle checks."""
-    from mn_sdk.job_ui_proxy import _safe_proxy_path
+    from mn_sdk_shared.jobs.ui_proxy import _safe_proxy_path
 
     transport = web_ui.get("transport")
     if not isinstance(transport, dict):
@@ -28,7 +28,7 @@ def relay_target(web_ui, job_id, port, path, query, *, websocket=False):
         raise HTTPException(502, "The job UI transport is invalid.")
     from urllib.parse import quote
 
-    from mn_sdk.job_ui_proxy import JobUiProxyError
+    from mn_sdk_shared.jobs.ui_proxy import JobUiProxyError
 
     try:
         suffix = ("ws/" if websocket else "") + _safe_proxy_path(path)

@@ -117,6 +117,8 @@ jobs:
             python -m pip install \
               "mn-python-sdk-common @ git+https://github.com/MirrorNeuronLab/mn-python-sdk.git@${sdk_commit}#subdirectory=packages/common" \
               "mn-python-sdk-web-ui @ git+https://github.com/MirrorNeuronLab/mn-python-sdk.git@${sdk_commit}#subdirectory=packages/web-ui" \
+              "mirrorneuron-sdk-contracts @ git+https://github.com/MirrorNeuronLab/mn-python-sdk.git@${sdk_commit}#subdirectory=packages/contracts" \
+              "mirrorneuron-surface @ git+https://github.com/MirrorNeuronLab/mn-python-sdk.git@${sdk_commit}#subdirectory=packages/surface" \
               "mirrorneuron-python-sdk @ git+https://github.com/MirrorNeuronLab/mn-python-sdk.git@${sdk_commit}"
           fi
 

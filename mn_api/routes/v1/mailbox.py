@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Depends, Query
 
-from mn_sdk.runtime_contract.mailbox import Digest, Kind, MailboxMessage, MailboxPage, MailboxSend
+from mn_sdk_shared.runtime_contract.mailbox import Digest, Kind, MailboxMessage, MailboxPage, MailboxSend
 from mn_api.contracts import API_PREFIX
 from mn_api.dependencies import require_auth
 from mn_api.runtime_adapter import call_runtime

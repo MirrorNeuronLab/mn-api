@@ -1,6 +1,6 @@
 """Shared contract exports."""
 
-from mn_sdk.runtime_contract.api_models import (
+from mn_sdk_shared.runtime_contract.api_models import (
     StrictModel as StrictModel,
     ResourceModel as ResourceModel,
     RunReservation as RunReservation,

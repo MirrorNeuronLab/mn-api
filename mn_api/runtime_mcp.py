@@ -2,9 +2,9 @@
 
 from pydantic import BaseModel
 
-from mn_sdk.errors import AppError
-from mn_sdk.runtime_contract.mcp import CONTEXT_METHODS
-from mn_sdk.runtime_control import RuntimeControlClient
+from mn_sdk_shared.errors import AppError
+from mn_sdk_shared.runtime_contract.mcp import CONTEXT_METHODS
+from mn_surface import RuntimeControlClient
 
 
 def wire_value(value):

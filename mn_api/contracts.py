@@ -1,6 +1,6 @@
 """Shared contract exports."""
 
-from mn_sdk.runtime_contract.contracts import (
+from mn_sdk_shared.runtime_contract.contracts import (
     API_PREFIX as API_PREFIX,
     API_CONTRACT as API_CONTRACT,
     DEFAULT_PAGE_SIZE as DEFAULT_PAGE_SIZE,

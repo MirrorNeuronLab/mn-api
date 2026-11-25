@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from mn_sdk.surface_client import SurfaceRuntimeClient as Client
+from mn_surface.client import SurfaceRuntimeClient as Client
 
 from mn_api.config import ApiConfig
 from mn_api.logging_config import configure_logging

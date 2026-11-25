@@ -12,9 +12,10 @@ from starlette.datastructures import UploadFile
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, SecretStr
 
-from mn_sdk.runtime_connection import connect, remove_node
-from mn_sdk.runtime_control import RuntimeControlClient, decode_reply
-from mn_sdk.runtime_contract.endpoints import OPERATIONS, rpc_method, rpc_timeout
+from mn_sdk_shared.runtime.connection import connect, remove_node
+from mn_surface import RuntimeControlClient
+from mn_sdk_shared.runtime.control import decode_reply
+from mn_sdk_shared.runtime_contract.endpoints import OPERATIONS, rpc_method, rpc_timeout
 
 STREAM_ACTIONS = {
     "stream_interactions",
@@ -115,7 +116,7 @@ async def stream(action, arguments, request):
         frames = manager.__enter__()
         first = await anyio.to_thread.run_sync(lambda: next(frames, None))
         if first is None or first.kind != "headers" or not first.HasField("reply"):
-            from mn_sdk.errors import AppError
+            from mn_sdk_shared.errors import AppError
 
             raise AppError("MN_RUNTIME_PROTOCOL_ERROR", "Missing runtime stream metadata.", http_status=502)
     except BaseException:

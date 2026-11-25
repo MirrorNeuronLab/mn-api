@@ -3,8 +3,8 @@
 from __future__ import annotations
 from mn_api.runtime_adapter import call_runtime
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
-from mn_sdk.blueprint_catalog import list_catalog_blueprints
-from mn_sdk.runtime_contract.pagination import page
+from mn_surface.catalog import list_catalog_blueprints
+from mn_sdk_shared.runtime_contract.pagination import page
 from mn_api.api_models import (
     BlueprintAdd,
     BlueprintPageResponse,

@@ -6,8 +6,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from mn_sdk.errors import AppError
-from mn_sdk.runtime_contract.files import BINDING_HEADER
+from mn_sdk_shared.errors import AppError
+from mn_sdk_shared.runtime_contract.files import BINDING_HEADER
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from mn_api import state

@@ -17,7 +17,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
 from mn_api.config import WebUiConfig
-from mn_sdk.job_ui_proxy import (
+from mn_sdk_shared.jobs.ui_proxy import (
     PROBE_HEADER,
     HOP_BY_HOP_HEADERS,
     JobUiProxyError,

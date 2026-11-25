@@ -4,7 +4,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Header
 from mn_api.dependencies import require_auth
-from mn_sdk.runtime_contract.job_integrations import DesktopDelivery, SlackConnection, SkillEnablement
+from mn_sdk_shared.runtime_contract.job_integrations import DesktopDelivery, SlackConnection, SkillEnablement
 from mn_api.runtime_adapter import call_runtime
 
 router = APIRouter(prefix="/api/v1/jobs/{job_id}", tags=["jobs"])

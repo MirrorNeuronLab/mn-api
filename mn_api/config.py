@@ -4,10 +4,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from mn_sdk.blueprints.limits import MAX_PACKAGE_BYTES
-from mn_sdk.config import ConfigSource, load_config_source
-from mn_sdk.config.types import MISSING
-from mn_sdk.runtime_config import resolve_mn_home
+from mn_sdk_shared.blueprints.limits import MAX_PACKAGE_BYTES
+from mn_sdk_shared.config import ConfigSource, load_config_source
+from mn_sdk_shared.config.types import MISSING
+from mn_sdk_shared.runtime_config import resolve_mn_home
 
 from mn_api.config_schema import CONFIG_KEY_MAP, ConfigError, is_sensitive_key, redact_config_values
 from mn_api.path_utils import default_logs_root
@@ -59,7 +59,7 @@ class ApiConfig:
             ),
         )
         config.validate()
-        from mn_sdk.runtime_connection import installation_role
+        from mn_sdk_shared.runtime.connection import installation_role
 
         if installation_role(resolve_mn_home(env=source.effective_env)) == "client" and not config.api_token:
             raise ConfigError("Client mode requires MN_API_TOKEN or a private MN_HOME/api.token file.")

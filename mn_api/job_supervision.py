@@ -5,7 +5,7 @@ from contextvars import ContextVar
 import anyio
 from mcp.shared.exceptions import MCPError
 from mn_sdk_common.mcp import MUTATION_TOOLS
-from mn_sdk.runtime_control import RuntimeControlClient
+from mn_surface import RuntimeControlClient
 from mn_api.runtime_mcp import wire_value
 
 native_launch_authority = ContextVar("mcp_native_launch_authority", default=False)
@@ -17,7 +17,7 @@ class BoundJobSupervision:
         self.bound_job_id = bound_job_id
 
     def _call(self, method, **arguments):
-        from mn_sdk.errors import AppError
+        from mn_sdk_shared.errors import AppError
 
         try:
             with RuntimeControlClient(timeout=120) as client:

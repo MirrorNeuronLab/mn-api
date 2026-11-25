@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from mn_sdk.config import (
+from mn_sdk_shared.config import (
     SUPPORTED_CONFIG_KEYS as SDK_CONFIG_KEYS,
     ConfigError,
     ConfigKey,
