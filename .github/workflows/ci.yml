@@ -101,11 +101,13 @@ jobs:
 
           if [[ "$GITHUB_REPOSITORY" == "MirrorNeuronLab/mn-api" || "$GITHUB_REPOSITORY" == "MirrorNeuronLab/mn-cli" ]]; then
             sdk_commit="$(git ls-remote https://github.com/MirrorNeuronLab/mn-python-sdk.git HEAD | cut -f1)"
+            surface_commit="$(git ls-remote https://github.com/MirrorNeuronLab/mn-surface.git HEAD | cut -f1)"
+            [[ "$surface_commit" =~ ^[0-9a-f]{40}$ ]]
             python -m pip install \
               "mn-python-sdk-common @ git+https://github.com/MirrorNeuronLab/mn-python-sdk.git@${sdk_commit}#subdirectory=packages/common" \
               "mn-python-sdk-web-ui @ git+https://github.com/MirrorNeuronLab/mn-python-sdk.git@${sdk_commit}#subdirectory=packages/web-ui" \
               "mirrorneuron-sdk-contracts @ git+https://github.com/MirrorNeuronLab/mn-python-sdk.git@${sdk_commit}#subdirectory=packages/contracts" \
-              "mirrorneuron-surface @ git+https://github.com/MirrorNeuronLab/mn-python-sdk.git@${sdk_commit}#subdirectory=packages/surface" \
+              "mirrorneuron-surface @ git+https://github.com/MirrorNeuronLab/mn-surface.git@${surface_commit}" \
               "mirrorneuron-python-sdk @ git+https://github.com/MirrorNeuronLab/mn-python-sdk.git@${sdk_commit}"
           fi
 
