@@ -1,0 +1,2345 @@
+{
+  "common": {
+    "get_user_manual": {
+      "description": "Read this co-worker's installed user manual without starting work.",
+      "effect": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "schema_version": {
+            "const": "mn.mcp.tool_result.v1"
+          },
+          "tool": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "blueprint_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "enum": [
+              "accepted",
+              "running",
+              "completed",
+              "failed",
+              "cancelled",
+              "superseded",
+              "timed_out"
+            ]
+          },
+          "operation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "data": {
+            "type": "object"
+          },
+          "error": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retryable"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "schema_version",
+          "tool",
+          "request_id",
+          "job_id",
+          "blueprint_id",
+          "run_id",
+          "status",
+          "operation_id",
+          "data",
+          "error"
+        ],
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "completed"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "data": {
+                  "type": "object",
+                  "required": [
+                    "manual",
+                    "sha256"
+                  ],
+                  "properties": {
+                    "manual": {
+                      "type": "string"
+                    },
+                    "sha256": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "get_capabilities": {
+      "description": "Discover the supervision profile, declared tools, schemas, and current availability.",
+      "effect": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "schema_version": {
+            "const": "mn.mcp.tool_result.v1"
+          },
+          "tool": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "blueprint_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "enum": [
+              "accepted",
+              "running",
+              "completed",
+              "failed",
+              "cancelled",
+              "superseded",
+              "timed_out"
+            ]
+          },
+          "operation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "data": {
+            "type": "object"
+          },
+          "error": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retryable"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "schema_version",
+          "tool",
+          "request_id",
+          "job_id",
+          "blueprint_id",
+          "run_id",
+          "status",
+          "operation_id",
+          "data",
+          "error"
+        ],
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "completed"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "data": {
+                  "type": "object",
+                  "required": [
+                    "profile",
+                    "tools"
+                  ],
+                  "properties": {
+                    "profile": {
+                      "const": "mn.mcp.supervision.v1"
+                    },
+                    "tools": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "get_job_profile": {
+      "description": "Read identity, mission, safe configuration, schedule, and lifecycle state.",
+      "effect": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "schema_version": {
+            "const": "mn.mcp.tool_result.v1"
+          },
+          "tool": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "blueprint_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "enum": [
+              "accepted",
+              "running",
+              "completed",
+              "failed",
+              "cancelled",
+              "superseded",
+              "timed_out"
+            ]
+          },
+          "operation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "data": {
+            "type": "object"
+          },
+          "error": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retryable"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "schema_version",
+          "tool",
+          "request_id",
+          "job_id",
+          "blueprint_id",
+          "run_id",
+          "status",
+          "operation_id",
+          "data",
+          "error"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "get_job_context": {
+      "description": "Read bounded Job context, recent runs, and published evidence.",
+      "effect": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "evidence_limit": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 50,
+            "default": 50
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "schema_version": {
+            "const": "mn.mcp.tool_result.v1"
+          },
+          "tool": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "blueprint_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "enum": [
+              "accepted",
+              "running",
+              "completed",
+              "failed",
+              "cancelled",
+              "superseded",
+              "timed_out"
+            ]
+          },
+          "operation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "data": {
+            "type": "object"
+          },
+          "error": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retryable"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "schema_version",
+          "tool",
+          "request_id",
+          "job_id",
+          "blueprint_id",
+          "run_id",
+          "status",
+          "operation_id",
+          "data",
+          "error"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "get_run_status": {
+      "description": "Read a run's actual runtime state; omit run_id to select the latest run.",
+      "effect": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "schema_version": {
+            "const": "mn.mcp.tool_result.v1"
+          },
+          "tool": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "blueprint_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "enum": [
+              "accepted",
+              "running",
+              "completed",
+              "failed",
+              "cancelled",
+              "superseded",
+              "timed_out"
+            ]
+          },
+          "operation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "data": {
+            "type": "object"
+          },
+          "error": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retryable"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "schema_version",
+          "tool",
+          "request_id",
+          "job_id",
+          "blueprint_id",
+          "run_id",
+          "status",
+          "operation_id",
+          "data",
+          "error"
+        ],
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "completed"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "data": {
+                  "type": "object",
+                  "required": [
+                    "run"
+                  ],
+                  "properties": {
+                    "run": {
+                      "type": [
+                        "object",
+                        "null"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "get_run_results": {
+      "description": "Read bounded published results and artifact references for a run.",
+      "effect": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "schema_version": {
+            "const": "mn.mcp.tool_result.v1"
+          },
+          "tool": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "blueprint_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "enum": [
+              "accepted",
+              "running",
+              "completed",
+              "failed",
+              "cancelled",
+              "superseded",
+              "timed_out"
+            ]
+          },
+          "operation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "data": {
+            "type": "object"
+          },
+          "error": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retryable"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "schema_version",
+          "tool",
+          "request_id",
+          "job_id",
+          "blueprint_id",
+          "run_id",
+          "status",
+          "operation_id",
+          "data",
+          "error"
+        ],
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "completed"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "data": {
+                  "type": "object",
+                  "required": [
+                    "results"
+                  ],
+                  "properties": {
+                    "run_id": {
+                      "type": "string"
+                    },
+                    "results": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "watch_job_activity": {
+      "description": "Wait at most 25 seconds for one new Job activity; never acknowledge a human notice.",
+      "effect": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "after_event_id": {
+            "type": "string",
+            "maxLength": 256,
+            "default": ""
+          },
+          "wait_seconds": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 25,
+            "default": 20
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "schema_version": {
+            "const": "mn.mcp.tool_result.v1"
+          },
+          "tool": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "blueprint_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "enum": [
+              "accepted",
+              "running",
+              "completed",
+              "failed",
+              "cancelled",
+              "superseded",
+              "timed_out"
+            ]
+          },
+          "operation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "data": {
+            "type": "object"
+          },
+          "error": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retryable"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "schema_version",
+          "tool",
+          "request_id",
+          "job_id",
+          "blueprint_id",
+          "run_id",
+          "status",
+          "operation_id",
+          "data",
+          "error"
+        ],
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "completed"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "data": {
+                  "type": "object",
+                  "required": [
+                    "delivered",
+                    "cursor",
+                    "activity"
+                  ],
+                  "properties": {
+                    "delivered": {
+                      "type": "boolean"
+                    },
+                    "cursor": {
+                      "type": "string"
+                    },
+                    "activity": {
+                      "type": [
+                        "object",
+                        "null"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "get_operation_status": {
+      "description": "Read the observed status of an operation belonging to this Job.",
+      "effect": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "operation_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [],
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "required": [
+              "operation_id"
+            ]
+          },
+          {
+            "required": [
+              "request_id"
+            ]
+          }
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "schema_version": {
+            "const": "mn.mcp.tool_result.v1"
+          },
+          "tool": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "blueprint_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "enum": [
+              "accepted",
+              "running",
+              "completed",
+              "failed",
+              "cancelled",
+              "superseded",
+              "timed_out"
+            ]
+          },
+          "operation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "data": {
+            "type": "object"
+          },
+          "error": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retryable"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "schema_version",
+          "tool",
+          "request_id",
+          "job_id",
+          "blueprint_id",
+          "run_id",
+          "status",
+          "operation_id",
+          "data",
+          "error"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "start_run": {
+      "description": "Explicitly start a new run using the saved validated Job configuration.",
+      "effect": "lifecycle",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "request_id"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "schema_version": {
+            "const": "mn.mcp.tool_result.v1"
+          },
+          "tool": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "blueprint_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "enum": [
+              "accepted",
+              "running",
+              "completed",
+              "failed",
+              "cancelled",
+              "superseded",
+              "timed_out"
+            ]
+          },
+          "operation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "data": {
+            "type": "object"
+          },
+          "error": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retryable"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "schema_version",
+          "tool",
+          "request_id",
+          "job_id",
+          "blueprint_id",
+          "run_id",
+          "status",
+          "operation_id",
+          "data",
+          "error"
+        ],
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "completed"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "data": {
+                  "type": "object",
+                  "required": [
+                    "run_id",
+                    "status"
+                  ],
+                  "properties": {
+                    "run_id": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "pause_run": {
+      "description": "Pause the specified active run while preserving the ability to resume it.",
+      "effect": "lifecycle",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "run_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "request_id",
+          "run_id"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "schema_version": {
+            "const": "mn.mcp.tool_result.v1"
+          },
+          "tool": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "blueprint_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "enum": [
+              "accepted",
+              "running",
+              "completed",
+              "failed",
+              "cancelled",
+              "superseded",
+              "timed_out"
+            ]
+          },
+          "operation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "data": {
+            "type": "object"
+          },
+          "error": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retryable"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "schema_version",
+          "tool",
+          "request_id",
+          "job_id",
+          "blueprint_id",
+          "run_id",
+          "status",
+          "operation_id",
+          "data",
+          "error"
+        ],
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "completed"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "data": {
+                  "type": "object",
+                  "required": [
+                    "run_id",
+                    "status"
+                  ],
+                  "properties": {
+                    "run_id": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "resume_run": {
+      "description": "Resume the specified paused run.",
+      "effect": "lifecycle",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "run_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "request_id",
+          "run_id"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "schema_version": {
+            "const": "mn.mcp.tool_result.v1"
+          },
+          "tool": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "blueprint_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "enum": [
+              "accepted",
+              "running",
+              "completed",
+              "failed",
+              "cancelled",
+              "superseded",
+              "timed_out"
+            ]
+          },
+          "operation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "data": {
+            "type": "object"
+          },
+          "error": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retryable"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "schema_version",
+          "tool",
+          "request_id",
+          "job_id",
+          "blueprint_id",
+          "run_id",
+          "status",
+          "operation_id",
+          "data",
+          "error"
+        ],
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "completed"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "data": {
+                  "type": "object",
+                  "required": [
+                    "run_id",
+                    "status"
+                  ],
+                  "properties": {
+                    "run_id": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "stop_run": {
+      "description": "Terminate the specified run by cancellation; this is different from pausing.",
+      "effect": "lifecycle",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "run_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "queued_only": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "request_id",
+          "run_id"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "schema_version": {
+            "const": "mn.mcp.tool_result.v1"
+          },
+          "tool": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "blueprint_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "enum": [
+              "accepted",
+              "running",
+              "completed",
+              "failed",
+              "cancelled",
+              "superseded",
+              "timed_out"
+            ]
+          },
+          "operation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "data": {
+            "type": "object"
+          },
+          "error": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retryable"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "schema_version",
+          "tool",
+          "request_id",
+          "job_id",
+          "blueprint_id",
+          "run_id",
+          "status",
+          "operation_id",
+          "data",
+          "error"
+        ],
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "completed"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "data": {
+                  "type": "object",
+                  "required": [
+                    "run_id",
+                    "status"
+                  ],
+                  "properties": {
+                    "run_id": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "mailbox": {
+    "send_mailbox_message": {
+      "description": "Queue a message from this Job to a configured peer, including a stopped peer.",
+      "effect": "mailbox",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "recipient_job_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.-]{1,128}$"
+          },
+          "request_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.-]{1,128}$"
+          },
+          "kind": {
+            "enum": [
+              "note",
+              "assignment",
+              "result"
+            ]
+          },
+          "subject": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "reply_to": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "attachment": {
+            "type": "object",
+            "properties": {
+              "run_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_.-]{1,128}$"
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "size_bytes": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 67108864
+              }
+            },
+            "required": [
+              "run_id",
+              "sha256",
+              "size_bytes"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "recipient_job_id",
+          "request_id",
+          "subject"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "schema_version": {
+            "const": "mn.mcp.tool_result.v1"
+          },
+          "tool": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "blueprint_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "enum": [
+              "accepted",
+              "running",
+              "completed",
+              "failed",
+              "cancelled",
+              "superseded",
+              "timed_out"
+            ]
+          },
+          "operation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "data": {
+            "type": "object"
+          },
+          "error": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retryable"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "schema_version",
+          "tool",
+          "request_id",
+          "job_id",
+          "blueprint_id",
+          "run_id",
+          "status",
+          "operation_id",
+          "data",
+          "error"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "list_mailbox_messages": {
+      "description": "Read this Job's inbox in sequence order without consuming messages.",
+      "effect": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "after": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50
+          },
+          "include_acknowledged": {
+            "type": "boolean"
+          },
+          "kind": {
+            "enum": [
+              "note",
+              "assignment",
+              "result"
+            ]
+          },
+          "reply_to": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "schema_version": {
+            "const": "mn.mcp.tool_result.v1"
+          },
+          "tool": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "blueprint_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "enum": [
+              "accepted",
+              "running",
+              "completed",
+              "failed",
+              "cancelled",
+              "superseded",
+              "timed_out"
+            ]
+          },
+          "operation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "data": {
+            "type": "object"
+          },
+          "error": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retryable"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "schema_version",
+          "tool",
+          "request_id",
+          "job_id",
+          "blueprint_id",
+          "run_id",
+          "status",
+          "operation_id",
+          "data",
+          "error"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "acknowledge_mailbox_message": {
+      "description": "Mark a received message as handled. This never grants approval.",
+      "effect": "mailbox",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "message_id": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "expected_kind": {
+            "enum": [
+              "note",
+              "assignment",
+              "result"
+            ]
+          }
+        },
+        "required": [
+          "message_id"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "schema_version": {
+            "const": "mn.mcp.tool_result.v1"
+          },
+          "tool": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "blueprint_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "enum": [
+              "accepted",
+              "running",
+              "completed",
+              "failed",
+              "cancelled",
+              "superseded",
+              "timed_out"
+            ]
+          },
+          "operation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "data": {
+            "type": "object"
+          },
+          "error": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retryable"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "schema_version",
+          "tool",
+          "request_id",
+          "job_id",
+          "blueprint_id",
+          "run_id",
+          "status",
+          "operation_id",
+          "data",
+          "error"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "result": {
+    "type": "object",
+    "properties": {
+      "schema_version": {
+        "const": "mn.mcp.tool_result.v1"
+      },
+      "tool": {
+        "type": "string"
+      },
+      "request_id": {
+        "type": "string"
+      },
+      "job_id": {
+        "type": "string"
+      },
+      "blueprint_id": {
+        "type": "string"
+      },
+      "run_id": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "status": {
+        "enum": [
+          "accepted",
+          "running",
+          "completed",
+          "failed",
+          "cancelled",
+          "superseded",
+          "timed_out"
+        ]
+      },
+      "operation_id": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "data": {
+        "type": "object"
+      },
+      "error": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "retryable": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "retryable"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "required": [
+      "schema_version",
+      "tool",
+      "request_id",
+      "job_id",
+      "blueprint_id",
+      "run_id",
+      "status",
+      "operation_id",
+      "data",
+      "error"
+    ],
+    "additionalProperties": false
+  },
+  "profile": "mn.mcp.supervision.v1",
+  "conversations": [
+    [],
+    [
+      {
+        "name": "ask_job",
+        "description": "Ask a fast, grounded, multi-turn question about this job's purpose, status, progress, published results, or missing evidence. This never starts a Run.",
+        "inputSchema": {
+          "$defs": {
+            "AssistanceTask": {
+              "additionalProperties": false,
+              "description": "Desktop-owned intent; operational facts and authorization stay runtime-owned.",
+              "properties": {
+                "goal": {
+                  "enum": [
+                    "setup",
+                    "respond",
+                    "diagnose",
+                    "review",
+                    "schedule",
+                    "use_own_data"
+                  ],
+                  "title": "Goal",
+                  "type": "string"
+                },
+                "state": {
+                  "enum": [
+                    "guiding",
+                    "collecting",
+                    "review",
+                    "saving",
+                    "completed",
+                    "failed"
+                  ],
+                  "title": "State",
+                  "type": "string"
+                },
+                "execution_id": {
+                  "maxLength": 512,
+                  "title": "Execution Id",
+                  "type": "string"
+                },
+                "next_question": {
+                  "maxLength": 500,
+                  "title": "Next Question",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "goal",
+                "state",
+                "execution_id",
+                "next_question"
+              ],
+              "title": "AssistanceTask",
+              "type": "object"
+            }
+          },
+          "properties": {
+            "question": {
+              "title": "Question",
+              "type": "string"
+            },
+            "conversation_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Conversation Id"
+            },
+            "request_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Request Id"
+            },
+            "stream": {
+              "default": false,
+              "title": "Stream",
+              "type": "boolean"
+            },
+            "background": {
+              "default": false,
+              "title": "Background",
+              "type": "boolean"
+            },
+            "reply_action": {
+              "default": "start",
+              "title": "Reply Action",
+              "type": "string"
+            },
+            "assistance_task": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/AssistanceTask"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "required": [
+            "question"
+          ],
+          "title": "ask_jobArguments",
+          "type": "object"
+        },
+        "outputSchema": {
+          "additionalProperties": true,
+          "title": "ask_jobDictOutput",
+          "type": "object"
+        }
+      }
+    ],
+    [
+      {
+        "name": "ask_job",
+        "description": "Ask the bounded Job agent a grounded question or an explicit simulation command. This never starts or resumes a Run.",
+        "inputSchema": {
+          "$defs": {
+            "AssistanceTask": {
+              "additionalProperties": false,
+              "description": "Desktop-owned intent; operational facts and authorization stay runtime-owned.",
+              "properties": {
+                "goal": {
+                  "enum": [
+                    "setup",
+                    "respond",
+                    "diagnose",
+                    "review",
+                    "schedule",
+                    "use_own_data"
+                  ],
+                  "title": "Goal",
+                  "type": "string"
+                },
+                "state": {
+                  "enum": [
+                    "guiding",
+                    "collecting",
+                    "review",
+                    "saving",
+                    "completed",
+                    "failed"
+                  ],
+                  "title": "State",
+                  "type": "string"
+                },
+                "execution_id": {
+                  "maxLength": 512,
+                  "title": "Execution Id",
+                  "type": "string"
+                },
+                "next_question": {
+                  "maxLength": 500,
+                  "title": "Next Question",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "goal",
+                "state",
+                "execution_id",
+                "next_question"
+              ],
+              "title": "AssistanceTask",
+              "type": "object"
+            }
+          },
+          "properties": {
+            "question": {
+              "title": "Question",
+              "type": "string"
+            },
+            "conversation_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Conversation Id"
+            },
+            "request_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Request Id"
+            },
+            "background": {
+              "default": false,
+              "title": "Background",
+              "type": "boolean"
+            },
+            "reply_action": {
+              "default": "start",
+              "title": "Reply Action",
+              "type": "string"
+            },
+            "assistance_task": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/AssistanceTask"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "required": [
+            "question"
+          ],
+          "title": "ask_agent_jobArguments",
+          "type": "object"
+        },
+        "outputSchema": {
+          "additionalProperties": true,
+          "title": "ask_agent_jobDictOutput",
+          "type": "object"
+        }
+      },
+      {
+        "name": "get_job_turn",
+        "description": "Poll one accepted bounded-agent turn until its observed operation reaches a terminal state.",
+        "inputSchema": {
+          "properties": {
+            "turn_id": {
+              "title": "Turn Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "turn_id"
+          ],
+          "title": "get_job_turnArguments",
+          "type": "object"
+        },
+        "outputSchema": {
+          "additionalProperties": true,
+          "title": "get_job_turnDictOutput",
+          "type": "object"
+        }
+      }
+    ],
+    [
+      {
+        "name": "ask_job",
+        "description": "",
+        "inputSchema": {
+          "$defs": {
+            "AssistanceTask": {
+              "additionalProperties": false,
+              "description": "Desktop-owned intent; operational facts and authorization stay runtime-owned.",
+              "properties": {
+                "goal": {
+                  "enum": [
+                    "setup",
+                    "respond",
+                    "diagnose",
+                    "review",
+                    "schedule",
+                    "use_own_data"
+                  ],
+                  "title": "Goal",
+                  "type": "string"
+                },
+                "state": {
+                  "enum": [
+                    "guiding",
+                    "collecting",
+                    "review",
+                    "saving",
+                    "completed",
+                    "failed"
+                  ],
+                  "title": "State",
+                  "type": "string"
+                },
+                "execution_id": {
+                  "maxLength": 512,
+                  "title": "Execution Id",
+                  "type": "string"
+                },
+                "next_question": {
+                  "maxLength": 500,
+                  "title": "Next Question",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "goal",
+                "state",
+                "execution_id",
+                "next_question"
+              ],
+              "title": "AssistanceTask",
+              "type": "object"
+            }
+          },
+          "properties": {
+            "question": {
+              "title": "Question",
+              "type": "string"
+            },
+            "conversation_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Conversation Id"
+            },
+            "request_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Request Id"
+            },
+            "stream": {
+              "default": false,
+              "title": "Stream",
+              "type": "boolean"
+            },
+            "background": {
+              "default": false,
+              "title": "Background",
+              "type": "boolean"
+            },
+            "reply_action": {
+              "default": "start",
+              "title": "Reply Action",
+              "type": "string"
+            },
+            "assistance_task": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/AssistanceTask"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "required": [
+            "question"
+          ],
+          "title": "ask_jobArguments",
+          "type": "object"
+        },
+        "outputSchema": {
+          "additionalProperties": true,
+          "title": "ask_jobDictOutput",
+          "type": "object"
+        }
+      }
+    ]
+  ]
+}
