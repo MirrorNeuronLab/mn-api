@@ -1,0 +1,182 @@
+{
+  "MN_ACTIVE_RUNS": [
+    6008,
+    "conflict",
+    false
+  ],
+  "MN_ALREADY_EXISTS": [
+    6003,
+    "conflict",
+    false
+  ],
+  "MN_CONFIG_INVALID": [
+    5002,
+    "configuration",
+    false
+  ],
+  "MN_CONFIRMATION_REQUIRED": [
+    6007,
+    "precondition",
+    false
+  ],
+  "MN_CONFLICT": [
+    6004,
+    "conflict",
+    false
+  ],
+  "MN_COORDINATION_STORE_MISMATCH": [
+    5004,
+    "configuration",
+    false
+  ],
+  "MN_CPU_REQUIREMENT_UNMET": [
+    1002,
+    "hardware",
+    false
+  ],
+  "MN_DISK_UNAVAILABLE": [
+    2002,
+    "capacity",
+    true
+  ],
+  "MN_EXECUTION_FAILED": [
+    9001,
+    "execution",
+    false
+  ],
+  "MN_FAILED_PRECONDITION": [
+    6005,
+    "precondition",
+    false
+  ],
+  "MN_FEDERATION_IDENTITY_CONFLICT": [
+    6011,
+    "conflict",
+    false
+  ],
+  "MN_FEDERATION_LOOP": [
+    7006,
+    "routing",
+    false
+  ],
+  "MN_FEDERATION_STORE_CONFLICT": [
+    5003,
+    "configuration",
+    false
+  ],
+  "MN_GPU_MEMORY_UNAVAILABLE": [
+    2001,
+    "capacity",
+    true
+  ],
+  "MN_GPU_REQUIREMENT_UNMET": [
+    1003,
+    "hardware",
+    false
+  ],
+  "MN_GRPC_MESSAGE_TOO_LARGE": [
+    7004,
+    "transport",
+    false
+  ],
+  "MN_INVALID_ARGUMENT": [
+    5001,
+    "validation",
+    false
+  ],
+  "MN_MEMORY_REQUIREMENT_UNMET": [
+    1001,
+    "hardware",
+    false
+  ],
+  "MN_NODE_UNAVAILABLE": [
+    7003,
+    "availability",
+    false
+  ],
+  "MN_NOT_FOUND": [
+    6002,
+    "not_found",
+    false
+  ],
+  "MN_OPENSHELL_GATEWAY_UNAVAILABLE": [
+    6013,
+    "precondition",
+    false
+  ],
+  "MN_OPENSHELL_IMAGE_BUILD_FAILED": [
+    6012,
+    "precondition",
+    false
+  ],
+  "MN_OPENSHELL_SANDBOX_CREATE_FAILED": [
+    6014,
+    "precondition",
+    false
+  ],
+  "MN_PERMISSION_DENIED": [
+    6001,
+    "authorization",
+    false
+  ],
+  "MN_PLACEMENT_UNSATISFIED": [
+    4001,
+    "placement",
+    false
+  ],
+  "MN_REQUEST_CANCELLED": [
+    8001,
+    "cancellation",
+    false
+  ],
+  "MN_REQUEST_CONFLICT": [
+    6010,
+    "conflict",
+    false
+  ],
+  "MN_RESOURCE_EXHAUSTED": [
+    2003,
+    "capacity",
+    true
+  ],
+  "MN_REVISION_CONFLICT": [
+    6009,
+    "conflict",
+    false
+  ],
+  "MN_RUNTIME_TIMEOUT": [
+    7001,
+    "timeout",
+    false
+  ],
+  "MN_RUNTIME_UNAVAILABLE": [
+    7002,
+    "availability",
+    false
+  ],
+  "MN_SCHEDULING_UNAVAILABLE": [
+    3001,
+    "scheduling",
+    true
+  ],
+  "MN_SERVICE_RUN_EXISTS": [
+    6006,
+    "conflict",
+    false
+  ],
+  "MN_SINGLE_NODE_PLACEMENT_FAILED": [
+    4002,
+    "placement",
+    false
+  ],
+  "MN_UNKNOWN": [
+    9000,
+    "execution",
+    false
+  ],
+  "MN_UNSUPPORTED_OPERATION": [
+    7005,
+    "compatibility",
+    false
+  ]
+}
