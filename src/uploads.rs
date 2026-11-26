@@ -1,7 +1,6 @@
 use crate::auth::header_str;
-use axum::body::Body;
 use axum::extract::Request;
-use futures_util::{StreamExt, TryStreamExt};
+use futures_util::StreamExt;
 use mn_client_support::{Error, Result, control::Chunks};
 pub(crate) fn too_large() -> Error {
     Error::new(
@@ -13,14 +12,20 @@ pub(crate) fn too_large() -> Error {
 pub(crate) async fn upload_body(
     action: &str,
     r: Request,
-    limit: usize,
-    file_limit: usize,
+    limit: u64,
+    file_limit: u64,
 ) -> Result<(Chunks, Option<String>)> {
-    use http_body_util::Limited;
     let ct = header_str(r.headers(), "content-type").to_owned();
-    let raw = Body::new(Limited::new(r.into_body(), limit))
-        .into_data_stream()
-        .map_err(|_| too_large());
+    let mut received = 0u64;
+    let raw = r.into_body().into_data_stream().map(move |item| {
+        let chunk = item.map_err(|_| too_large())?;
+        received = received.saturating_add(chunk.len() as u64);
+        if received > limit {
+            Err(too_large())
+        } else {
+            Ok(chunk)
+        }
+    });
     if action == "restore_job_backup" {
         if ct.split(';').next() != Some("application/zip") {
             return Err(Error::new(
@@ -44,7 +49,7 @@ pub(crate) async fn upload_body(
             let mut size = 0;
             let chunks = field.map(move |item| {
                 let b = item.map_err(|_| Error::invalid("Interrupted multipart upload."))?;
-                size += b.len();
+                size += b.len() as u64;
                 if size > file_limit {
                     Err(too_large())
                 } else {

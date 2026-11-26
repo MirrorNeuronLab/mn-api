@@ -22,6 +22,8 @@ use serde_json::{Value, json};
 use std::{collections::HashMap, sync::Arc};
 use uuid::Uuid;
 pub async fn run() -> Result<()> {
+    #[cfg(target_os = "wasi")]
+    mn_client_support::wasi::enter_cwd().map_err(|_| Error::storage())?;
     let o = Options::parse();
     let home = connection::home()?;
     let token = std::env::var("MN_API_TOKEN")
@@ -57,7 +59,10 @@ pub async fn run() -> Result<()> {
         config
             .with_cors_origins(&std::env::var("MN_API_CORS_ALLOW_ORIGINS").unwrap_or_default())?,
     );
-    let listener = tokio::net::TcpListener::bind((o.host.as_str(), o.port))
+    let addresses = std::net::ToSocketAddrs::to_socket_addrs(&(o.host.as_str(), o.port))
+        .map_err(|_| Error::invalid("Cannot resolve the configured API address."))?
+        .collect::<Vec<_>>();
+    let listener = tokio::net::TcpListener::bind(addresses.as_slice())
         .await
         .map_err(|_| Error::invalid("Cannot bind the configured API address."))?;
     eprintln!(
@@ -79,7 +84,7 @@ async fn dispatch(State(c): State<Shared>, r: Request) -> Response {
     let limit = match (r.method().as_str(), p.trim_end_matches('/')) {
         ("POST", "/api/v1/bundles") => c.upload + 1024 * 1024,
         ("POST", "/api/v1/job-restorations") => 128 * 1024 * 1024 * 1024,
-        _ => c.limit,
+        _ => c.limit as u64,
     };
     if let Some(length) = r.headers().get("content-length") {
         match length.to_str().ok().and_then(|s| s.parse::<i128>().ok()) {
@@ -243,11 +248,11 @@ async fn route(c: &Shared, r: Request, path: &str) -> Result<Response> {
     let limit = match action {
         "create_bundle" => c.upload + 1024 * 1024,
         "restore_job_backup" => 128 * 1024 * 1024 * 1024,
-        _ => c.limit,
+        _ => c.limit as u64,
     };
     if headers
         .get("content-length")
-        .is_some_and(|s| s.parse::<u64>().is_ok_and(|n| n > limit as u64))
+        .is_some_and(|s| s.parse::<u64>().is_ok_and(|n| n > limit))
     {
         return Err(too_large());
     }
@@ -279,7 +284,7 @@ async fn route(c: &Shared, r: Request, path: &str) -> Result<Response> {
         let (chunks, name) = upload_body(action, r, limit, c.upload).await?;
         (None, Some(chunks), name)
     } else {
-        let bytes = to_bytes(r.into_body(), limit)
+        let bytes = to_bytes(r.into_body(), c.limit)
             .await
             .map_err(|_| too_large())?;
         let mut body = if bytes.is_empty()

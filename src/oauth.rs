@@ -18,6 +18,8 @@ use sha2::{Digest, Sha256};
 use url::Url;
 
 const ROOT: &str = "/api/v1/mcp/oauth";
+const DEFAULT_SCOPE: &str = "co_worker:supervise";
+const SUPPORTED_SCOPES: [&str; 2] = [DEFAULT_SCOPE, "offline_access"];
 fn field<'a>(v: &'a Value, k: &str) -> &'a str {
     v[k].as_str().unwrap_or_default()
 }
@@ -63,10 +65,7 @@ fn redirect(url: &str) -> Result<Response> {
 }
 fn scopes(s: &str) -> Option<Vec<&str>> {
     let v: Vec<_> = s.split_whitespace().collect();
-    (v.contains(&"co_worker:supervise")
-        && v.iter()
-            .all(|s| matches!(*s, "co_worker:supervise" | "offline_access")))
-    .then_some(v)
+    (v.contains(&DEFAULT_SCOPE) && v.iter().all(|s| SUPPORTED_SCOPES.contains(s))).then_some(v)
 }
 pub async fn route(c: &Config, r: Request, path: &str) -> Result<Response> {
     let base = origin(&r);
@@ -106,14 +105,19 @@ pub async fn route(c: &Config, r: Request, path: &str) -> Result<Response> {
     }
     match (method.as_str(), path.strip_prefix(ROOT).unwrap_or_default()) {
         ("POST", "/register") => {
+            let scope = q["scope"].as_str().unwrap_or(DEFAULT_SCOPE);
             if q.get("token_endpoint_auth_method")
                 .is_some_and(|v| v != "none")
+                || !scope
+                    .split_whitespace()
+                    .all(|s| SUPPORTED_SCOPES.contains(&s))
                 || !q["redirect_uris"].as_array().is_some_and(|a| {
                     !a.is_empty() && a.iter().all(|v| v.as_str().is_some_and(safe_callback))
                 })
             {
                 return rejection("invalid_client_metadata");
             }
+            q["scope"] = scope.into();
             q.as_object_mut().ok_or_else(bad)?.retain(|k, _| {
                 matches!(
                     k.as_str(),
@@ -151,8 +155,20 @@ pub async fn route(c: &Config, r: Request, path: &str) -> Result<Response> {
             {
                 return rejection("invalid_request");
             }
-            if scopes(field(&q, "scope")).is_none() {
-                return rejection("invalid_scope");
+            let registered = client["data"]["scope"].as_str().unwrap_or(DEFAULT_SCOPE);
+            if !scopes(field(&q, "scope")).is_some_and(|requested| {
+                requested
+                    .iter()
+                    .all(|s| registered.split_whitespace().any(|r| r == *s))
+            }) {
+                let mut target = Url::parse(field(&q, "redirect_uri")).map_err(|_| bad())?;
+                target
+                    .query_pairs_mut()
+                    .append_pair("error", "invalid_scope");
+                if let Some(state) = q["state"].as_str() {
+                    target.query_pairs_mut().append_pair("state", state);
+                }
+                return redirect(target.as_str());
             }
             let ticket = db.issue(
                 "consent",

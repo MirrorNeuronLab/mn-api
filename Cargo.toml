@@ -1,13 +1,12 @@
 [package]
 name = "mn-api"
-version = "2.0.0"
+version = "2.0.1"
 edition = "2024"
 license = "MIT"
 
 [dependencies]
-mn-client-support = { path = "../mn-client-support", version = "=2.0.0" }
+mn-client-support = { path = "../mn-client-support", version = "=2.0.1" }
 axum = { version = "0.8", features = ["ws", "multipart"] }
-tokio = { version = "1", features = ["full"] }
 clap = { version = "4", features = ["derive", "env"] }
 serde = "1"
 mime_guess = "2"
@@ -15,20 +14,28 @@ serde_json = { version = "1", features = ["preserve_order"] }
 futures-util = "0.3"
 async-stream = "0.3"
 tokio-stream = "0.1"
-tower-http = { version = "0.6", features = ["cors", "fs"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
 subtle = "2"
 base64 = "0.22"
 sha2 = "0.10"
-rusqlite = { version = "0.37", features = ["bundled"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 regex = "1"
 jsonschema = { version = "0.37", default-features = false }
 multer = "3"
 http-body-util = "0.1"
-tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 tempfile = "3"
+
+[target.'cfg(not(target_os = "wasi"))'.dependencies]
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.6", features = ["cors", "fs"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
+
+[target.'cfg(target_os = "wasi")'.dependencies]
+tokio = { version = "1", features = ["rt", "io-util", "net", "time", "macros", "sync"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
+libsqlite3-sys = { version = "0.35", features = ["wasm32-wasi-vfs"] }

@@ -7,7 +7,7 @@ use std::{
     time::Instant,
 };
 #[derive(Parser)]
-#[command(version, about = "MirrorNeuron REST API")]
+#[command(version = mn_client_support::release_version(env!("CARGO_PKG_VERSION")), about = "MirrorNeuron REST API")]
 pub(crate) struct Options {
     #[arg(long, env = "MN_API_HOST", default_value = "localhost")]
     pub(crate) host: String,
@@ -16,7 +16,7 @@ pub(crate) struct Options {
     #[arg(long,env="MN_API_REQUEST_SIZE_LIMIT_BYTES",default_value_t=5*1024*1024)]
     pub(crate) request_limit: usize,
     #[arg(long,env="MN_API_BLUEPRINT_UPLOAD_LIMIT_BYTES",default_value_t=32*1024*1024*1024)]
-    pub(crate) upload_limit: usize,
+    pub(crate) upload_limit: u64,
 }
 pub(crate) struct Cursor {
     pub(crate) category: Option<String>,
@@ -30,7 +30,7 @@ pub struct Config {
     pub(crate) home: PathBuf,
     pub(crate) token: String,
     pub(crate) limit: usize,
-    pub(crate) upload: usize,
+    pub(crate) upload: u64,
     pub(crate) cursors: Mutex<HashMap<String, Cursor>>,
 }
 pub(crate) type Shared = Arc<Config>;

@@ -4,6 +4,7 @@ use mn_client_support::{Error, Result};
 use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+#[cfg(not(target_os = "wasi"))]
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -20,7 +21,11 @@ fn now() -> f64 {
 pub fn secret() -> String {
     format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
 }
-pub struct Store(rusqlite::Connection);
+pub struct Store {
+    conn: rusqlite::Connection,
+    #[cfg(target_os = "wasi")]
+    _lease: std::net::TcpListener,
+}
 type DbResult<T> = rusqlite::Result<T>;
 fn db<T>(v: DbResult<T>) -> Result<T> {
     v.map_err(|_| {
@@ -34,12 +39,19 @@ fn db<T>(v: DbResult<T>) -> Result<T> {
 impl Store {
     pub fn open(root: &Path) -> Result<Self> {
         let dir = root.join("mcp_connections");
+        #[cfg(not(target_os = "wasi"))]
         std::fs::DirBuilder::new()
             .recursive(true)
             .mode(0o700)
             .create(&dir)
             .map_err(|_| Error::storage())?;
+        #[cfg(target_os = "wasi")]
+        std::fs::create_dir_all(&dir).map_err(|_| Error::storage())?;
+        #[cfg(target_os = "wasi")]
+        let lease = mn_client_support::wasi::lock(&dir, "connections.sqlite3")
+            .map_err(|_| Error::storage())?;
         let path = dir.join("connections.sqlite3");
+        #[cfg(not(target_os = "wasi"))]
         std::fs::OpenOptions::new()
             .write(true)
             .create(true)
@@ -47,19 +59,24 @@ impl Store {
             .mode(0o600)
             .open(&path)
             .map_err(|_| Error::storage())?;
+        #[cfg(not(target_os = "wasi"))]
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
             .map_err(|_| Error::storage())?;
         let conn = db(rusqlite::Connection::open(path))?;
         db(conn.execute_batch("CREATE TABLE IF NOT EXISTS policies (job_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL, generation INTEGER NOT NULL, key_hash TEXT, server_url TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS grants (key_hash TEXT PRIMARY KEY, kind TEXT NOT NULL, job_id TEXT, generation INTEGER, expires REAL NOT NULL, data TEXT NOT NULL);"))?;
-        Ok(Self(conn))
+        Ok(Self {
+            conn,
+            #[cfg(target_os = "wasi")]
+            _lease: lease,
+        })
     }
     pub fn policy(&self, job: &str) -> Result<Value> {
-        db(self.0.query_row("SELECT enabled,generation,key_hash,server_url FROM policies WHERE job_id=?1",[job],|r|Ok(json!({"job_id":job,"enabled":r.get::<_,bool>(0)?,"generation":r.get::<_,i64>(1)?,"key_hash":r.get::<_,Option<String>>(2)?,"server_url":r.get::<_,String>(3)?}))).optional()).map(|p|p.unwrap_or_else(||json!({"job_id":job,"enabled":false,"generation":0,"server_url":""})))
+        db(self.conn.query_row("SELECT enabled,generation,key_hash,server_url FROM policies WHERE job_id=?1",[job],|r|Ok(json!({"job_id":job,"enabled":r.get::<_,bool>(0)?,"generation":r.get::<_,i64>(1)?,"key_hash":r.get::<_,Option<String>>(2)?,"server_url":r.get::<_,String>(3)?}))).optional()).map(|p|p.unwrap_or_else(||json!({"job_id":job,"enabled":false,"generation":0,"server_url":""})))
     }
     pub fn resource(&self, url: &str) -> Result<Value> {
         let job = db(self
-            .0
+            .conn
             .query_row(
                 "SELECT job_id FROM policies WHERE enabled=1 AND server_url=?1",
                 [url],
@@ -74,7 +91,7 @@ impl Store {
     }
     pub fn configure(&mut self, job: &str, enabled: bool, url: &str) -> Result<Option<String>> {
         let key = enabled.then(secret);
-        let tx = db(self.0.transaction())?;
+        let tx = db(self.conn.transaction())?;
         db(tx.execute("INSERT INTO policies VALUES (?1,?2,1,?3,?4) ON CONFLICT(job_id) DO UPDATE SET enabled=excluded.enabled,generation=generation+1,key_hash=excluded.key_hash,server_url=excluded.server_url",params![job,enabled,key.as_deref().map(digest),url]))?;
         db(tx.execute(
             "DELETE FROM grants WHERE job_id=?1 AND kind!='internal'",
@@ -92,7 +109,7 @@ impl Store {
         data: &Value,
     ) -> Result<String> {
         let key = secret();
-        let tx = db(self.0.unchecked_transaction())?;
+        let tx = db(self.conn.unchecked_transaction())?;
         db(tx.execute("DELETE FROM grants WHERE expires<?1", [now()]))?;
         db(tx.execute(
             "INSERT INTO grants VALUES (?1,?2,?3,?4,?5,?6)",
@@ -114,7 +131,7 @@ impl Store {
         }
         let sql = "SELECT kind,job_id,generation,data FROM grants g WHERE key_hash=?1 AND expires>?2 AND (?3 IS NULL OR kind=?3) AND (job_id IS NULL OR kind='internal' OR EXISTS (SELECT 1 FROM policies p WHERE p.job_id=g.job_id AND p.enabled=1 AND p.generation=g.generation))";
         let row = db(self
-            .0
+            .conn
             .query_row(sql, params![digest(key), now(), kind], |r| {
                 Ok((
                     r.get::<_, String>(0)?,
@@ -129,7 +146,7 @@ impl Store {
         };
         if consume
             && db(self
-                .0
+                .conn
                 .execute("DELETE FROM grants WHERE key_hash=?1", [digest(key)]))?
                 != 1
         {
@@ -140,7 +157,7 @@ impl Store {
         ))
     }
     pub fn revoke(&self, k: &str) -> Result<()> {
-        db(self.0.execute(
+        db(self.conn.execute(
             "DELETE FROM grants WHERE key_hash=?1 AND kind IN ('access','refresh')",
             [digest(k)],
         ))?;

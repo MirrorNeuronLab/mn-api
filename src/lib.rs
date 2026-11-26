@@ -11,6 +11,7 @@ mod oauth;
 mod schema;
 mod ui;
 mod uploads;
+#[cfg(not(target_os = "wasi"))]
 pub mod web;
 
 pub use app::{router, run};
