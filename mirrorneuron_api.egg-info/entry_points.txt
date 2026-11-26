@@ -1,0 +1,3 @@
+[console_scripts]
+mn-api = mn_api.main:start
+mn-web-ui-server = mn_api.web_ui_server:start
