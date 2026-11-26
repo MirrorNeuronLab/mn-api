@@ -1,1 +1,10 @@
 /target/
+
+# Legacy Python artifacts
+/build/
+*.egg-info/
+__pycache__/
+*.py[cod]
+/.coverage
+/.coverage.*
+/coverage.xml
