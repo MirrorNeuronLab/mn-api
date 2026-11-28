@@ -59,19 +59,59 @@ pub async fn run() -> Result<()> {
         config
             .with_cors_origins(&std::env::var("MN_API_CORS_ALLOW_ORIGINS").unwrap_or_default())?,
     );
-    let addresses = std::net::ToSocketAddrs::to_socket_addrs(&(o.host.as_str(), o.port))
+    let listeners = bind_listeners(&o.host, o.port).await?;
+    futures_util::future::try_join_all(listeners.into_iter().map(|listener| {
+        let app = app.clone();
+        async move {
+            eprintln!(
+                "mn-api listening on {}",
+                listener.local_addr().map_err(|_| Error::storage())?
+            );
+            axum::serve(listener, app)
+                .await
+                .map_err(|_| Error::storage())
+        }
+    }))
+    .await?;
+    Ok(())
+}
+
+async fn bind_listeners(host: &str, port: u16) -> Result<Vec<tokio::net::TcpListener>> {
+    use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+    use tokio::net::TcpListener;
+    let bind_error = || Error::invalid("Cannot bind the configured API address.");
+    if host.eq_ignore_ascii_case("localhost") {
+        let mut listeners = Vec::new();
+        for address in [
+            SocketAddr::from((Ipv4Addr::LOCALHOST, port)),
+            SocketAddr::from((Ipv6Addr::LOCALHOST, port)),
+        ] {
+            match TcpListener::bind(address).await {
+                Ok(listener) => listeners.push(listener),
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::AddrNotAvailable | std::io::ErrorKind::Unsupported
+                    ) =>
+                {
+                    continue;
+                }
+                Err(_) => return Err(bind_error()),
+            }
+        }
+        if listeners.is_empty() {
+            return Err(bind_error());
+        }
+        return Ok(listeners);
+    }
+    let addresses = std::net::ToSocketAddrs::to_socket_addrs(&(host, port))
         .map_err(|_| Error::invalid("Cannot resolve the configured API address."))?
         .collect::<Vec<_>>();
-    let listener = tokio::net::TcpListener::bind(addresses.as_slice())
-        .await
-        .map_err(|_| Error::invalid("Cannot bind the configured API address."))?;
-    eprintln!(
-        "mn-api listening on {}",
-        listener.local_addr().map_err(|_| Error::storage())?
-    );
-    axum::serve(listener, app)
-        .await
-        .map_err(|_| Error::storage())
+    Ok(vec![
+        TcpListener::bind(addresses.as_slice())
+            .await
+            .map_err(|_| bind_error())?,
+    ])
 }
 /// Build the same router used by the installed HTTP server.
 pub fn router(config: Config) -> Router {
@@ -372,7 +412,48 @@ async fn route(c: &Shared, r: Request, path: &str) -> Result<Response> {
         .unwrap_or_default()
         .to_owned();
     let timeout = ep.deadline(&args);
-    let mut reply = c.ipc.call(method, action, args, &id, timeout).await?;
+    let mut reply = if method == Method::Read
+        && matches!(
+            action,
+            "get_run"
+                | "get_run_monitor"
+                | "get_run_snapshot"
+                | "get_run_workflow_progress"
+                | "list_run_events"
+        ) {
+        // Observation reads are idempotent. Bound reconnects by the original request budget.
+        let end = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout.into());
+        let mut remaining = timeout;
+        let mut delay = 100;
+        loop {
+            let result = c
+                .ipc
+                .call(method, action, args.clone(), &id, remaining)
+                .await;
+            let status = match &result {
+                Ok(reply) => reply.status,
+                Err(error) => error.status,
+            };
+            let backoff = std::time::Duration::from_millis(delay);
+            if !matches!(status, 408 | 425 | 429 | 502 | 503 | 504)
+                || delay > 200
+                || end.saturating_duration_since(tokio::time::Instant::now())
+                    < backoff + std::time::Duration::from_secs(1)
+            {
+                break result?;
+            }
+            tokio::time::sleep(backoff).await;
+            remaining = end
+                .saturating_duration_since(tokio::time::Instant::now())
+                .as_secs() as u32;
+            if remaining == 0 {
+                break result?;
+            }
+            delay *= 2;
+        }
+    } else {
+        c.ipc.call(method, action, args, &id, timeout).await?
+    };
     if action == "get_job_ui"
         && let Some(transport) = reply
             .value
